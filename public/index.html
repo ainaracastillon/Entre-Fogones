@@ -654,14 +654,37 @@ textarea.inp{resize:vertical;line-height:1.5}
 .help-sec h2 svg{width:20px;height:20px;color:var(--accent)}
 .help-sec p,.help-sec ul{margin:8px 0 0}
 .help-sec li{margin:4px 0}
-.tbl-wrap{overflow-x:auto}
+.eq-page{display:block}
+.eq-page>*{margin:0 0 16px}
+.eq-intro{font-size:14px;max-width:760px}
+.eq-card{display:block;min-width:0;overflow:hidden}
+.eq-card>*+*{margin-top:12px}
+.eq-card h2{display:flex;align-items:center;gap:8px;font-size:19px}
+.eq-card h2 svg{width:20px;height:20px;color:var(--accent)}
+.eq-calc{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:12px}
+.eq-row2{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px}
+.eq-out{display:flex;flex-wrap:wrap;gap:6px 8px;font-size:15px}
+.eq-out span{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:4px 10px}
+.eq-out span:first-child{background:var(--accent-soft);border-color:transparent;font-size:17px}
+.eq-tw{width:100%;overflow-x:auto}
 .eq-tbl{border-collapse:collapse;width:100%;font-size:14px}
-.eq-tbl th,.eq-tbl td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.eq-tbl th,.eq-tbl td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:top}
 .eq-tbl th{font-size:12px;color:var(--muted);font-weight:700}
-.eq-tbl td:first-child{white-space:normal}
-.eq-calc{display:grid;grid-template-columns:90px minmax(0,1fr) auto minmax(0,1.3fr);gap:8px;align-items:center}
-@media (max-width:560px){.eq-calc{grid-template-columns:80px minmax(0,1fr)}.eq-calc span{display:none}.eq-calc select:last-child{grid-column:1/-1}}
-.eq-out{font-size:18px;margin:12px 0 0}
+.eq-tbl td:not(:first-child){white-space:nowrap;font-variant-numeric:tabular-nums}
+.eq-tbl tbody tr:nth-child(even){background:color-mix(in srgb,var(--bg) 60%,transparent)}
+/* en el móvil, cada fila es una ficha con sus etiquetas */
+@media (max-width:640px){
+  .eq-calc{grid-template-columns:1fr}
+  .eq-tbl thead{display:none}
+  .eq-tbl,.eq-tbl tbody,.eq-tbl tr,.eq-tbl td{display:block;width:100%}
+  .eq-tbl tr{padding:8px 0;border-bottom:1px solid var(--line);background:none!important;display:grid;grid-template-columns:1fr 1fr;column-gap:14px}
+  .eq-tbl td:first-child{grid-column:1/-1}
+  .eq-tbl td{border:0;padding:2px 0;display:flex;justify-content:space-between;align-items:baseline;gap:8px;white-space:nowrap!important}
+  .eq-tbl td:first-child{white-space:normal!important}
+  .eq-tbl td:first-child{font-weight:700;padding-bottom:4px}
+  .eq-tbl td:not(:first-child)::before{content:attr(data-l);color:var(--muted);font-size:12.5px;white-space:normal;text-align:left;flex:1;min-width:0}
+  .eq-tbl td:not(:first-child){text-align:right}
+}
 .bk-log{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
 .bk-log li{display:list-item}.bk-log li svg{width:14px;height:14px;vertical-align:-2px}
 .bk-log li.ok{color:var(--ok)}.bk-log li.bad{color:var(--danger)}
@@ -677,6 +700,6 @@ details.bulk summary svg{width:20px;height:20px;vertical-align:-3px;margin-right
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=16"></script>
+<script src="/app.js?v=17"></script>
 </body>
 </html>

@@ -2240,38 +2240,80 @@ function viewHelp(){
   </div>`;
 }
 
-/* ===== Equivalencias de medidas ===== */
-const EQUIV=[
-  ['Harina de trigo',8,120],['Azúcar blanco',12,200],['Azúcar glas',8,120],['Azúcar moreno',12,200],['Sal fina',18,300],['Arroz',13,200],['Cacao en polvo',7,100],
-  ['Levadura química',10,null],['Maicena',8,130],['Pan rallado',7,110],['Copos de avena',6,90],['Almendra molida',7,100],['Mantequilla',14,225],['Aceite de oliva',13,215],
-  ['Leche',15,240],['Agua',15,240],['Nata',15,240],['Miel',21,340],['Yogur natural',15,245],['Queso rallado',6,90]
+/* ===== Equivalencias de medidas =====
+   Sólidos en gramos (cucharadas rasas y colmadas, tazas y vasos); líquidos en mililitros. Valores aproximados de cocina casera en España:
+   cucharada sopera 15 ml, cucharadita 5 ml, cucharada de postre 10 ml, taza de desayuno 250 ml, taza de café 100 ml, vaso de agua 200 ml. */
+const EQ_SOLID=[ // nombre, cucharada rasa, cucharada colmada, cucharadita rasa, taza de desayuno, vaso de agua (gramos)
+  ['Harina de trigo',10,20,3,140,110],['Harina integral',9,18,3,130,105],['Harina de maíz (maicena)',10,20,3,135,110],
+  ['Azúcar blanco',12,25,4,210,170],['Azúcar moreno',12,24,4,220,175],['Azúcar glas',8,16,3,125,100],
+  ['Sal fina',15,25,5,300,240],['Sal gruesa',12,20,4,250,200],['Arroz',13,20,4,210,170],
+  ['Cacao puro en polvo',7,14,2,105,85],['Levadura química (polvo de hornear)',9,15,3,null,null],['Bicarbonato',9,15,3,null,null],
+  ['Pan rallado',7,14,2,110,90],['Copos de avena',6,12,2,95,75],['Almendra molida',7,14,2,100,80],['Coco rallado',5,10,2,85,70],
+  ['Queso rallado',6,12,2,90,70],['Mantequilla',14,30,5,225,180],['Café molido',6,10,2,null,null],
+  ['Lentejas o garbanzos secos',null,null,null,200,160],['Pasta corta (macarrones)',null,null,null,100,80]
 ];
+const EQ_LIQ=[ // recipiente, mililitros
+  ['Cucharadita',5],['Cucharada de postre',10],['Cucharada sopera',15],['Chorrito',15],['Chupito',40],['Taza de café',100],['Vaso de vino',100],
+  ['Copa',150],['Vaso de agua',200],['Taza de desayuno',250],['Taza americana (cup)',240],['Tazón',350],['Lata de refresco',330],['Litro',1000]
+];
+const EQ_DENS=[['Agua, leche o caldo',1],['Nata',1],['Zumo',1.04],['Vino',0.99],['Aceite',0.92],['Miel',1.42]];
+const EQ_PIECES=[['Huevo pequeño (S) sin cáscara','43 g'],['Huevo mediano (M) sin cáscara','53 g'],['Huevo grande (L) sin cáscara','63 g'],['Huevo extragrande (XL) sin cáscara','73 g'],
+  ['Yema de huevo','18 g'],['Clara de huevo','33 g'],['Diente de ajo','5 g'],['Cebolla mediana','150 g'],['Patata mediana','200 g'],['Tomate mediano','150 g'],
+  ['Zanahoria mediana','80 g'],['Pimiento rojo mediano','200 g'],['Zumo de un limón','40 ml'],['Zumo de una naranja','80 ml'],['Ralladura de un limón','1 cucharadita (3 g)'],
+  ['Sobre de levadura química','16 g'],['Sobre de levadura de panadero seca','5,5 g = 15 g de fresca'],['Dado de levadura fresca','25 g'],['Hoja de gelatina','2 g'],
+  ['Pastilla de caldo','10 g'],['Nuez de mantequilla','15–20 g'],['Pizca','menos de 1 g (lo que se coge con dos dedos)'],['Punta de cuchillo','1–2 g'],['Puñado de pasta o arroz','unos 40 g']];
+const EQ_SWAP=[['25 g de levadura fresca','8 g de levadura seca de panadero'],['100 g de mantequilla','80 ml de aceite (en bizcochos)'],['100 g de azúcar','75 g de miel (y 20 ml menos de líquido)'],
+  ['1 huevo (en repostería)','60 g de yogur o 50 g de plátano chafado'],['100 ml de nata para cocinar','100 ml de leche evaporada'],['1 cucharada de maicena','2 cucharadas de harina (para espesar)'],
+  ['100 ml de buttermilk','100 ml de leche + 1 cucharada de zumo de limón (10 min)']];
+const EQ_OVEN=[['Muy suave','120–140','250–275','1'],['Suave','150–160','300–325','2–3'],['Medio','170–180','350','4'],['Medio alto','190–200','375–400','5–6'],['Fuerte','210–220','425','7'],['Muy fuerte','230–250','450–475','8–9']];
+const EQ_IMP=[['1 onza (oz)','28 g'],['1 libra (lb)','454 g'],['1 onza líquida (fl oz)','30 ml'],['1 cup (EE. UU.)','240 ml'],['1 pinta (EE. UU.)','473 ml'],['1 pinta (Reino Unido)','568 ml'],['1 quart (EE. UU.)','946 ml'],['1 stick de mantequilla','113 g'],['1 tablespoon (tbsp)','15 ml'],['1 teaspoon (tsp)','5 ml']];
+function eqTable(head, rows){
+  return `<div class="eq-tw"><table class="eq-tbl"><thead><tr>${head.map(h=>`<th>${h}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map((c,i)=>`<td data-l="${esc(head[i])}">${c}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
 function viewEquiv(){
+  const g=v=>v==null?'—':fmtNum(v)+' g';
   return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Equivalencias de medidas</h1></div></div>
-  <p class="muted" style="margin:-8px 0 16px">Valores aproximados para cucharadas rasas y tazas de 240 ml. Una cucharada colmada es más o menos el doble de una rasa.</p>
-  <div class="help eq-page"><section class="card"><h2>Calculadora</h2>
-    <div class="eq-calc"><input id="eqN" class="inp" type="number" min="0" step="0.25" value="1" aria-label="Cantidad">
-      <select id="eqU" class="inp" aria-label="Medida"><option value="cs">cucharada rasa</option><option value="cc">cucharadita rasa</option><option value="taza">taza</option><option value="g">gramos</option></select>
-      <span>de</span><select id="eqI" class="inp" aria-label="Ingrediente">${EQUIV.map((e,i)=>`<option value="${i}">${esc(e[0].toLowerCase())}</option>`).join('')}</select></div>
-    <p class="eq-out" id="eqOut"></p></section>
-  <section class="card"><h2>Por ingrediente</h2><div class="tbl-wrap"><table class="eq-tbl"><thead><tr><th>Ingrediente</th><th>1 cucharada rasa</th><th>1 cucharadita rasa</th><th>1 taza</th></tr></thead>
-    <tbody>${EQUIV.map(([n,cs,t])=>`<tr><td>${esc(n)}</td><td>${fmtNum(cs)} g</td><td>${fmtNum(Math.round(cs/3*10)/10)} g</td><td>${t?fmtNum(t)+' g':'—'}</td></tr>`).join('')}</tbody></table></div></section>
-  <section class="card"><h2>Volumen</h2><div class="tbl-wrap"><table class="eq-tbl"><tbody>
-    <tr><td>1 cucharada</td><td>15 ml</td></tr><tr><td>1 cucharadita</td><td>5 ml</td></tr><tr><td>1 cucharada de postre</td><td>10 ml</td></tr><tr><td>1 taza</td><td>240 ml</td></tr><tr><td>1 vaso de agua</td><td>200–250 ml</td></tr><tr><td>1 taza de café</td><td>100 ml</td></tr><tr><td>1 chorrito</td><td>10–15 ml</td></tr><tr><td>1 pizca</td><td>menos de 1 g</td></tr><tr><td>1 onza líquida (fl oz)</td><td>30 ml</td></tr><tr><td>1 pinta (EE. UU.)</td><td>473 ml</td></tr></tbody></table></div></section>
-  <section class="card"><h2>Peso y temperatura</h2><div class="tbl-wrap"><table class="eq-tbl"><tbody>
-    <tr><td>1 onza (oz)</td><td>28 g</td></tr><tr><td>1 libra (lb)</td><td>454 g</td></tr><tr><td>1 huevo mediano sin cáscara</td><td>50–55 g</td></tr><tr><td>1 sobre de levadura química</td><td>16 g</td></tr><tr><td>1 diente de ajo</td><td>4–5 g</td></tr><tr><td>1 nuez de mantequilla</td><td>10–15 g</td></tr>
-    <tr><td>Horno suave</td><td>150–160 °C</td></tr><tr><td>Horno medio</td><td>180 °C (350 °F)</td></tr><tr><td>Horno fuerte</td><td>200–220 °C (400–425 °F)</td></tr><tr><td>Horno con ventilador</td><td>unos 20 °C menos</td></tr></tbody></table></div></section></div>`;
+  <div class="eq-page">
+  <p class="muted eq-intro">Los <b>sólidos</b> se miden en gramos y los <b>líquidos</b> en mililitros. Las cantidades son aproximadas, tal como se mide en casa: cucharada sopera = 15 ml, cucharadita = 5 ml, vaso de agua = 200 ml y taza de desayuno = 250 ml.</p>
+  <section class="card eq-card"><h2>${ico('scale')}Calculadora</h2>
+    <div class="eq-calc">
+      <div class="field"><label for="eqI">Ingrediente</label><select id="eqI" class="inp"><optgroup label="Sólidos">${EQ_SOLID.map((e,i)=>`<option value="s${i}">${esc(e[0])}</option>`).join('')}</optgroup><optgroup label="Líquidos">${EQ_DENS.map((e,i)=>`<option value="l${i}">${esc(e[0])}</option>`).join('')}</optgroup></select></div>
+      <div class="eq-row2"><div class="field"><label for="eqN">Cantidad</label><input id="eqN" class="inp" type="number" min="0" step="0.25" value="1" inputmode="decimal"></div>
+      <div class="field"><label for="eqU">Medida</label><select id="eqU" class="inp"></select></div></div>
+    </div>
+    <div class="eq-out" id="eqOut" aria-live="polite"></div></section>
+  <section class="card eq-card"><h2>Sólidos: cuánto pesa cada medida</h2>
+    ${eqTable(['Ingrediente','Cucharada rasa','Cucharada colmada','Cucharadita rasa','Taza de desayuno','Vaso de agua'], EQ_SOLID.map(e=>[esc(e[0]),g(e[1]),g(e[2]),g(e[3]),g(e[4]),g(e[5])]))}</section>
+  <section class="card eq-card"><h2>Líquidos: recipientes y medidas</h2>
+    ${eqTable(['Medida','Mililitros','Agua o leche','Aceite','Miel'], EQ_LIQ.map(([n,ml])=>[esc(n),fmtNum(ml)+' ml',fmtNum(Math.round(ml))+' g',fmtNum(Math.round(ml*0.92))+' g',fmtNum(Math.round(ml*1.42))+' g']))}
+    <p class="muted" style="margin:0;font-size:13px">El aceite pesa menos que el agua y la miel bastante más: 100 ml de aceite son unos 92 g y 100 ml de miel, unos 142 g.</p></section>
+  <section class="card eq-card"><h2>Piezas y medidas caseras</h2>${eqTable(['Qué','Equivale a'], EQ_PIECES.map(r=>r.map(esc)))}</section>
+  <section class="card eq-card"><h2>Sustituciones</h2>${eqTable(['Si no tienes…','Usa…'], EQ_SWAP.map(r=>r.map(esc)))}</section>
+  <section class="card eq-card"><h2>Temperatura del horno</h2>${eqTable(['Horno','°C','°F','Gas'], EQ_OVEN.map(r=>r.map(esc)))}
+    <p class="muted" style="margin:0;font-size:13px">Con ventilador, pon unos 20 °C menos de lo que diga la receta.</p></section>
+  <section class="card eq-card"><h2>Medidas inglesas y americanas</h2>${eqTable(['Medida','Equivale a'], EQ_IMP.map(r=>r.map(esc)))}</section>
+  </div>`;
 }
 function bindEquiv(){
   const n=$('#eqN'), u=$('#eqU'), i=$('#eqI'), o=$('#eqOut'); if(!n) return;
-  const calc=()=>{ const e=EQUIV[+i.value], q=parseFloat(String(n.value).replace(',','.'))||0, cs=e[1], taza=e[2];
-    let g = u.value==='cs'?q*cs : u.value==='cc'?q*cs/3 : u.value==='taza'?(taza?q*taza:null) : q;
-    if(g==null){ o.textContent='No hay equivalencia en tazas para este ingrediente.'; return; }
-    const r=x=>fmtNum(Math.round(x*10)/10);
-    o.innerHTML=`<b>${r(g)} g</b> · ${r(g/cs)} cucharadas · ${r(g/cs*3)} cucharaditas${taza?` · ${r(g/taza)} tazas`:''}`; };
-  [n,u,i].forEach(x=>x.addEventListener('input',calc)); calc();
+  const r=x=>fmtNum(Math.round(x*10)/10);
+  const units=()=>{ const v=i.value, k=v[0], e=k==='s'?EQ_SOLID[+v.slice(1)]:EQ_DENS[+v.slice(1)];
+    const opts = k==='s'
+      ? [['g','gramos'],...(e[1]?[['cs','cucharadas rasas'],['csc','cucharadas colmadas'],['cc','cucharaditas rasas']]:[]),...(e[4]?[['taza','tazas de desayuno'],['vaso','vasos de agua']]:[])]
+      : [['ml','mililitros'],['g','gramos'],['cc','cucharaditas'],['cs','cucharadas soperas'],['cafe','tazas de café'],['vaso','vasos de agua'],['taza','tazas de desayuno']];
+    const keep=u.value; u.innerHTML=opts.map(([a,b])=>`<option value="${a}">${b}</option>`).join(''); if(opts.some(x=>x[0]===keep)) u.value=keep; };
+  const calc=()=>{
+    const v=i.value, k=v[0], q=parseFloat(String(n.value).replace(',','.'))||0;
+    if(k==='s'){ const e=EQ_SOLID[+v.slice(1)]; const per={g:1,cs:e[1],csc:e[2],cc:e[3],taza:e[4],vaso:e[5]}; const gr=q*(per[u.value]||1);
+      const parts=[`<b>${r(gr)} g</b>`]; if(e[1]) parts.push(`${r(gr/e[1])} cucharadas rasas`,`${r(gr/e[2])} colmadas`,`${r(gr/e[3])} cucharaditas`); if(e[4]) parts.push(`${r(gr/e[4])} tazas de desayuno`,`${r(gr/e[5])} vasos`);
+      o.innerHTML=parts.map(x=>`<span>${x}</span>`).join(''); }
+    else { const d=EQ_DENS[+v.slice(1)][1]; const per={ml:1,g:1/d,cc:5,cs:15,cafe:100,vaso:200,taza:250}; const ml=q*(per[u.value]||1);
+      const pl=(x,a,b)=>`${r(x)} ${Math.abs(x-1)<0.01?a:b}`;
+      o.innerHTML=[`<b>${r(ml)} ml</b>`,`${r(ml*d)} g`,pl(ml/15,'cucharada','cucharadas'),pl(ml/5,'cucharadita','cucharaditas'),pl(ml/200,'vaso','vasos'),pl(ml/250,'taza de desayuno','tazas de desayuno')].map(x=>`<span>${x}</span>`).join(''); }
+  };
+  i.addEventListener('change',()=>{ units(); calc(); }); [n,u].forEach(x=>x.addEventListener('input',calc)); u.addEventListener('change',calc);
+  units(); calc();
 }
-
 /* ===== Acciones ===== */
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
