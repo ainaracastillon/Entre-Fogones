@@ -331,7 +331,15 @@ async function safeFetch(url, opts = {}, hops = 0) {
 }
 const decodeEnt = s => String(s || '').replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(+n)).replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
   .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>');
-const txt = v => decodeEnt(typeof v === 'string' ? v : '').replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+// Conserva negritas y cursivas como **texto** y *texto*
+function keepFmt(h) {
+  return String(h || '')
+    .replace(/<(strong|b)\b[^>]*>\s*([\s\S]*?)\s*<\/\1>/gi, (_, t, x) => x.trim() ? `**${x.trim()}**` : '')
+    .replace(/<(em|i)\b[^>]*>\s*([\s\S]*?)\s*<\/\1>/gi, (_, t, x) => x.trim() ? `*${x.trim()}*` : '')
+    .replace(/<span[^>]*font-weight\s*:\s*(?:bold|[6-9]00)[^>]*>([\s\S]*?)<\/span>/gi, (_, x) => x.trim() ? `**${x.trim()}**` : '')
+    .replace(/<span[^>]*font-style\s*:\s*italic[^>]*>([\s\S]*?)<\/span>/gi, (_, x) => x.trim() ? `*${x.trim()}*` : '');
+}
+const txt = v => keepFmt(decodeEnt(typeof v === 'string' ? v : '')).replace(/<[^>]+>/g, '').replace(/\*\*\s*\*\*/g, '').replace(/\s+/g, ' ').trim();
 function isoDur(s) { if (!s || typeof s !== 'string') return ''; const m = s.match(/P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?/); if (!m || (!m[1] && !m[2] && !m[3])) return txt(s); const h = (+m[2] || 0) + (+m[1] || 0) * 24, mi = +m[3] || 0; return [h ? h + ' h' : '', mi ? mi + ' min' : ''].filter(Boolean).join(' '); }
 function pickImage(img) {
   if (!img) return ''; if (typeof img === 'string') return img; if (Array.isArray(img)) return pickImage(img[0]); return img.url || img.contentUrl || '';
@@ -352,7 +360,7 @@ function parseJsonLd(html) {
     ingredients: (rec.recipeIngredient || rec.ingredients || []).map(txt).filter(Boolean), steps, notes: '' };
 }
 function htmlToText(html) {
-  return decodeEnt(html.replace(/<(script|style|noscript|svg|nav|footer|header)[\s\S]*?<\/\1>/gi, ' ')
+  return decodeEnt(keepFmt(html.replace(/<(script|style|noscript|svg|nav|footer|header)[\s\S]*?<\/\1>/gi, ' '))
     .replace(/<br\s*\/?>|<\/(p|li|h\d|div|tr)>/gi, '\n').replace(/<[^>]+>/g, ' ')).replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
 }
 function ogImage(html) { const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i); return m ? decodeEnt(m[1]) : ''; }
@@ -392,7 +400,7 @@ function cleanAi(r) {
 async function aiExtract(text) {
   return cleanAi(await claude(`Extrae la receta del texto de una página web que va entre las marcas. Devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Reglas: usa solo lo que aparece en el texto, sin inventar nada. Escribe en español (traduce si hace falta). Un ingrediente por elemento, con su cantidad delante. Un paso por elemento, sin numerar. Ignora comentarios, anuncios y menús de la web. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.
+Reglas: usa solo lo que aparece en el texto, sin inventar nada. Escribe en español (traduce si hace falta). Un ingrediente por elemento, con su cantidad delante. Un paso por elemento, sin numerar. Si alguna palabra o frase está en negrita escríbela como **texto**, y si está en cursiva como *texto*; no añadas formato que no esté. Ignora comentarios, anuncios y menús de la web. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.
 <<<TEXTO
 ${String(text).slice(0, 45000)}
 TEXTO>>>`));
@@ -409,7 +417,7 @@ api.post('/ai/create', async (req, res) => {
     const r = cleanAi(await claude(`Escribe una receta de cocina casera en español de España para esta petición: "${String(req.body.prompt || '').slice(0, 600)}".
 Devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Usa cantidades métricas (g, ml, cucharadas), pasos claros y concretos, y en "notes" un consejo breve de cocinero.`));
+Usa cantidades métricas (g, ml, cucharadas), pasos claros y concretos, marca en negrita con **texto** lo más importante de cada paso solo si ayuda, y en "notes" un consejo breve de cocinero.`));
     if (!r) return res.status(502).json({ error: 'Claude no devolvió una receta legible. Vuelve a intentarlo.' });
     res.json({ recipe: r });
   } catch (e) { console.error(e); res.status(502).json({ error: 'Claude no ha podido escribir la receta. Vuelve a intentarlo.' }); }
@@ -423,7 +431,7 @@ api.post('/ai/photo', async (req, res) => {
       { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } },
       { type: 'text', text: `La imagen es una foto de una receta (de un libro, revista o papel escrito a mano). Transcribe la receta y devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un ingrediente por elemento, un paso por elemento sin numerar. Si no hay receta, devuelve {"error":"no_recipe"}.` }]));
+Reglas: usa solo lo que se lee en la foto, sin inventar. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Escribe en español. Un ingrediente por elemento, un paso por elemento sin numerar. Si no hay receta, devuelve {"error":"no_recipe"}.` }]));
     if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida y recta.' });
     res.json({ recipe: r });
   } catch (e) { console.error(e); res.status(502).json({ error: 'Claude no ha podido leer la foto. Vuelve a intentarlo.' }); }

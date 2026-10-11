@@ -35,7 +35,8 @@ const ICONS = {
   sparkle:'<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z"/>', camera:'<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>',
   hand:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>', user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
-  out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>'
+  out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+  expand:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
 };
 const ico = n => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||''}</svg>`;
 function spoon(h=40, fill='var(--accent)', hole='var(--bg)'){
@@ -61,9 +62,68 @@ function fmtNum(n){
   if(fs) return (whole?whole:'')+fs;
   return (Math.round(n*10)/10).toLocaleString('es-ES');
 }
+/* ===== Negritas y cursivas =====
+   Se guardan como **negrita** y *cursiva* (o _cursiva_) y se pintan con <strong>/<em>. */
+function fmt(s){
+  let h=esc(s);
+  h=h.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g,'<strong>$1</strong>');
+  h=h.replace(/__(?=\S)([\s\S]*?\S)__/g,'<strong>$1</strong>');
+  h=h.replace(/(^|[^*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g,'$1<em>$2</em>');
+  h=h.replace(/(^|[^_\w])_(?=\S)([^_]*?\S)_(?![_\w])/g,'$1<em>$2</em>');
+  return h;
+}
+/* Convierte HTML pegado (de una web, Word, Google Docs…) en texto con ** y * */
+function htmlToMd(html){
+  let doc; try{ doc=new DOMParser().parseFromString(html,'text/html'); }catch{ return null; }
+  const BLOCK=/^(P|DIV|LI|H[1-6]|TR|BR|UL|OL|SECTION|ARTICLE|BLOCKQUOTE)$/;
+  const walk=(n,b,i)=>{
+    if(n.nodeType===3) return n.nodeValue.replace(/\s+/g,' ');
+    if(n.nodeType!==1) return '';
+    const t=n.tagName; if(/^(SCRIPT|STYLE|META|TITLE)$/.test(t)) return '';
+    if(t==='BR') return '\n';
+    const st=n.getAttribute('style')||'';
+    const fw=(st.match(/font-weight\s*:\s*(\w+)/i)||[])[1];
+    const isB=!b && (t==='B'||t==='STRONG'||(fw&&(fw==='bold'||+fw>=600)));
+    const isI=!i && (t==='I'||t==='EM'||/font-style\s*:\s*italic/i.test(st));
+    let inner=[...n.childNodes].map(c=>walk(c,b||isB,i||isI)).join('');
+    if(isB||isI){
+      const m=inner.match(/^(\s*)([\s\S]*?)(\s*)$/);
+      if(m[2] && !/\n/.test(m[2])){ const mk=(isB?'**':'')+(isI?'*':''); inner=m[1]+mk+m[2]+[...mk].reverse().join('')+m[3]; }
+    }
+    if(t==='LI') inner='\n'+inner.trim()+'\n';
+    else if(BLOCK.test(t)) inner='\n'+inner+'\n';
+    return inner;
+  };
+  return walk(doc.body,false,false).split('\n').map(l=>l.trim()).filter((l,k,a)=>l||(a[k-1]&&a[k-1].trim())).join('\n').trim();
+}
+function enableRichPaste(ta){
+  ta.addEventListener('paste',e=>{
+    const html=e.clipboardData?.getData('text/html'); if(!html) return;
+    const md=htmlToMd(html); if(md==null) return;
+    e.preventDefault(); ta.setRangeText(md, ta.selectionStart, ta.selectionEnd, 'end'); ta.dispatchEvent(new Event('input'));
+  });
+  ta.addEventListener('keydown',e=>{
+    if(!(e.ctrlKey||e.metaKey)) return;
+    const k=e.key.toLowerCase();
+    if(k==='b'||k==='n'){ e.preventDefault(); wrapSel(ta,'**'); }
+    else if(k==='i'||k==='k'){ e.preventDefault(); wrapSel(ta,'*'); }
+  });
+}
+function wrapSel(ta,mk){
+  let a=ta.selectionStart, b=ta.selectionEnd, v=ta.value;
+  while(a<b && /\s/.test(v[a])) a++; while(b>a && /\s/.test(v[b-1])) b--;
+  const sel=v.slice(a,b);
+  if(sel.startsWith(mk) && sel.endsWith(mk) && sel.length>=2*mk.length){ ta.setRangeText(sel.slice(mk.length,-mk.length),a,b,'select'); }
+  else if(v.slice(a-mk.length,a)===mk && v.slice(b,b+mk.length)===mk){ ta.setRangeText(sel,a-mk.length,b+mk.length,'select'); }
+  else { ta.setRangeText(mk+(sel||'texto')+mk,a,b,'select'); }
+  ta.focus(); ta.dispatchEvent(new Event('input'));
+}
+const fmtBar = id => `<span class="fmtbar"><button type="button" data-fmt="**" data-for="${id}" aria-label="Negrita" title="Negrita (Ctrl+B)"><b>N</b></button><button type="button" data-fmt="*" data-for="${id}" aria-label="Cursiva" title="Cursiva (Ctrl+I)"><i>C</i></button></span>`;
+document.addEventListener('mousedown',e=>{ const b=e.target.closest('[data-fmt]'); if(!b) return; e.preventDefault(); const ta=document.getElementById(b.dataset.for); if(ta) wrapSel(ta,b.dataset.fmt); });
+
 function scaleLine(line,f){
   if(f===1) return line;
-  const m = line.match(/^\s*(\d+\s+\d+\/\d+|\d+\/\d+|\d+[.,]\d+|\d+\s*[½¼¾⅓⅔]|\d+|[½¼¾⅓⅔])/);
+  const m = line.match(/^[\s*_]*(\d+\s+\d+\/\d+|\d+\/\d+|\d+[.,]\d+|\d+\s*[½¼¾⅓⅔]|\d+|[½¼¾⅓⅔])/);
   if(!m) return line;
   let s=m[1].trim(), v=0;
   if(/^\d+\s+\d+\/\d+$/.test(s)){const [a,b]=s.split(/\s+/);const [n,d]=b.split('/');v=+a+n/d}
@@ -137,10 +197,11 @@ function renderTop(){
     ${!S.booted?'':canSocial()?`<button class="me" data-act="account">${avatar(S.uid)}<span>@${esc(S.profile.username)}</span></button>`:`<button class="btn sm" data-act="register">${ico('user')}Crear perfil</button>`}`;
 }
 function render(){
+  document.body.classList.toggle('in-book', S.view==='book');
   renderTop();
   const m=$('#main');
   if(S.view==='library') m.innerHTML = viewLibrary();
-  else if(S.view==='book') m.innerHTML = viewBook();
+  else if(S.view==='book'){ renderBook(); return; }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
 }
@@ -150,12 +211,13 @@ function refresh(){
   requestAnimationFrame(()=>{ refreshQueued=false;
     renderTop();
     if(S.view==='library') $('#main').innerHTML=viewLibrary();
-    else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); $('#main').innerHTML=viewBook(); }
+    else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
   });
 }
 function go(v){
+  if(S.zoom){ S.zoom=null; document.body.style.overflow=''; if(document.fullscreenElement) document.exitFullscreen().catch(()=>{}); }
   if(S.view==='chat' && v!=='chat') stopChat();
   if(S.view!=='book') S.prevView=S.view;
   S.view=v; render(); window.scrollTo(0,0);
@@ -207,12 +269,14 @@ function ownBook(id){
 }
 function syncOwnBook(){
   const b = ownBook(S.book.id);
-  if(!b){ S.view='library'; S.book=null; return; }
+  if(!b){ S.view='library'; S.book=null; S.zoom=null; return; }
   const curR = currentRecipe();
   S.book = b;
   const focusId = S.pendingFocus || curR?.id;
-  if(focusId){ const i=b.recipes.findIndex(r=>r.id===focusId); if(i>=0){ S.page = pageOfRecipe(i); if(S.pendingFocus===focusId) S.pendingFocus=null; } }
-  S.page = Math.min(S.page, pages().length-1);
+  if(focusId){ const i=b.recipes.findIndex(r=>r.id===focusId); if(i>=0){ S.page = pageOfRecipe(i); if(S.zoom==='page') S.zoomPage=S.page; if(S.pendingFocus===focusId) S.pendingFocus=null; } }
+  const total=pages().length;
+  S.page = Math.max(0, Math.min(S.page, total-2));
+  if(S.zoomPage!=null) S.zoomPage = Math.min(S.zoomPage, total-1);
 }
 function pages(){
   const p=[{k:'title'},{k:'index'}];
@@ -223,103 +287,172 @@ function pages(){
 const pageOfRecipe = i => 2+2*i;
 function currentRecipe(){
   if(!S.book) return null; const p=pages();
-  const a=p[S.page], b=narrow()?null:p[S.page+1];
-  return a?.r || b?.r || null;
+  if(S.zoom==='page') return p[S.zoomPage]?.r || null;
+  return p[S.page]?.r || p[S.page+1]?.r || null;
 }
 function openBook(id, recipeId){
   const b=ownBook(id); if(!b) return;
-  S.book=b; S.page=0;
+  S.book=b; S.page=0; S.zoom=null;
   if(recipeId){ const i=b.recipes.findIndex(r=>r.id===recipeId); if(i>=0) S.page=pageOfRecipe(i); }
   if(S.view!=='book') S.prevView=S.view;
   if(S.view==='chat') stopChat();
   S.view='book'; render(); window.scrollTo(0,0);
 }
-function viewBook(){
-  const b=S.book, p=pages(), n=narrow();
-  if(!n && S.page%2) S.page--;
-  const L=p[S.page], R=n?null:p[S.page+1];
-  const total=p.length, cur=currentRecipe();
-  const ownerLabel = b.visiting ? `de ${esc(b.ownerName||'')}` : '';
-  let tools='';
+function bookTools(){
+  const b=S.book, cur=currentRecipe(); let t='';
   if(b.visiting){
-    tools = cur ? `<button class="btn pri sm" data-act="saveCopy">${ico('save')}Guardar en mi libro</button>` : '';
-    if(b.folder && b.recipes.length) tools += `<button class="btn sm" data-act="saveFolderCopy">${ico('book')}Guardar la carpeta entera</button>`;
-  } else {
-    if(cur) tools = `<button class="btn sm" data-act="editRecipe" data-id="${esc(cur.id)}">${ico('edit')}Editar</button>
+    t = cur ? `<button class="btn pri sm" data-act="saveCopy">${ico('save')}Guardar en mi libro</button>` : '';
+    if(b.folder && b.recipes.length) t += `<button class="btn sm" data-act="saveFolderCopy">${ico('book')}Guardar la carpeta entera</button>`;
+  } else if(cur) t = `<button class="btn sm" data-act="editRecipe" data-id="${esc(cur.id)}">${ico('edit')}Editar</button>
       <button class="btn sm" data-act="shareRecipe" data-id="${esc(cur.id)}">${ico('share')}Compartir</button>
       <button class="btn sm" data-act="moveRecipe" data-id="${esc(cur.id)}">${ico('move')}Mover</button>
       <button class="btn sm danger" data-act="delRecipe" data-id="${esc(cur.id)}">${ico('trash')}Borrar</button>`;
-    else if(b.folder) tools = `<button class="btn sm" data-act="shareFolder">${ico('share')}Compartir carpeta</button>
+  else if(b.folder) t = `<button class="btn sm" data-act="shareFolder">${ico('share')}Compartir carpeta</button>
       <button class="btn sm" data-act="editFolder">${ico('edit')}Renombrar o color</button>
       <button class="btn sm danger" data-act="delFolder">${ico('trash')}Borrar carpeta</button>`;
+  return t;
+}
+function viewBook(){
+  const b=S.book, p=pages(), total=p.length;
+  if(S.page%2) S.page--;
+  const solo = S.zoom==='page';
+  const idxs = solo ? [S.zoomPage] : [S.page, S.page+1];
+  const anim = k => S.turn==='next' ? (solo||k===1?'leaf-in-r':'') : S.turn==='prev' ? (solo||k===0?'leaf-in-l':'') : '';
+  const pagesHtml = idxs.map((i,k)=>`<article class="page ${solo?'solo':(k?'r':'l')} ${anim(k)}" data-pi="${i}" title="${solo?'Toca para volver a las dos páginas':'Toca para ver esta página más grande'}">${pageHtml(p[i],i+1)}</article>`).join('');
+  const atStart = solo ? S.zoomPage<=0 : S.page<=0;
+  const atEnd = solo ? S.zoomPage>=total-1 : S.page+2>=total;
+  const label = solo ? `Página ${S.zoomPage+1} de ${total}` : `Páginas ${S.page+1}–${S.page+2} de ${total}`;
+  const pager = `<div class="pager"><button class="btn" data-act="prevPage" aria-label="Página anterior" ${atStart?'disabled':''}>${ico('back')}</button><span class="${S.zoom?'muted':'muted'}">${label}</span><button class="btn" data-act="nextPage" aria-label="Página siguiente" ${atEnd?'disabled':''}>${ico('next')}</button></div>`;
+  const bookHtml = `<div class="book-stage" id="stage"><div class="book ${solo?'single':''}" id="book" style="--cloth:${esc(b.color||'#2F5D46')}"><div class="spread">${pagesHtml}</div></div></div>`;
+  if(S.zoom){
+    return `<div class="zoomwrap" role="dialog" aria-modal="true" aria-label="Libro ampliado">
+      <div class="zoombar"><span class="ttl">${esc(b.name)}</span><div class="row">${solo?`<button class="btn sm" data-act="zoomSpread">${ico('book')}Ver las dos páginas</button>`:''}<button class="btn sm" data-act="zoomClose">${ico('x')}Cerrar</button></div></div>
+      ${bookHtml}
+      <div class="zoombar" style="justify-content:center">${pager}</div>
+    </div>`;
   }
-  const label = n ? `Página ${S.page+1} de ${total}` : `Páginas ${S.page+1}–${S.page+2} de ${total}`;
+  const ownerLabel = b.visiting ? `de ${esc(b.ownerName||'')}` : '';
   return `<div class="book-head">
       <button class="btn ghost sm" data-act="closeBook">${ico('back')}${b.visiting?'Volver':'Estantería'}</button>
-      <h1>${esc(b.name)} <span class="muted" style="font-weight:500;font-size:16px">${ownerLabel}</span></h1>
+      <h1>${esc(b.name)} <span class="muted" style="font-weight:500;font-size:15px">${ownerLabel}</span></h1>
       <span class="sp"></span>
-      <div class="row">${tools}</div>
+      <div class="row">${bookTools()}</div>
     </div>
-    <div class="book" style="--cloth:${esc(b.color||'#2F5D46')}">
-      <div class="spread" id="spread">
-        <article class="page l ${S.turn==='next'&&n?'leaf-in-r':''} ${S.turn==='prev'?'leaf-in-l':''}">${pageHtml(L,S.page+1)}</article>
-        ${R?`<article class="page r ${S.turn==='next'?'leaf-in-r':''}">${pageHtml(R,S.page+2)}</article>`:''}
-      </div>
-    </div>
+    ${bookHtml}
     <div class="book-foot">
-      <div class="pager">
-        <button class="btn" data-act="prevPage" aria-label="Página anterior" ${S.page<=0?'disabled':''}>${ico('back')}</button>
-        <span class="muted">${label}</span>
-        <button class="btn" data-act="nextPage" aria-label="Página siguiente" ${S.page+(n?1:2)>=total?'disabled':''}>${ico('next')}</button>
+      ${pager}
+      <span class="hint">Toca una página para verla más grande</span>
+      <div class="row">
+        <button class="btn sm" data-act="zoomFull">${ico('expand')}Ampliar libro</button>
+        ${!b.visiting?`<button class="btn pri sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir receta aquí</button>`:''}
       </div>
-      ${!b.visiting?`<button class="btn pri sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir receta aquí</button>`:''}
     </div>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
   const pn=`<span class="pn">${num}</span>`;
+  const wrap = h => `<div class="pc">${h}</div>${pn}`;
   if(p.k==='title'){
     const who = b.visiting ? (b.ownerName||'') : (S.profile?.display||'');
-    return `<div class="title-page">${spoon(64,'var(--paper-ink)','var(--paper)')}<div class="orn"></div><h2>${esc(b.name)}</h2><div class="orn"></div>
+    return wrap(`<div class="title-page">${spoon(64,'var(--paper-ink)','var(--paper)')}<div class="orn"></div><h2>${esc(b.name)}</h2><div class="orn"></div>
       <p style="margin:0;color:var(--paper-muted)">${b.recipes.length} ${b.recipes.length===1?'receta':'recetas'}</p>
-      ${who?`<p class="by" style="margin:0">de la cocina de ${esc(who)}</p>`:''}</div>${pn}`;
+      ${who?`<p class="by" style="margin:0">de la cocina de ${esc(who)}</p>`:''}</div>`);
   }
   if(p.k==='index'){
-    if(!b.recipes.length) return `<h2>Índice</h2><div class="pempty"><p>Este libro todavía está en blanco.</p>${b.visiting?'':`<button class="btn sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir una receta</button>`}</div>${pn}`;
-    return `<h2>Índice</h2><ol class="toc">${b.recipes.map((r,i)=>`<li><button data-act="goPage" data-p="${pageOfRecipe(i)}"><span class="tn">${esc(r.title||'Sin título')}</span><span class="dots"></span><span class="tp">${pageOfRecipe(i)+1}</span></button></li>`).join('')}</ol>${pn}`;
+    if(!b.recipes.length) return wrap(`<h2>Índice</h2><div class="pempty"><p>Este libro todavía está en blanco.</p>${b.visiting?'':`<button class="btn sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir una receta</button>`}</div>`);
+    return wrap(`<h2>Índice</h2><ol class="toc">${b.recipes.map((r,i)=>`<li><button data-act="goPage" data-p="${pageOfRecipe(i)}"><span class="tn">${esc(r.title||'Sin título')}</span><span class="dots"></span><span class="tp">${pageOfRecipe(i)+1}</span></button></li>`).join('')}</ol>`);
   }
-  if(p.k==='end') return `<div class="title-page"><div class="orn"></div><p class="by">Fin</p><div class="orn"></div></div>${pn}`;
+  if(p.k==='end') return wrap(`<div class="title-page"><div class="orn"></div><p class="by">Fin</p><div class="orn"></div></div>`);
   const r=p.r;
   if(p.k==='rl'){
     const base=parseInt(r.servings)||0, shown=S.scale[r.id]||base, f=base?shown/base:1;
     const serv = base?`<span class="serv" aria-label="Raciones"><button data-act="serv" data-id="${esc(r.id)}" data-d="-1" aria-label="Menos raciones">−</button><span style="font-variant-numeric:tabular-nums">${shown} raciones</span><button data-act="serv" data-id="${esc(r.id)}" data-d="1" aria-label="Más raciones">+</button></span>`:(r.servings?`<span>${esc(r.servings)}</span>`:'');
-    return `<h2>${esc(r.title||'Sin título')}</h2>
+    return wrap(`<h2>${esc(r.title||'Sin título')}</h2>
       <div class="meta">${serv}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
-      ${r.image?`<img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onerror="this.remove()">`:''}
+      ${r.image?`<img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.remove();fitPages()">`:''}
       <h3>Ingredientes</h3>
-      ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${esc(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}${pn}`;
+      ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}`);
   }
   if(p.k==='rr'){
     const from = r.fromUid && r.fromUid!==S.uid && S.profiles[r.fromUid] ? `<p class="src">Compartida por ${esc(pname(r.fromUid))}</p>`:'';
-    return `<h3 style="margin-top:6px">Preparación</h3>
-      ${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${esc(s)}</span></li>`).join('')}</ol>`:'<p style="color:var(--paper-muted)">Sin pasos apuntados.</p>'}
-      ${r.notes?`<p class="note">${esc(r.notes)}</p>`:''}
-      ${r.source?`<p class="src">Fuente: <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source)}</a></p>`:''}${from}${pn}`;
+    return wrap(`<h3 style="margin-top:0">Preparación</h3>
+      ${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${fmt(s)}</span></li>`).join('')}</ol>`:'<p style="color:var(--paper-muted)">Sin pasos apuntados.</p>'}
+      ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}
+      ${r.source?`<p class="src">Fuente: <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source)}</a></p>`:''}${from}`);
   }
   return pn;
 }
-function turn(dir){
-  const n=narrow(), step=n?1:2, total=pages().length;
-  const np = S.page + (dir==='next'?step:-step);
-  if(np<0 || np>=total) return;
-  S.page=np; S.turn=dir; $('#main').innerHTML=viewBook(); S.turn=null;
+function renderBook(){
+  document.body.classList.add('in-book');
+  $('#main').innerHTML=viewBook();
+  document.body.style.overflow = S.zoom ? 'hidden' : '';
+  layoutBook();
 }
+/* Tamaño del libro: las dos páginas caben enteras en la ventana */
+function layoutBook(){
+  const stage=$('#stage'), book=$('#book'); if(!stage||!book) return;
+  const solo=S.zoom==='page';
+  const W=stage.clientWidth;
+  let H;
+  if(S.zoom) H=stage.clientHeight;
+  else {
+    const top=stage.getBoundingClientRect().top + window.scrollY;
+    const foot=$('.book-foot'); const fh=foot?foot.offsetHeight+16:60;
+    H=window.innerHeight - top - fh - 14;
+  }
+  H=Math.max(H, 260);
+  const bp=Math.round(Math.max(6, Math.min(16, W*0.012)));
+  const AR=0.72, n=solo?1:2;
+  const ph=Math.max(150, Math.min(H-2*bp, (W-2*bp-8)/(AR*n)));
+  book.style.setProperty('--bp', bp+'px');
+  book.style.width=Math.round(ph*AR*n+2*bp)+'px';
+  book.style.height=Math.round(ph+2*bp)+'px';
+  fitPages();
+}
+/* El texto de cada página se ajusta para que se vea entero sin desplazarse */
+function fitPages(){
+  document.querySelectorAll('#book .page').forEach(pg=>{
+    const pc=pg.querySelector('.pc'); if(!pc) return;
+    const fits=()=>pc.scrollHeight<=pc.clientHeight+1 && pc.scrollWidth<=pc.clientWidth+1;
+    let hi=Math.max(6, pg.clientHeight/27), lo=3.5;
+    pc.style.overflow='hidden';
+    pg.style.fontSize=hi+'px';
+    if(fits()) return;
+    for(let k=0;k<14;k++){ const mid=(lo+hi)/2; pg.style.fontSize=mid+'px'; if(fits()) lo=mid; else hi=mid; }
+    pg.style.fontSize=lo+'px';
+    if(!fits()) pc.style.overflow='auto';
+  });
+}
+function turn(dir){
+  const total=pages().length;
+  if(S.zoom==='page'){
+    const np=S.zoomPage+(dir==='next'?1:-1); if(np<0||np>=total) return; S.zoomPage=np;
+  } else {
+    const np=S.page+(dir==='next'?2:-2); if(np<0||np>=total) return; S.page=np;
+  }
+  S.turn=dir; renderBook(); S.turn=null;
+}
+function zoomTo(mode){
+  if(mode==='full' && !S.zoom){ try{ const el=document.documentElement; if(el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(()=>{}); }catch{} }
+  if(!mode && document.fullscreenElement){ try{ document.exitFullscreen().catch(()=>{}); }catch{} }
+  S.zoom=mode; renderBook();
+}
+document.addEventListener('click',e=>{
+  if(S.view!=='book') return;
+  const pg=e.target.closest('#book .page'); if(!pg || e.target.closest('button,a,input,select,textarea')) return;
+  if(S.zoom==='page'){ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom||null); }
+  else { S.zoomFrom=S.zoom; S.zoomPage=+pg.dataset.pi; S.zoom='page'; renderBook(); }
+});
 document.addEventListener('keydown',e=>{
   if(S.view!=='book' || $('#modal-root').children.length || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
-  if(e.key==='ArrowRight') turn('next'); if(e.key==='ArrowLeft') turn('prev');
+  if(e.key==='ArrowRight') turn('next');
+  else if(e.key==='ArrowLeft') turn('prev');
+  else if(e.key==='Escape' && S.zoom){ if(S.zoom==='page'){ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom||null); } else zoomTo(null); }
 });
-let lastNarrow = narrow();
-addEventListener('resize',()=>{ const n=narrow(); if(n!==lastNarrow){ lastNarrow=n; if(S.view==='book') $('#main').innerHTML=viewBook(); } });
+let resizeT=null;
+addEventListener('resize',()=>{ clearTimeout(resizeT); resizeT=setTimeout(()=>{ if(S.view==='book') layoutBook(); },80); });
+document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElement && S.zoom==='full'){ S.zoom=null; if(S.view==='book') renderBook(); } else if(S.view==='book') layoutBook(); });
+if(document.fonts?.ready) document.fonts.ready.then(()=>{ if(S.view==='book') layoutBook(); });
 
 /* ===== Modales ===== */
 function openModal(html,{wide=false,onClose}={}){
@@ -384,6 +517,7 @@ function newRecipeModal(folderId){
           <textarea id="upaste" class="inp" rows="7"></textarea></div>
         <div id="ustatus"></div>
         <div class="row" style="justify-content:flex-end"><button class="btn pri" id="ugo">Importar receta</button></div></form>`;
+      enableRichPaste($('#upaste',m));
       $('#fu',m).onsubmit=async e=>{e.preventDefault();
         const url=$('#uurl',m).value.trim(); const pasted=$('#upaste',m).value.trim();
         const st=$('#ustatus',m), btn=$('#ugo',m); btn.disabled=true;
@@ -482,13 +616,15 @@ function editorModal(d){
       <div class="field"><label for="ediff">Dificultad</label><select id="ediff" class="inp">${['','Fácil','Media','Difícil'].map(x=>`<option ${x===r.difficulty?'selected':''} value="${x}">${x||'—'}</option>`).join('')}</select></div>
       <div class="field"><label for="efold">Carpeta</label><select id="efold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===r.folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!r.folderId?'selected':''}>Sin carpeta</option></select></div>
     </div>
-    <div class="field"><label for="eing">Ingredientes, uno por línea</label><textarea id="eing" class="inp" rows="7" placeholder="200 g de harina&#10;2 huevos&#10;1 pizca de sal">${esc((r.ingredients||[]).join('\n'))}</textarea></div>
-    <div class="field"><label for="esteps">Preparación, un paso por línea</label><textarea id="esteps" class="inp" rows="7">${esc((r.steps||[]).join('\n'))}</textarea></div>
-    <div class="field"><label for="enotes">Notas (salen escritas a mano en el libro)</label><textarea id="enotes" class="inp" rows="2">${esc(r.notes)}</textarea></div>
+    <div class="field"><div class="lblrow"><label for="eing">Ingredientes, uno por línea</label>${fmtBar('eing')}</div><textarea id="eing" class="inp" rows="7" placeholder="200 g de harina&#10;2 huevos&#10;1 pizca de sal">${esc((r.ingredients||[]).join('\n'))}</textarea></div>
+    <div class="field"><div class="lblrow"><label for="esteps">Preparación, un paso por línea</label>${fmtBar('esteps')}</div><textarea id="esteps" class="inp" rows="7">${esc((r.steps||[]).join('\n'))}</textarea></div>
+    <div class="field"><div class="lblrow"><label for="enotes">Notas (salen escritas a mano en el libro)</label>${fmtBar('enotes')}</div><textarea id="enotes" class="inp" rows="2">${esc(r.notes)}</textarea></div>
     <div class="field"><label for="esrc">Enlace de origen (opcional)</label><input id="esrc" class="inp" type="url" value="${esc(r.source)}"></div>
+    <p class="muted" style="margin:0;font-size:13px">Para poner algo en negrita o cursiva, selecciónalo y pulsa N o C. Al pegar texto de una web se conservan.</p>
     <div id="estatus"></div>
     <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar en mi libro</button></div>
   </form>`,{wide:true});
+  ['eing','esteps','enotes'].forEach(id=>enableRichPaste($('#'+id,m)));
   $('#eimg',m).onchange=async e=>{const f=e.target.files[0];if(!f)return;$('#eimgPrev',m).innerHTML='<span class="spin"></span>';
     try{ image=await compressImage(f); $('#eimgPrev',m).innerHTML=`<img src="${image}" alt="">`; $('#eimgDel',m).hidden=false; }catch{ $('#eimgPrev',m).innerHTML=''; toast('No se pudo leer esa imagen'); }};
   $('#eimgDel',m).onclick=()=>{image='';$('#eimgPrev',m).innerHTML='';$('#eimgDel',m).hidden=true};
@@ -554,6 +690,7 @@ async function openShared(c){
   }catch(err){ toast(err.error||'No se pudo abrir'); }
 }
 function showVisiting(book, page){
+  S.zoom=null;
   if(S.view==='chat'){ S.returnChat=S.chatWith; stopChat(); }
   if(S.view!=='book') S.prevView=S.view;
   S.book=book; S.page=page; S.view='book'; render(); window.scrollTo(0,0);
@@ -757,7 +894,7 @@ function renderMsgs(forceBottom){
         ${mine?'':`<button class="btn sm" data-act="saveRef" data-k="${k}" data-i="${esc(m.ref?.id)}">${ico('save')}Guardar en mi libro</button>`}</div></div>`;
     } else if(m.type==='ask'){
       inner=`<span class="tag">Pide una receta</span>${esc(m.text)}${mine?'':`<div class="row" style="margin-top:8px"><button class="btn sm" data-act="answerAsk">${ico('send')}Enviarle una receta</button></div>`}`;
-    } else inner=esc(m.text);
+    } else inner=fmt(m.text);
     return `${sep}<div class="msg ${mine?'mine':''} ${m.type==='ask'?'ask':''}">${inner}<span class="when">${esc(new Date(m.ts).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}))}</span></div>`;
   }).join('');
   if(atBottom) box.scrollTop=box.scrollHeight;
@@ -788,10 +925,13 @@ const ACT = {
   newFolder:()=>folderModal(),
   openBook:el=>openBook(el.dataset.id),
   openRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); },
-  closeBook:()=>{ const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
+  closeBook:()=>{ S.zoom=null; document.body.style.overflow=''; const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
   prevPage:()=>turn('prev'), nextPage:()=>turn('next'),
-  goPage:el=>{ let p=+el.dataset.p; if(!narrow()&&p%2)p--; S.turn='next'; S.page=p; $('#main').innerHTML=viewBook(); S.turn=null; },
-  serv:el=>{ const r=S.book.recipes.find(x=>x.id===el.dataset.id); const base=parseInt(r.servings)||0; if(!base) return; const cur=S.scale[r.id]||base; S.scale[r.id]=Math.max(1,Math.min(99,cur+ +el.dataset.d)); $('#main').innerHTML=viewBook(); },
+  goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn='next'; S.page=p; renderBook(); S.turn=null; },
+  zoomFull:()=>zoomTo('full'),
+  zoomClose:()=>zoomTo(null),
+  zoomSpread:()=>{ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom==='full'?'full':null); },
+  serv:el=>{ const r=S.book.recipes.find(x=>x.id===el.dataset.id); const base=parseInt(r.servings)||0; if(!base) return; const cur=S.scale[r.id]||base; S.scale[r.id]=Math.max(1,Math.min(99,cur+ +el.dataset.d)); renderBook(); },
   editRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) editorModal({...r}); },
   shareRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) shareModal('recipe',r); },
   moveRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Mover a…', async fid=>{ try{ await store.saveRecipe({...r,folderId:fid}); toast('Receta movida'); }catch(e){fail(e)} }); },
