@@ -379,6 +379,49 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:10
   .lib-head .row .btn{padding:9px 13px}
   .adm-tabs button span{display:none}
 }
+
+a.btn{text-decoration:none}
+input[type=radio],input[type=checkbox]{accent-color:var(--accent)}
+/* campanita de avisos */
+.bellbox{position:relative}
+.bell{position:relative;width:40px;height:40px;border-radius:50%;border:0;background:none;color:var(--muted);display:inline-flex;align-items:center;justify-content:center}
+.bell:hover,.bell[aria-expanded="true"]{background:var(--surface);color:var(--ink)}
+.bell .ico{width:20px;height:20px}
+.bell .badge{position:absolute;top:2px;right:0;margin:0;min-width:16px;height:16px;font-size:10px}
+.bell-panel{position:absolute;right:-60px;top:calc(100% + 8px);width:min(380px,calc(100vw - 24px));max-height:70vh;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 34px -12px rgba(40,20,5,.35);padding:6px;z-index:41;display:grid;gap:6px}
+.bell-panel[hidden]{display:none}
+.bp-head{padding:8px 10px;border-bottom:1px solid var(--line)}
+.bp-empty{padding:14px 10px;margin:0}
+.notice{border-radius:12px;overflow:hidden;background:var(--bg);border:1px solid var(--line)}
+.notice.unread{border-color:var(--accent)}
+.notice .n-img{display:block;width:100%;max-height:220px;object-fit:cover}
+.notice .n-body{padding:10px 12px;display:grid;gap:6px}
+.notice h3{font-size:16px;font-weight:800}
+.notice p{margin:0;white-space:pre-wrap;font-size:15px}
+.n-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.n-date{font-size:12px;color:var(--muted);margin-right:auto}
+.n-fixed{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted)}.n-fixed .ico{width:14px;height:14px}
+.modal .notice{border:0;background:none}.modal .notice .n-body{padding:4px 0}.modal .notice .n-img{border-radius:12px}
+.nt-form{max-width:none}
+.nt-opts{border:1px solid var(--line);border-radius:12px;padding:8px 14px 10px;margin:0;display:grid;gap:4px}
+.nt-opts legend{font-size:13px;color:var(--muted);padding:0 4px}
+/* menú de usuario: siempre alineado a la izquierda, también en el móvil */
+.user-menu button,.user-menu .um-link{justify-content:flex-start;text-align:left;flex-direction:row}
+@media (max-width:640px){
+  .nav .user-menu button{flex-direction:row;gap:11px;padding:9px 11px;font-size:15px;border-radius:9px;align-items:center}
+  .nav .user-menu .ico{width:18px;height:18px}
+  .bell{width:34px;height:34px}.bell .ico{width:19px;height:19px}
+  .bell-panel{right:-56px}
+  .nav .bell-panel button{flex-direction:row;gap:6px;font-size:13px;padding:5px 12px;border-radius:999px}
+  .nav .bell-panel .btn.sm{min-height:32px}
+}
+@media (max-width:400px){
+  .top .wrap{gap:4px}
+  .nav{gap:0}
+  .nav > button{padding:5px 5px}
+  .user-btn{padding:5px 4px}
+  .user-btn .uname{display:none}
+}
 /* formato en el editor */
 .fmtbar{display:flex;gap:4px;align-items:center}
 .fmtbar button{width:32px;height:28px;border-radius:6px;border:1px solid var(--line);background:var(--surface);font-family:var(--f-book);font-size:15px;line-height:1}

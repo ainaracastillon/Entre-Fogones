@@ -36,6 +36,8 @@ const ICONS = {
   hand:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>', user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+  bell:'<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/>',
+  pin:'<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>',
   down:'<path d="M6 9l6 6 6-6"/>',
   shield:'<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/>',
   doc:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
@@ -177,8 +179,9 @@ async function boot(){
   }
   S.booted = true;
   window.addEventListener('hashchange', routeHash);
-  render(); routeHash();
+  render(); routeHash(); loadNotices();
   setInterval(()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); }, 8000);
+  setInterval(()=>{ if(document.visibilityState==='visible') loadNotices(); }, 60000);
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); });
 }
 
@@ -222,10 +225,11 @@ function renderTop(){
       <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
       <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
       <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
-      ${userBox}
+      ${S.booted?bellHtml():''}${userBox}
     </nav>`;
   const btn=$('#userBtn'), menu=$('#userMenu');
-  if(btn) btn.onclick=e=>{ e.stopPropagation(); const open=menu.hidden; menu.hidden=!open; btn.setAttribute('aria-expanded',String(open)); };
+  if(btn) btn.onclick=e=>{ e.stopPropagation(); const open=menu.hidden; menu.hidden=!open; btn.setAttribute('aria-expanded',String(open)); const bp=$('#bellPanel'); if(bp) bp.hidden=true; };
+  bindBell();
 }
 document.addEventListener('click',e=>{ const m=$('#userMenu'); if(m && !m.hidden && (!e.target.closest('.userbox') || e.target.closest('[role=menuitem]'))){ m.hidden=true; $('#userBtn')?.setAttribute('aria-expanded','false'); } });
 document.addEventListener('keydown',e=>{ const m=$('#userMenu'); if(e.key==='Escape' && m && !m.hidden){ m.hidden=true; $('#userBtn')?.focus(); } });
@@ -246,7 +250,7 @@ let refreshQueued=false;
 function refresh(){
   if(!S.booted || refreshQueued) return; refreshQueued=true;
   requestAnimationFrame(()=>{ refreshQueued=false;
-    const menuOpen = $('#userMenu') && !$('#userMenu').hidden;
+    const menuOpen = ($('#userMenu') && !$('#userMenu').hidden) || ($('#bellPanel') && !$('#bellPanel').hidden);
     if(!menuOpen) renderTop();
     if(S.view==='library'){ const keep=window.scrollY; $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); window.scrollTo(0,keep); }
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
@@ -1022,7 +1026,7 @@ function resetModal(token){
   };
 }
 /* ===== Mi cuenta (igual que en Kairos, adaptada a Entre Fogones) ===== */
-const ALLERGENS = ['Gluten','Lactosa','Leche','Huevo','Frutos de cáscara','Cacahuete','Soja','Pescado','Marisco (crustáceos)','Moluscos','Sésamo','Mostaza','Apio','Sulfitos','Altramuces','Fructosa'];
+const ALLERGENS = ['Gluten','Lactosa','Huevo','Frutos secos','Marisco','Pescado','Cacahuete','Soja'];
 function viewAccount(){
   const p=S.profile, me=S.me, mine=new Set(me.allergens||[]);
   const custom=(me.allergens||[]).filter(a=>!ALLERGENS.includes(a));
@@ -1049,16 +1053,17 @@ function viewAccount(){
 
     <section class="card">
       <h2>Alérgenos e intolerancias</h2>
-      <p class="muted">Marca lo que no puedes tomar. Cuando añadas una receta, la IA te avisará si lo lleva y te propondrá sustituirlo o quitarlo.</p>
+      <p class="muted">Escribe lo que no puedes tomar y pulsa Añadir. Cuando añadas una receta, la IA te avisará si lo lleva y te propondrá sustituirlo o quitarlo.</p>
+      <form id="fAlgAdd" class="inline-form"><div class="field" style="flex:1"><label for="algOther">Alergia o intolerancia</label><input id="algOther" class="inp" maxlength="40" placeholder="Por ejemplo: melocotón, sésamo, sulfitos…"></div><button class="btn">${ico('plus')}Añadir</button></form>
+      <p class="muted" style="font-size:13px;margin:0">Las más comunes, con un toque:</p>
       <div class="chips" id="algChips">${ALLERGENS.map(a=>`<button type="button" class="chip" aria-pressed="${mine.has(a)}" data-alg="${esc(a)}">${esc(a)}</button>`).join('')}${custom.map(a=>`<button type="button" class="chip" aria-pressed="true" data-alg="${esc(a)}">${esc(a)}</button>`).join('')}</div>
-      <form id="fAlgAdd" class="inline-form"><div class="field" style="flex:1"><label for="algOther">Otra alergia o intolerancia</label><input id="algOther" class="inp" maxlength="40" placeholder="Por ejemplo: melocotón"></div><button class="btn">${ico('plus')}Añadir</button></form>
       <div><button class="btn pri" id="algSave">Guardar alérgenos</button></div>
     </section>
 
     <section class="card">
       <h2>Correo electrónico</h2>
       <p class="muted">Es con el que puedes entrar y donde te llega el enlace si olvidas la contraseña. Para cambiarlo, confirma tu contraseña.</p>
-      <form id="fEmail" class="form-grid"><div class="grid2">
+      <form id="fEmail" class="form-grid"><div class="form-grid">
         <div class="field"><label for="emNew">Correo</label><input id="emNew" class="inp" type="email" required autocomplete="email" value="${esc(me.email||'')}"></div>
         <div class="field"><label for="emPass">Contraseña</label><input id="emPass" class="inp" type="password" required autocomplete="current-password"></div>
       </div><div><button class="btn">Cambiar correo</button></div></form>
@@ -1066,7 +1071,7 @@ function viewAccount(){
 
     <section class="card">
       <h2>Contraseña</h2>
-      <form id="fPass" class="form-grid"><div class="grid2">
+      <form id="fPass" class="form-grid"><div class="form-grid">
         <div class="field"><label for="pwCur">Contraseña actual</label><input id="pwCur" class="inp" type="password" required autocomplete="current-password"></div>
         <div class="field"><label for="pwNew">Nueva contraseña</label><input id="pwNew" class="inp" type="password" required minlength="6" autocomplete="new-password"></div>
       </div><div><button class="btn">Cambiar contraseña</button></div></form>
@@ -1107,6 +1112,7 @@ function bindAccount(root){
   $('#fPass',root).onsubmit=async e=>{ e.preventDefault(); if(await ok(()=>api('PUT','/me/password',{current:$('#pwCur',root).value, password:$('#pwNew',root).value}),'Contraseña cambiada')) e.target.reset(); };
   $('#algChips',root).onclick=e=>{ const c=e.target.closest('.chip'); if(c) c.setAttribute('aria-pressed', c.getAttribute('aria-pressed')!=='true'); };
   $('#fAlgAdd',root).onsubmit=e=>{ e.preventDefault(); const v=$('#algOther',root).value.trim(); if(!v) return;
+    const ex=[...root.querySelectorAll('.chip')].find(c=>c.dataset.alg.toLowerCase()===v.toLowerCase()); if(ex){ ex.setAttribute('aria-pressed','true'); $('#algOther',root).value=''; return; }
     const b=document.createElement('button'); b.type='button'; b.className='chip'; b.dataset.alg=v; b.textContent=v; b.setAttribute('aria-pressed','true'); $('#algChips',root).append(b); $('#algOther',root).value=''; };
   $('#algSave',root).onclick=()=>ok(()=>api('PUT','/me/allergens',{allergens:[...root.querySelectorAll('.chip[aria-pressed=true]')].map(c=>c.dataset.alg)}),'Alérgenos guardados');
   $('#avFile',root).onchange=async e=>{ const f=e.target.files[0]; e.target.value=''; if(!f) return;
@@ -1332,7 +1338,7 @@ function recipePicker(title, cb){
 }
 
 /* ===== Panel de administración ===== */
-const ADM_TABS=[['resumen','chart','Resumen'],['usuarios','users','Usuarios'],['recetas','book','Recetas'],['mensajes','mail','Mensajes'],['sugerencias','sparkle','Sugerencias']];
+const ADM_TABS=[['resumen','chart','Resumen'],['avisos','bell','Avisos'],['usuarios','users','Usuarios'],['recetas','book','Recetas'],['mensajes','mail','Mensajes'],['sugerencias','sparkle','Sugerencias']];
 const isSuper = () => S.me?.role==='superadmin';
 function viewAdmin(){
   S.admTab=S.admTab||'resumen';
@@ -1353,6 +1359,7 @@ async function adminLoad(){
     else if(tab==='usuarios'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"></div><div id="admList"></div>`; bindAdmSearch('usuarios'); await admUsers(); }
     else if(tab==='recetas'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); await admRecipes(); }
     else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
+    else if(tab==='avisos'){ box.innerHTML=admNotices(await api('GET','/admin/notices')); bindAdmNotices(); }
     else if(tab==='sugerencias'){ box.innerHTML=admSugg(await api('GET','/admin/suggestions')); bindAdmSugg(); }
   }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido cargar.')}</p>`; }
 }
@@ -1432,6 +1439,115 @@ const ADM_ACT = {
   admSuggHide:el=>admDo(()=>api('PUT','/admin/suggestions/'+el.dataset.id,{hidden:el.dataset.h==='1'}),el.dataset.h==='1'?'Sugerencia oculta':'Sugerencia visible').then(()=>{S.sugg=null}),
   admSuggDel:async el=>{ if(await confirmBox('Se quitará esta sugerencia.')) admDo(()=>api('DELETE','/admin/suggestions/'+el.dataset.id),'Sugerencia borrada').then(()=>{S.sugg=null}); },
 };
+
+/* ===== Avisos (campanita) ===== */
+S.notices=[];
+async function loadNotices(){
+  try{ S.notices=await api('GET','/notices'); }catch{ return; }
+  drawBell();
+  const pop=S.notices.find(n=>n.popup && !n.read && !S.shownPop?.has(n.id));
+  if(pop && !$('#modal-root').children.length) showNoticePopup(pop);
+}
+const unreadNotices = () => S.notices.filter(n=>!n.read).length;
+function bellHtml(){
+  const n=unreadNotices();
+  return `<div class="bellbox">
+    <button class="bell" id="bellBtn" aria-haspopup="dialog" aria-expanded="false" aria-label="Avisos${n?`, ${n} sin leer`:''}" title="Avisos">${ico('bell')}${n?`<span class="badge">${n}</span>`:''}</button>
+    <div class="bell-panel" id="bellPanel" hidden role="dialog" aria-label="Avisos"></div></div>`;
+}
+function drawBell(){
+  const box=$('.bellbox'); if(!box) return;
+  const open=!$('#bellPanel').hidden; box.outerHTML=bellHtml(); bindBell();
+  if(open){ $('#bellPanel').hidden=false; drawBellPanel(); }
+}
+function noticeHtml(n, inPanel=true){
+  return `<article class="notice ${n.read?'':'unread'}">
+    ${n.image?`<img src="${esc(n.image)}" alt="" class="n-img" loading="lazy" referrerpolicy="no-referrer">`:''}
+    <div class="n-body">
+      ${n.title?`<h3>${esc(n.title)}</h3>`:''}
+      ${n.body?`<p>${fmt(n.body)}</p>`:''}
+      <div class="n-foot">
+        ${n.url?`<a class="btn sm pri" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.url_label||'Abrir enlace')}</a>`:''}
+        <span class="n-date">${esc(new Date(n.created).toLocaleDateString('es-ES',{day:'numeric',month:'short'}))}</span>
+        ${inPanel?(n.dismissible?`<button class="btn sm ghost" data-ndis="${esc(n.id)}">${ico('x')}Quitar</button>`:`<span class="n-fixed" title="Este aviso se queda fijo">${ico('pin')}Fijo</span>`):''}
+      </div>
+    </div></article>`;
+}
+function drawBellPanel(){
+  const p=$('#bellPanel'); if(!p) return;
+  p.innerHTML=`<div class="bp-head"><b>Avisos</b></div>`+(S.notices.length?S.notices.map(n=>noticeHtml(n)).join(''):`<p class="muted bp-empty">No tienes avisos.</p>`);
+  p.querySelectorAll('[data-ndis]').forEach(b=>b.onclick=async e=>{ e.stopPropagation();
+    try{ await api('POST',`/notices/${b.dataset.ndis}/dismiss`); S.notices=S.notices.filter(n=>n.id!==b.dataset.ndis); drawBellPanel(); drawBell(); }catch(err){ toast(err.error||'No se ha podido quitar'); } });
+}
+function markNoticesRead(list){
+  list.filter(n=>!n.read).forEach(n=>{ n.read=true; api('POST',`/notices/${n.id}/read`).catch(()=>{}); });
+}
+function bindBell(){
+  const b=$('#bellBtn'), p=$('#bellPanel'); if(!b) return;
+  b.onclick=e=>{ e.stopPropagation(); const open=p.hidden; p.hidden=!open; b.setAttribute('aria-expanded',String(open));
+    if(open){ drawBellPanel(); const um=$('#userMenu'); if(um) um.hidden=true; setTimeout(()=>{ markNoticesRead(S.notices); const badge=b.querySelector('.badge'); if(badge) badge.remove(); },600); } };
+}
+document.addEventListener('click',e=>{ const p=$('#bellPanel'); if(p && !p.hidden && !e.target.closest('.bellbox')){ p.hidden=true; $('#bellBtn')?.setAttribute('aria-expanded','false'); drawBell(); } });
+document.addEventListener('keydown',e=>{ const p=$('#bellPanel'); if(e.key==='Escape' && p && !p.hidden){ p.hidden=true; $('#bellBtn')?.focus(); } });
+function showNoticePopup(n){
+  S.shownPop=S.shownPop||new Set(); S.shownPop.add(n.id);
+  openModal(`${mHead(n.title||'Aviso')}${noticeHtml({...n,title:''},false)}<div class="row" style="justify-content:flex-end"><button class="btn pri" data-act="closeModal">Entendido</button></div>`,{onClose:()=>{ drawBell(); setTimeout(loadNotices,300); }});
+  markNoticesRead([n]);
+}
+
+/* Avisos en el panel de administración */
+function admNotices(list){
+  return `<form id="ntForm" class="card nt-form">
+      <h2>Nuevo aviso</h2>
+      <div class="field"><label for="ntTitle">Título</label><input id="ntTitle" class="inp" maxlength="120" placeholder="Por ejemplo: ¡Ya podéis subir recetas desde vídeos!"></div>
+      <div class="field"><div class="lblrow"><label for="ntBody">Texto</label>${fmtBar('ntBody')}</div><textarea id="ntBody" class="inp" rows="4" maxlength="2000"></textarea></div>
+      <div class="field"><label>Imagen (opcional)</label><div class="imgbox"><span id="ntPrev"></span><label class="btn sm" for="ntFile">${ico('camera')}Subir imagen</label><input id="ntFile" type="file" accept="image/*" hidden><button type="button" class="btn sm ghost" id="ntImgDel" hidden>Quitar</button></div>
+        <input id="ntImgUrl" class="inp" type="url" placeholder="o pega el enlace de una imagen"></div>
+      <div class="grid2"><div class="field"><label for="ntUrl">Enlace (opcional)</label><input id="ntUrl" class="inp" type="url" placeholder="https://…"></div>
+        <div class="field"><label for="ntUrlLbl">Texto del botón</label><input id="ntUrlLbl" class="inp" maxlength="40" placeholder="Abrir enlace"></div></div>
+      <fieldset class="nt-opts"><legend>Dónde se ve</legend>
+        <label class="opt-line"><input type="radio" name="ntWhere" value="bell" checked> Solo en la campanita</label>
+        <label class="opt-line"><input type="radio" name="ntWhere" value="popup"> En la campanita y en una ventana al abrir la app</label></fieldset>
+      <fieldset class="nt-opts"><legend>En la campanita</legend>
+        <label class="opt-line"><input type="radio" name="ntKeep" value="dis" checked> Cada persona lo puede quitar</label>
+        <label class="opt-line"><input type="radio" name="ntKeep" value="fix"> Se queda fijo, no se puede quitar</label></fieldset>
+      <div id="ntSt"></div>
+      <div><button class="btn pri" id="ntGo">${ico('send')}Enviar aviso a todos</button></div>
+    </form>
+    <h2 class="below-h">Avisos enviados</h2>
+    ${list.length?`<div class="adm-rows">${list.map(n=>`<div class="adm-row ${n.active?'':'blocked'}">
+      ${n.image?`<span class="thumb sm"><img src="${esc(n.image)}" alt="" referrerpolicy="no-referrer"></span>`:''}
+      <div class="ar-main"><div class="ar-t">${esc(n.title||(n.body||'').slice(0,60)||'Aviso con imagen')} ${n.popup?'<span class="role r-admin">Ventana al abrir</span>':''} ${n.dismissible?'':'<span class="role">Fijo</span>'} ${n.active?'':'<span class="role">Desactivado</span>'}</div>
+        <div class="ar-s">${fmtDate(n.created)}${n.autor?' · por @'+esc(n.autor):''} · leído por <b>${n.leidas_cuentas}</b> ${n.leidas_cuentas===1?'cuenta':'cuentas'} y ${n.leidas_anonimas} sin cuenta${n.quitadas?` · ${n.quitadas} lo quitaron`:''}</div></div>
+      <div class="ar-act"><button class="btn sm" data-act="admNtReads" data-id="${esc(n.id)}">${ico('users')}Quién lo ha leído</button>
+        <button class="btn sm" data-act="admNtToggle" data-id="${esc(n.id)}" data-a="${n.active?0:1}">${n.active?'Desactivar':'Activar'}</button>
+        <button class="btn sm danger" data-act="admNtDel" data-id="${esc(n.id)}">Borrar</button></div></div>`).join('')}</div>`:'<p class="muted">Todavía no has enviado avisos.</p>'}`;
+}
+function bindAdmNotices(){
+  const f=$('#ntForm'); if(!f) return; let image='';
+  enableRichPaste($('#ntBody'));
+  $('#ntFile').onchange=async e=>{ const file=e.target.files[0]; if(!file) return; try{ image=await toDataUrl(file,1200,.82,290000); $('#ntPrev').innerHTML=`<img src="${image}" alt="">`; $('#ntImgDel').hidden=false; $('#ntImgUrl').value=''; }catch{ toast('No se ha podido leer esa imagen'); } };
+  $('#ntImgDel').onclick=()=>{ image=''; $('#ntPrev').innerHTML=''; $('#ntImgDel').hidden=true; };
+  f.onsubmit=async e=>{ e.preventDefault(); const b=$('#ntGo'); b.disabled=true;
+    try{
+      await api('POST','/admin/notices',{ title:$('#ntTitle').value, body:$('#ntBody').value, image:image||$('#ntImgUrl').value.trim(), url:$('#ntUrl').value.trim(), url_label:$('#ntUrlLbl').value,
+        popup:f.querySelector('input[name=ntWhere]:checked').value==='popup', dismissible:f.querySelector('input[name=ntKeep]:checked').value==='dis' });
+      toast('Aviso enviado'); adminLoad(); loadNotices();
+    }catch(err){ b.disabled=false; $('#ntSt').innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+  };
+}
+Object.assign(ADM_ACT,{
+  admNtToggle:el=>admDo(()=>api('PUT','/admin/notices/'+el.dataset.id,{active:el.dataset.a==='1'}), el.dataset.a==='1'?'Aviso activado':'Aviso desactivado'),
+  admNtDel:async el=>{ if(await confirmBox('Se borrará el aviso para todo el mundo, con su registro de lecturas.')) admDo(()=>api('DELETE','/admin/notices/'+el.dataset.id),'Aviso borrado'); },
+  admNtReads:async el=>{
+    try{ const d=await api('GET',`/admin/notices/${el.dataset.id}/reads`);
+      d.cuentas.forEach(u=>{ S.profiles[u.id]=S.profiles[u.id]||u; });
+      openModal(`${mHead('Quién lo ha leído')}
+        <p class="muted" style="margin:0">${d.cuentas.length} ${d.cuentas.length===1?'cuenta':'cuentas'}${d.anonimas?` y ${d.anonimas} ${d.anonimas===1?'persona':'personas'} sin cuenta`:''}.</p>
+        <div class="pick">${d.cuentas.length?d.cuentas.map(u=>`<div class="person">${avatar(u.id)}<div class="pb"><div class="pn">${esc(u.display||'')}</div><div class="pu">@${esc(u.username)}</div></div><span class="muted" style="font-size:13px">${esc(new Date(u.read_at).toLocaleString('es-ES',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}))}${u.dismissed?' · lo quitó':''}</span></div>`).join(''):'<p class="muted">Todavía no lo ha leído ninguna cuenta.</p>'}</div>`);
+    }catch(err){ toast(err.error||'No se ha podido cargar'); }
+  }
+});
 
 /* ===== Acciones ===== */
 const fail = err => toast(err?.error||'No se pudo completar');

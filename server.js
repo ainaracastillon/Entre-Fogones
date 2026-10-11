@@ -67,6 +67,12 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS suggestions(
     id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, author TEXT, image TEXT, position INT NOT NULL DEFAULT 0, hidden BOOLEAN, tries INT, created BIGINT NOT NULL);
   CREATE TABLE IF NOT EXISTS ai_usage(day TEXT PRIMARY KEY, n INT NOT NULL DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS notices(
+    id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
+    popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
+  CREATE TABLE IF NOT EXISTS notice_reads(
+    notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    read_at BIGINT NOT NULL, dismissed BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(notice_id,user_id));
   ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_at BIGINT;
   CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(lower(email)) WHERE email IS NOT NULL;
   CREATE TABLE IF NOT EXISTS password_resets(
@@ -972,6 +978,70 @@ adm.put('/suggestions/:id', async (req, res, next) => {
 adm.delete('/suggestions/:id', async (req, res, next) => {
   try { await q('DELETE FROM suggestions WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
 });
+/* ---------- Avisos dentro de la app (campanita) ---------- */
+function cleanNotice(b) {
+  const s = (v, n) => String(v ?? '').trim().slice(0, n);
+  let image = s(b.image, 400000);
+  if (image && !/^data:image\/(jpeg|png|webp|gif);base64,/.test(image) && !/^https?:\/\//.test(image)) image = '';
+  const url = /^https?:\/\//.test(b.url || '') ? s(b.url, 800) : '';
+  return { title: s(b.title, 120), body: s(b.body, 2000), image: image || null, url: url || null, url_label: s(b.url_label, 40) || null,
+    dismissible: b.dismissible !== false, popup: !!b.popup };
+}
+api.get('/notices', async (req, res, next) => {
+  try {
+    const rows = (await q(`SELECT n.id,n.title,n.body,n.image,n.url,n.url_label,n.dismissible,n.popup,n.created, r.read_at, coalesce(r.dismissed,false) dismissed
+      FROM notices n LEFT JOIN notice_reads r ON r.notice_id=n.id AND r.user_id=$1
+      WHERE n.active AND NOT (coalesce(r.dismissed,false) AND n.dismissible) ORDER BY n.created DESC LIMIT 50`, [req.user.id])).rows;
+    res.json(rows.map(n => ({ ...n, created: Number(n.created), read: !!n.read_at, read_at: undefined })));
+  } catch (e) { next(e); }
+});
+api.post('/notices/:id/read', async (req, res, next) => {
+  try { await q('INSERT INTO notice_reads(notice_id,user_id,read_at) VALUES($1,$2,$3) ON CONFLICT(notice_id,user_id) DO NOTHING', [req.params.id, req.user.id, now()]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.post('/notices/:id/dismiss', async (req, res, next) => {
+  try {
+    const n = (await q('SELECT dismissible FROM notices WHERE id=$1', [req.params.id])).rows[0];
+    if (!n) return res.status(404).json({ error: 'Ese aviso ya no existe.' });
+    if (!n.dismissible) return res.status(400).json({ error: 'Este aviso no se puede quitar.' });
+    await q(`INSERT INTO notice_reads(notice_id,user_id,read_at,dismissed) VALUES($1,$2,$3,true)
+      ON CONFLICT(notice_id,user_id) DO UPDATE SET dismissed=true`, [req.params.id, req.user.id, now()]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.get('/notices', async (req, res, next) => {
+  try {
+    const rows = (await q(`SELECT n.*, u.username autor,
+      (SELECT count(*)::int FROM notice_reads r JOIN users x ON x.id=r.user_id WHERE r.notice_id=n.id AND x.username IS NOT NULL) leidas_cuentas,
+      (SELECT count(*)::int FROM notice_reads r JOIN users x ON x.id=r.user_id WHERE r.notice_id=n.id AND x.username IS NULL) leidas_anonimas,
+      (SELECT count(*)::int FROM notice_reads r WHERE r.notice_id=n.id AND r.dismissed) quitadas
+      FROM notices n LEFT JOIN users u ON u.id=n.created_by ORDER BY n.created DESC LIMIT 100`)).rows;
+    res.json(rows.map(n => ({ ...n, created: Number(n.created) })));
+  } catch (e) { next(e); }
+});
+adm.post('/notices', async (req, res, next) => {
+  try {
+    const n = cleanNotice(req.body);
+    if (!n.title && !n.body && !n.image) return res.status(400).json({ error: 'Pon al menos un título, un texto o una imagen.' });
+    await q(`INSERT INTO notices(id,title,body,image,url,url_label,dismissible,popup,active,created,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10)`,
+      [gid(), n.title || null, n.body || null, n.image, n.url, n.url_label, n.dismissible, n.popup, now(), req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.put('/notices/:id', async (req, res, next) => {
+  try { await q('UPDATE notices SET active=$1 WHERE id=$2', [!!req.body.active, req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.delete('/notices/:id', async (req, res, next) => {
+  try { await q('DELETE FROM notices WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.get('/notices/:id/reads', async (req, res, next) => {
+  try {
+    const rows = (await q(`SELECT u.username,u.display,u.color,u.avatar,u.id, r.read_at, r.dismissed FROM notice_reads r JOIN users u ON u.id=r.user_id
+      WHERE r.notice_id=$1 AND u.username IS NOT NULL ORDER BY r.read_at DESC`, [req.params.id])).rows;
+    const anon = (await q('SELECT count(*)::int n FROM notice_reads r JOIN users u ON u.id=r.user_id WHERE r.notice_id=$1 AND u.username IS NULL', [req.params.id])).rows[0].n;
+    res.json({ cuentas: rows.map(x => ({ ...x, read_at: Number(x.read_at) })), anonimas: anon });
+  } catch (e) { next(e); }
+});
+
 api.use('/admin', adm);
 
 function countAi() { const d = new Date().toISOString().slice(0, 10); q('INSERT INTO ai_usage(day,n) VALUES($1,1) ON CONFLICT(day) DO UPDATE SET n=ai_usage.n+1', [d]).catch(() => {}); }
