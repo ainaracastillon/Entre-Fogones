@@ -309,7 +309,7 @@ function render(){
   document.documentElement.classList.toggle('in-chat', S.view==='chat');
   document.documentElement.classList.toggle('in-menu', S.view==='menu');
   if(['account','admin'].includes(S.view) && !S.profile) S.view='library';
-  if(S.view==='admin' && !isAdminMe()) S.view='library';
+  if(['admin','admuser'].includes(S.view) && !isAdminMe()) S.view='library';
   renderTop();
   const m=$('#main');
   if(S.view!=='famous') S.suggView=null;
@@ -323,6 +323,7 @@ function render(){
   else if(S.view==='community'){ m.innerHTML = viewCommunity(); afterCommunity(); }
   else if(S.view==='menu'){ m.innerHTML = viewMenu(); afterMenu(); }
   else if(S.view==='help'){ m.innerHTML = viewHelp(); }
+  else if(S.view==='admuser'){ m.innerHTML = viewAdmUser(); loadAdmUser(); }
   else if(S.view==='equiv'){ m.innerHTML = viewEquiv(); bindEquiv(); }
   const top=$('.top'); if(top) document.documentElement.style.setProperty('--toph', top.offsetHeight+'px');
   navTrack();
@@ -345,7 +346,7 @@ function refresh(){
 }
 /* ===== Historial: atrás y adelante (botón del móvil, navegador y deslizar desde los bordes) ===== */
 const NAV={i:0, top:0, snaps:[], restoring:false, lastPop:0};
-const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'');
+const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'')+(s.view==='admuser'?(S.admUserId||''):'');
 const navSnap=()=>({view:S.view, book:S.book, page:S.page, chatWith:S.chatWith, key:navKey(S)});
 /* La página actual va en la dirección (?v=…) para que al recargar se abra la misma */
 function navUrl(){
@@ -354,6 +355,7 @@ function navUrl(){
   if(S.view==='book' && S.book){ p.set('b',S.book.id); if(S.page) p.set('p',S.page); }
   if(S.view==='chat' && S.chatWith) p.set('c',S.chatWith);
   if(S.view==='admin' && S.admTab && S.admTab!=='resumen') p.set('t',S.admTab);
+  if(S.view==='admuser' && S.admUserId) p.set('u',S.admUserId);
   const q=p.toString(); return location.pathname+(q?'?'+q:'');
 }
 function navTrack(){
@@ -367,7 +369,8 @@ function navTrack(){
 /* Al recargar: se vuelve a abrir la página en la que estabas */
 function restoreFromUrl(){
   const p=new URLSearchParams(location.search), v=p.get('v');
-  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv'];
+  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser'];
+  if(v==='admuser'){ S.admUserId=p.get('u'); S.admUser=null; }
   if(!v || !ok.includes(v)) return null;
   if(v==='admin' && p.get('t')) S.admTab=p.get('t');
   if(v==='chat'){ S.chatWith=p.get('c')||null; S.view='chat'; return null; }
@@ -376,6 +379,7 @@ function restoreFromUrl(){
     const own=ownBook(id);
     if(own){ S.book=own; S.page=Math.min(page, Math.max(0,pages().length-2)); S.view='book'; return null; }
     // libros que no son tuyos: se vuelven a pedir al servidor
+    if(id.startsWith('au-')){ S.view='admin'; S.admTab='usuarios'; return null; }
     if(id.startsWith('sg-')) return ()=>openSuggestion(id.slice(3));
     if(id.startsWith('v-')||id.startsWith('c-')) return ()=>openShared({kind:'r', id:id.slice(2)});
     if(id) return ()=>openShared({kind:'f', id});
@@ -1941,6 +1945,7 @@ async function admUsers(){
         ${u.blocked&&u.blocked_reason?`<div class="ar-s">Motivo de la suspensión: ${esc(u.blocked_reason)}</div>`:''}
         ${u.delete_suggested?`<div class="ar-s">@${esc(u.delete_suggested.by||'')} sugiere borrarla${u.delete_suggested.reason?': '+esc(u.delete_suggested.reason):''}</div>`:''}</div>
       <div class="ar-act">
+        <button class="btn sm" data-act="admViewUser" data-id="${esc(u.id)}">${ico('book')}Ver perfil y biblioteca</button>
         ${isSuper() && target!=='superadmin' ? `<button class="btn sm" data-act="admRole" data-id="${esc(u.id)}" data-role="${target==='admin'?'user':'admin'}">${target==='admin'?'Quitar administrador':'Hacer administrador'}</button>`:''}
         ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Quitar suspensión':'Suspender'}</button>
           ${isSuper()?`<button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`
@@ -2001,6 +2006,46 @@ function userAutocomplete(inp, sug){
   sug.addEventListener('mousedown',e=>e.preventDefault());
   sug.addEventListener('click',e=>{ const b=e.target.closest('[data-u]'); if(b) pick(b.dataset.u); });
   inp.addEventListener('blur',()=>setTimeout(close,150));
+}
+/* Perfil y biblioteca de una cuenta, visto desde el panel (solo lectura) */
+function viewAdmUser(){
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="admBackUsers" aria-label="Usuarios">${ico('back')}<span class="lbl">Usuarios</span></button><h1>Perfil</h1></div><div id="admUserBox"><div class="status"><span class="spin"></span>Cargando…</div></div>`;
+}
+async function loadAdmUser(){
+  const box=$('#admUserBox'); if(!box) return;
+  try{
+    const d=S.admUser && S.admUser.user.id===S.admUserId ? S.admUser : await api('GET',`/admin/users/${encodeURIComponent(S.admUserId)}/library`);
+    S.admUser=d; const u=d.user; S.profiles[u.id]={id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
+    const roleLbl={superadmin:'Superadministrador',admin:'Administrador',user:'Usuario'};
+    const none=d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId));
+    const slot=b=>`<div class="slot">${b}</div>`;
+    const books=[
+      slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="admOpenBook" data-id="all"><span class="st">Todas</span><span class="sc">${d.recipes.length}</span></button>`),
+      ...d.folders.map(f=>{ const n=d.recipes.filter(r=>r.folderId===f.id).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
+      none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="admOpenBook" data-id="none"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):''
+    ].join('');
+    box.innerHTML=`<section class="card account-head">${avatar(u.id,'big')}
+        <div class="head-info"><h2>${esc(u.display||u.username)}</h2><p class="muted" style="margin:2px 0 6px">@${esc(u.username)}${u.email?' · '+esc(u.email):' · sin correo'}</p>
+          <div class="row" style="gap:6px"><span class="role r-${u.role}">${roleLbl[u.role]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Suspendida</span>':''}</div></div></section>
+      <div class="kpis" style="margin-top:14px">
+        <div class="kpi"><b>${d.recipes.length}</b><span>recetas</span></div><div class="kpi"><b>${d.folders.length}</b><span>recetarios</span></div>
+        <div class="kpi"><b>${d.recipes.filter(r=>r.public).length}</b><span>públicas</span></div><div class="kpi"><b>${u.friends}</b><span>amistades</span></div>
+        <div class="kpi"><b style="font-size:18px">${fmtDate(u.accepted_at)}</b><span>alta</span></div><div class="kpi"><b style="font-size:18px">${fmtAgo(u.last_seen)}</b><span>última vez</span></div></div>
+      ${(u.allergens||[]).length||u.prefs?.diabetes?`<p class="muted" style="margin:10px 0 0">Alérgenos: ${esc((u.allergens||[]).join(', ')||'ninguno')}${u.prefs?.diabetes?' · Diabetes: '+esc(u.prefs.diabetes):''}</p>`:''}
+      ${u.blocked&&u.blocked_reason?`<p class="muted" style="margin:6px 0 0">Motivo de la suspensión: ${esc(u.blocked_reason)}</p>`:''}
+      <h2 class="below-h">Biblioteca</h2>
+      ${d.recipes.length||d.folders.length?`<div class="shelf-wrap"><div class="shelves">${books}</div></div>`:'<p class="muted">Todavía no tiene recetas.</p>'}
+      ${d.recipes.length?`<h2 class="below-h">Últimas recetas</h2><div class="cards fam-grid">${d.recipes.slice(0,6).map(r=>`<div class="rcard sg"><button class="sg-open" data-act="admOpenRecipe" data-id="${esc(r.id)}"><span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span><span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([r.category,r.public?'Pública':'Privada'].filter(Boolean).join(' · '))}</span></span></button></div>`).join('')}</div>`:''}`;
+    fitSpines();
+  }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido cargar.')}</p>`; }
+}
+function admUserBook(id){
+  const d=S.admUser; if(!d) return null; const u=d.user;
+  const base={owner:u.id, ownerName:u.display||('@'+u.username), visiting:true, adminView:true};
+  if(id==='all') return {...base, id:'au-all-'+u.id, name:'Todas', color:'#6E4429', recipes:[...d.recipes].sort(byTitle)};
+  if(id==='none') return {...base, id:'au-none-'+u.id, name:'Sin recetario', color:'#7A6A5C', recipes:d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
+  const f=d.folders.find(x=>x.id===id); if(!f) return null;
+  return {...base, id:f.id, name:f.name, color:f.color, folder:true, recipes:d.recipes.filter(r=>r.folderId===f.id).sort(byTitle)};
 }
 /* Subida masiva de recetas desde el panel */
 function admBulkHtml(){
@@ -2080,6 +2125,10 @@ const ADM_ACT = {
     const reason=await promptBox('Sugerir borrar la cuenta','¿Por qué se debería borrar?',{ok:'Sugerir',hint:'El Superadministrador lo verá y decidirá.'});
     if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-delete`,{on:true, reason}),'Sugerencia enviada al Superadministrador');
   },
+  admViewUser:el=>{ S.admUserId=el.dataset.id; S.admUser=null; go('admuser'); },
+  admBackUsers:()=>{ S.admTab='usuarios'; go('admin'); },
+  admOpenBook:el=>{ const b=admUserBook(el.dataset.id); if(b) showVisiting(b,0); },
+  admOpenRecipe:el=>{ const d=S.admUser; const r=d&&d.recipes.find(x=>x.id===el.dataset.id); if(!r) return; const b={...admUserBook('all')}; const i=b.recipes.findIndex(x=>x.id===r.id); showVisiting(b, i>=0?pageOfRecipe(i):0); },
   admNewUser:async()=>{
     const m=openModal(`${mHead('Crear cuenta')}<form id="nuF" style="display:grid;gap:12px">
       <div class="field"><label for="nuU">Usuario</label><input id="nuU" class="inp" required maxlength="20" placeholder="@user983"></div>

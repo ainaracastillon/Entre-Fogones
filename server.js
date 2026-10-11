@@ -1712,6 +1712,20 @@ adm.post('/users', async (req, res, next) => {
     res.json({ ok: true, id });
   } catch (e) { next(e); }
 });
+// Ver el perfil y la biblioteca de una cuenta (solo lectura)
+adm.get('/users/:id/library', async (req, res, next) => {
+  try {
+    const u = (await q('SELECT id,username,display,email,color,avatar,role,blocked,blocked_reason,delete_suggested,accepted_at,last_seen,allergens,prefs FROM users WHERE id=$1', [req.params.id])).rows[0];
+    if (!u) return res.status(404).json({ error: 'Esa cuenta no existe.' });
+    const [folders, recipes, friends] = await Promise.all([
+      q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY created', [u.id]),
+      q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY updated DESC', [u.id]),
+      q("SELECT count(*)::int n FROM requests WHERE status='accepted' AND (from_id=$1 OR to_id=$1)", [u.id])
+    ]);
+    res.json({ user: { ...u, accepted_at: Number(u.accepted_at) || null, last_seen: Number(u.last_seen) || null, friends: friends.rows[0].n },
+      folders: folders.rows.map(f => ({ ...f, created: Number(f.created) })), recipes: recipes.rows.map(recipeOut) });
+  } catch (e) { next(e); }
+});
 adm.put('/users/:id/role', needSuper, async (req, res, next) => {
   try {
     const role = req.body.role === 'admin' ? 'admin' : 'user';
