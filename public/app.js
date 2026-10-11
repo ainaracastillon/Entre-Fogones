@@ -203,7 +203,7 @@ const isAdminMe = () => !!S.profile && (S.me?.role==='admin' || S.me?.role==='su
 function renderTop(){
   const unread = S.booted && canSocial() ? unreadCount() : 0;
   const pend = S.booted && canSocial() ? pendingIn().length : 0;
-  const cur = S.view==='book' ? 'library' : S.view;
+  const cur = ['book','famous'].includes(S.view) ? 'library' : S.view;
   const userBox = !S.booted ? '' : canSocial() ? `
       <div class="userbox">
         <button class="user-btn ${['account','admin'].includes(cur)?'active':''}" id="userBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu" title="Tu cuenta">
@@ -239,12 +239,14 @@ function render(){
   if(S.view==='admin' && !isAdminMe()) S.view='library';
   renderTop();
   const m=$('#main');
+  if(S.view!=='famous') S.suggView=null;
   if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); loadSuggestions(); }
   else if(S.view==='book'){ renderBook(); return; }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
   else if(S.view==='account'){ m.innerHTML = viewAccount(); bindAccount(m); }
   else if(S.view==='admin'){ m.innerHTML = viewAdmin(); adminLoad(); }
+  else if(S.view==='famous'){ m.innerHTML = viewFamous(); afterFamous(); }
 }
 let refreshQueued=false;
 function refresh(){
@@ -256,6 +258,7 @@ function refresh(){
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
+    else if(S.view==='famous') drawSuggestions();
     /* Mi cuenta y el panel no se repintan solos para no perder lo que se está escribiendo */
   });
 }
@@ -313,7 +316,8 @@ function viewLibrary(){
   </section>
   <section class="recent sugg">
     <div class="sugg-h"><h2>Recetas famosas</h2><p class="muted">Ábrelas y guarda las que te gusten en tus recetarios.</p></div>
-    <div class="cards" id="suggList">${suggHtml()}</div>
+    <div class="cards" id="suggList">${suggHtml(5)}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="famous">Ver todas las recetas famosas ${ico('next')}</button></div>
   </section>`;
 }
 function cardHtml(r){
@@ -324,23 +328,47 @@ function cardHtml(r){
   </button>`;
 }
 /* Sugerencias de recetas famosas */
-function suggHtml(){
-  if(!S.sugg) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
-  if(!S.sugg.length) return `<p class="muted" style="margin:0">Estamos preparando las recetas. Vuelve en un rato.</p>`;
+function suggHtml(max){
+  const list=S.suggView || S.sugg;
+  if(!list) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
+  if(!list.length) return `<p class="muted" style="margin:0">${S.suggView?'No hay recetas con esa búsqueda.':'Estamos preparando las recetas. Vuelve en un rato.'}</p>`;
   const saved=new Set(S.recipes.map(r=>r.fromSugg).filter(Boolean));
-  return S.sugg.map(s=>`<div class="rcard sg">
+  return (max?list.slice(0,max):list).map(s=>`<div class="rcard sg">
     <button class="sg-open" data-act="openSugg" data-id="${esc(s.id)}">
-      <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
-      <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span>${s.time?`<span class="mm">${esc(s.time)}</span>`:''}</span></button>
+      <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span><span class="mm">${esc([s.category,s.time].filter(Boolean).join(' · '))}</span></span></button>
     ${saved.has(s.id)?`<span class="saved" title="Ya está en tus recetarios">${ico('check')}</span>`:`<button class="btn sm tbtn" data-act="addSugg" data-id="${esc(s.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button>`}
   </div>`).join('');
 }
-function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(); }
+function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(S.view==='library'?5:0); }
 let suggLoaded=0;
 async function loadSuggestions(){
-  if(S.sugg && Date.now()-suggLoaded<10*60e3){ drawSuggestions(); return; }
-  try{ S.sugg=await api('GET','/suggestions'); suggLoaded=Date.now(); }catch{ S.sugg=S.sugg||[]; }
+  if(S.sugg && Date.now()-suggLoaded<5*60e3){ drawSuggestions(); return; }
+  try{ const d=await api('GET','/suggestions'); S.sugg=d.items; S.suggCats=d.cats; suggLoaded=Date.now(); }catch{ S.sugg=S.sugg||[]; }
   drawSuggestions();
+}
+/* Todas las recetas famosas, con buscador y tipos */
+function viewFamous(){
+  const cats=S.suggCats||[];
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas famosas</h1></div>
+    <div class="fam-tools">
+      <input id="famQ" class="inp" type="search" placeholder="Buscar: tarta de queso, croquetas, pollo…" value="${esc(S.famQ||'')}" aria-label="Buscar recetas famosas">
+      <select id="famCat" class="inp" aria-label="Tipo de receta"><option value="">Todos los tipos</option>${cats.map(c=>`<option value="${esc(c.category)}" ${S.famCat===c.category?'selected':''}>${esc(c.category)} (${c.n})</option>`).join('')}</select>
+    </div>
+    <p class="muted" id="famCount" style="margin:0 0 10px;font-size:14px"></p>
+    <div class="cards fam-grid" id="suggList">${suggHtml(0)}</div>`;
+}
+let famT=null;
+async function famSearch(){
+  try{ const d=await api('GET',`/suggestions?q=${encodeURIComponent(S.famQ||'')}&cat=${encodeURIComponent(S.famCat||'')}`);
+    S.suggView=d.items; S.suggCats=d.cats; drawSuggestions();
+    const c=$('#famCount'); if(c) c.textContent=`${d.items.length} ${d.items.length===1?'receta':'recetas'}`; }catch{}
+}
+function afterFamous(){
+  const q=$('#famQ'), c=$('#famCat');
+  q.oninput=()=>{ S.famQ=q.value; clearTimeout(famT); famT=setTimeout(famSearch,250); };
+  c.onchange=()=>{ S.famCat=c.value; famSearch(); };
+  famSearch();
 }
 async function addSuggestion(id){
   folderPicker('Guardar en…', async fid=>{
@@ -730,28 +758,32 @@ function aiChatModal({folderId, seed}={}){
     <div class="aichat" id="aichat"></div>
     <div id="aiprev"></div>
     <form id="aiform" class="aiform">
-      <textarea id="aiin" class="inp" rows="2" aria-label="Mensaje"></textarea>
-      <button class="btn pri" id="aigo"></button>
+      <textarea id="aiin" class="inp" rows="3" aria-label="Mensaje"></textarea>
+      <div class="row" style="justify-content:flex-end"><button class="btn" id="aigo"></button></div>
     </form>
-    <div id="aierr"></div>`,{wide:true});
+    <div id="aierr"></div>
+    <div id="aiapprove"></div>`,{wide:true});
   const log=$('#aichat',m), prev=$('#aiprev',m), inp=$('#aiin',m), go=$('#aigo',m);
   const drawLog=()=>{
     log.innerHTML = (st.msgs.length?'':`<p class="muted" style="margin:0">Dile a ${esc(aiName())} qué te apetece y te propone una receta. Luego puedes pedirle cambios hasta que te guste.</p>`)
       + st.msgs.map(x=>`<div class="aimsg ${x.role}">${fmt(x.text)}</div>`).join('')
       + (st.busy?`<div class="aimsg assistant"><span class="spin"></span> Pensando…</div>`:'');
     log.scrollTop=log.scrollHeight;
-    inp.placeholder = st.recipe ? '¿Quieres cambiar algo? Ej.: sin lactosa, para 6 personas, más picante' : 'Ej.: una lasaña de verduras para 4, fácil';
+    inp.placeholder = st.recipe ? '¿Quieres cambiar algo? Por ejemplo: sin lactosa, para 6, más picante' : 'Por ejemplo: una lasaña de verduras para 4, fácil';
     go.innerHTML = `${ico('send')}${st.recipe?'Pedir cambios':'Pedir receta'}`;
     go.disabled = st.busy;
   };
   const drawPrev=()=>{
-    if(!st.recipe){ prev.innerHTML=''; return; }
-    prev.innerHTML = recipePreview(st.recipe) + `<div class="approve">
-      <label for="aifold" class="muted" style="font-size:14px">Guardar en</label>
-      <select id="aifold" class="inp" style="width:auto;min-width:160px">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin recetario</option></select>
-      <span style="flex:1"></span>
-      <button type="button" class="btn" id="aiedit">${ico('edit')}Retocar a mano</button>
-      <button type="button" class="btn pri" id="aiok">${ico('save')}Aprobar</button>
+    const ap=$('#aiapprove',m);
+    if(!st.recipe){ prev.innerHTML=''; ap.innerHTML=''; return; }
+    prev.innerHTML = recipePreview(st.recipe);
+    ap.innerHTML = `<div class="approve">
+      <div class="field"><label for="aifold">Guardar en</label>
+        <select id="aifold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin recetario</option></select></div>
+      <div class="approve-btns">
+        <button type="button" class="btn" id="aiedit">${ico('edit')}Retocar a mano</button>
+        <button type="button" class="btn pri" id="aiok">${ico('save')}Aprobar</button>
+      </div>
     </div>`;
     $('#aifold',m).onchange=e=>{folderId=e.target.value};
     $('#aiedit',m).onclick=()=>{ const r=st.recipe; closeModal(); editorModal({...r, folderId:$('#aifold',m)?.value||folderId}); };
@@ -1636,3 +1668,17 @@ boot();
 document.addEventListener('touchmove',e=>{ if(e.touches && e.touches.length>1) e.preventDefault(); },{passive:false});
 document.addEventListener('wheel',e=>{ if(e.ctrlKey) e.preventDefault(); },{passive:false});
 document.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey) && ['+','-','=','0'].includes(e.key)) e.preventDefault(); });
+
+/* Contraseñas: botón con ojo para verla u ocultarla */
+const EYE='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>';
+const EYE_OFF='<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3l18 18M10.6 5.1A10.6 10.6 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>';
+function enhancePasswords(root=document){
+  root.querySelectorAll('input[type=password]:not([data-pw])').forEach(inp=>{
+    inp.dataset.pw='1';
+    const wrap=document.createElement('span'); wrap.className='pw'; inp.parentNode.insertBefore(wrap,inp); wrap.append(inp);
+    const b=document.createElement('button'); b.type='button'; b.className='pw-eye'; b.setAttribute('aria-label','Mostrar contraseña'); b.innerHTML=EYE;
+    b.onclick=()=>{ const show=inp.type==='password'; inp.type=show?'text':'password'; b.innerHTML=show?EYE_OFF:EYE; b.setAttribute('aria-label',show?'Ocultar contraseña':'Mostrar contraseña'); inp.focus(); };
+    wrap.append(b);
+  });
+}
+new MutationObserver(()=>enhancePasswords()).observe(document.body,{childList:true,subtree:true});

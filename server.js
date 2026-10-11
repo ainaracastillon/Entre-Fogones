@@ -68,6 +68,10 @@ async function migrate() {
     id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, author TEXT, image TEXT, position INT NOT NULL DEFAULT 0, hidden BOOLEAN, tries INT, created BIGINT NOT NULL);
   CREATE TABLE IF NOT EXISTS ai_usage(day TEXT PRIMARY KEY, n INT NOT NULL DEFAULT 0);
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS data JSONB;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS category TEXT;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img BYTEA;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_type TEXT;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_tries INT;
   CREATE TABLE IF NOT EXISTS notices(
     id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
     popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
@@ -870,28 +874,90 @@ async function processSuggestions() {
         const r = await safeFetch(s.url); const html = await r.text();
         const ld = parseJsonLd(html);
         if (!ld || !ld.ingredients.length || !ld.steps.length) { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]); continue; }
-        ld.image = ld.image || metaTag(html, 'og:image') || '';
+        ld.image = '';
         const rec = await rewriteRecipe(ld);
         const data = cleanRecipe({ ...rec, source: '' });
-        await q('UPDATE suggestions SET data=$1, title=$2, image=$3 WHERE id=$4', [data, data.title, data.image || null, s.id]);
+        await q('UPDATE suggestions SET data=$1, title=$2, image=NULL WHERE id=$3', [{ ...data, image: '' }, data.title, s.id]);
       } catch { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]).catch(() => {}); }
       await sleep(PROVIDER ? 2500 : 800);
     }
   } finally { suggBusy = false; }
+  processSuggestionArt().catch(e => console.error('art', e.message));
 }
+/* Tipos de receta para buscar entre las recetas famosas */
+const SUGG_CATS = ['Postres', 'Pasta', 'Carne', 'Pescado y marisco', 'Arroces', 'Verduras', 'Ensaladas', 'Sopas y cremas', 'Legumbres', 'Huevos', 'Panes y masas', 'Aperitivos', 'Bebidas', 'Salsas'];
+async function categorize(rows) {
+  if (!PROVIDER || !rows.length) return {};
+  countAi();
+  const out = parseJson(await llm({ maxTokens: 1500, messages: [{ role: 'user', text: `Clasifica cada receta en UNO de estos tipos: ${SUGG_CATS.join(', ')}.
+Devuelve SOLO un objeto JSON {"tipos": {"<id>": "<tipo>"}}.
+${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
+  const m = (out && out.tipos) || {}; const res = {};
+  for (const [id, t] of Object.entries(m)) { const c = SUGG_CATS.find(x => x.toLowerCase() === String(t).toLowerCase()); if (c) res[id] = c; }
+  return res;
+}
+/* Foto generada con IA (gratis, Pollinations) para no usar fotos de otras personas */
+async function aiImage(title) {
+  const prompt = `appetizing homemade food photography of ${title}, spanish home cooking, natural window light, rustic wooden table, shallow depth of field, no text, no people`;
+  const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=640&height=480&nologo=true&seed=${Math.floor(Math.random() * 1e6)}`;
+  const r = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  if (!r.ok) throw new Error('img ' + r.status);
+  const type = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
+  if (!/^image\//.test(type)) throw new Error('img type ' + type);
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length < 5000 || buf.length > 2e6) throw new Error('img size ' + buf.length);
+  return { buf, type };
+}
+let artBusy = false;
+async function processSuggestionArt() {
+  if (artBusy) return; artBusy = true;
+  try {
+    // tipos que falten, de 20 en 20
+    for (let k = 0; k < 10; k++) {
+      const rows = (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND category IS NULL LIMIT 20")).rows;
+      if (!rows.length || !PROVIDER) break;
+      const cats = await categorize(rows.map(r => ({ id: r.id, title: r.data.title, ingredients: r.data.ingredients })));
+      for (const r of rows) await q('UPDATE suggestions SET category=$1 WHERE id=$2', [cats[r.id] || 'Otros', r.id]);
+      await sleep(2500);
+    }
+    // fotos generadas que falten
+    const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;
+    for (const s of rows) {
+      try { const { buf, type } = await aiImage(s.title); await q('UPDATE suggestions SET img=$1, img_type=$2 WHERE id=$3', [buf, type, s.id]); }
+      catch (e) { console.error('foto', s.title, e.message); await q('UPDATE suggestions SET img_tries=coalesce(img_tries,0)+1 WHERE id=$1', [s.id]); }
+      await sleep(4000);
+    }
+  } finally { artBusy = false; }
+}
+app.get('/img/s/:id', async (req, res) => {
+  try {
+    const r = (await q('SELECT img, img_type FROM suggestions WHERE id=$1 AND img IS NOT NULL', [req.params.id])).rows[0];
+    if (!r) return res.status(404).end();
+    res.setHeader('Content-Type', r.img_type || 'image/jpeg'); res.setHeader('Cache-Control', 'public, max-age=604800');
+    res.end(r.img);
+  } catch { res.status(500).end(); }
+});
+const suggImg = s => s.has_img ? `/img/s/${s.id}` : null;
 api.get('/suggestions', async (req, res, next) => {
   try {
-    const rows = (await q("SELECT id,title,image,data->>'time' t FROM suggestions WHERE data IS NOT NULL AND hidden IS NOT TRUE ORDER BY position, created")).rows;
-    res.json(rows.map(x => ({ id: x.id, title: x.title, image: x.image, time: x.t || '' })));
+    const term = String(req.query.q || '').trim().toLowerCase().slice(0, 60);
+    const cat = String(req.query.cat || '').slice(0, 40);
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 200));
+    const rows = (await q(`SELECT id,title,category,data->>'time' t,(img IS NOT NULL) has_img FROM suggestions
+      WHERE data IS NOT NULL AND hidden IS NOT TRUE AND ($1='' OR lower(title) LIKE '%'||$1||'%' OR lower(data::text) LIKE '%'||$1||'%') AND ($2='' OR category=$2)
+      ORDER BY position, created LIMIT $3`, [term, cat, limit])).rows;
+    const cats = (await q("SELECT category, count(*)::int n FROM suggestions WHERE data IS NOT NULL AND hidden IS NOT TRUE AND category IS NOT NULL GROUP BY 1 ORDER BY 2 DESC")).rows;
+    res.json({ items: rows.map(x => ({ id: x.id, title: x.title, image: suggImg(x), time: x.t || '', category: x.category })), cats });
   } catch (e) { next(e); }
 });
 api.get('/suggestions/:id', async (req, res, next) => {
   try {
-    const r = (await q('SELECT id,data FROM suggestions WHERE id=$1 AND data IS NOT NULL AND hidden IS NOT TRUE', [req.params.id])).rows[0];
+    const r = (await q('SELECT id,data,(img IS NOT NULL) has_img FROM suggestions WHERE id=$1 AND data IS NOT NULL AND hidden IS NOT TRUE', [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: 'Esta receta ya no está disponible.' });
-    res.json({ ...r.data, id: 'sg' + r.id.slice(0, 30), suggId: r.id, source: '' });
+    res.json({ ...r.data, image: suggImg(r) || '', id: 'sg' + r.id.slice(0, 30), suggId: r.id, source: '' });
   } catch (e) { next(e); }
 });
+
 
 
 /* ---------- Alérgenos: la IA mira si la receta tiene algo que el usuario no puede tomar ---------- */
@@ -1019,7 +1085,7 @@ adm.delete('/contact/:id', async (req, res, next) => {
   try { await q('DELETE FROM contact_messages WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
 });
 adm.get('/suggestions', async (req, res, next) => {
-  try { res.json((await q('SELECT id,title,url,author,image,hidden,position,(data IS NOT NULL) lista, coalesce(tries,0) tries FROM suggestions ORDER BY (data IS NOT NULL) DESC, position, created')).rows); } catch (e) { next(e); }
+  try { res.json((await q('SELECT id,title,url,hidden,position,category,(data IS NOT NULL) lista, coalesce(tries,0) tries,(img IS NOT NULL) has_img FROM suggestions ORDER BY (data IS NOT NULL) DESC, position, created')).rows.map(x => ({ ...x, image: suggImg(x) }))); } catch (e) { next(e); }
 });
 adm.post('/suggestions', async (req, res, next) => {
   try {
