@@ -2062,7 +2062,7 @@ function bindAdmBulk(){
       }catch(err){ li.innerHTML=stopped?`${ico('x')} ${esc(j.l)} — cancelado`:`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
       done++;
     }
-    if(stopped){ jobs.slice(done+1).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); }); }
+    if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); }); }
     stop.hidden=true; stop.disabled=false; prog.textContent=stopped?'Subida cancelada':'';
     b.disabled=false; toast(`${stopped?'Cancelado. ':''}${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null;
   };
