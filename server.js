@@ -176,7 +176,7 @@ function cleanRecipe(b) {
     title: s(b.title, 160) || 'Sin título', image, servings: s(b.servings, 20), time: s(b.time, 40), difficulty: s(b.difficulty, 20),
     ingredients: arr(b.ingredients, 120, 300), steps: arr(b.steps, 80, 2000), notes: s(b.notes, 2000),
     source: /^https?:\/\//.test(b.source || '') ? s(b.source, 600) : '', fromUid: b.fromUid ? s(b.fromUid, 60) : null, fromSugg: b.fromSugg ? s(b.fromSugg, 60) : null,
-    public: !!b.public, credit: s(b.credit, 120),
+    public: !!b.public, credit: s(b.credit, 120), category: s(b.category, 40),
     ...(nu && Object.keys(nu).length ? { nutrition: { ...nu, sig: s(b.nutrition.sig, 64) } } : {})
   };
 }
@@ -451,7 +451,7 @@ api.delete('/recipes/:id', async (req, res, next) => {
 const recipeQueue = new Set(); let recipeBusy = false, imgPauseUntil = 0;
 async function backfillRecipes() {
   try {
-    const rows = (await q("SELECT id FROM recipes WHERE coalesce(data->>'image','')='' OR (data->'nutrition') IS NULL ORDER BY updated DESC LIMIT 300")).rows;
+    const rows = (await q("SELECT id FROM recipes WHERE coalesce(data->>'image','')='' OR (data->'nutrition'->>'grams') IS NULL OR coalesce(data->>'category','')='' ORDER BY updated DESC LIMIT 500")).rows;
     rows.forEach(r => recipeQueue.add(r.id)); runRecipeQueue();
   } catch (e) { console.error('backfill', e.message); }
 }
@@ -474,7 +474,10 @@ async function runRecipeQueue() {
       if (PROVIDER && (d.ingredients || []).length && (!d.nutrition || d.nutrition.sig !== nutriSig(d))) {
         try { const n = await aiNutrition(d); if (n) { d.nutrition = { ...n, sig: nutriSig(d) }; changed = true; } } catch (e) { console.error('nutricion', e.message); }
       }
-      if (changed) await q("UPDATE recipes SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ image: d.image, ...(d.nutrition ? { nutrition: d.nutrition } : {}) }), id]);
+      if (PROVIDER && !d.category && d.title) {
+        try { const c = await categorize([{ id, title: d.title, ingredients: d.ingredients }]); if (c[id]) { d.category = c[id]; changed = true; } } catch (e) { console.error('tipo receta', e.message); }
+      }
+      if (changed) await q("UPDATE recipes SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ image: d.image, ...(d.nutrition ? { nutrition: d.nutrition } : {}), ...(d.category ? { category: d.category } : {}) }), id]);
       await sleep(1500);
     }
   } finally { recipeBusy = false; }
@@ -1292,7 +1295,19 @@ async function aiImage(title, extra = '') {
   if (buf.length < 5000 || buf.length > 2e6) throw new Error('img size ' + buf.length);
   return { buf, type };
 }
-let artBusy = false;
+let artBusy = false, nutriBusy = false;
+// Tabla nutricional de todas las recomendadas: si la IA está ocupada, espera un minuto y sigue
+async function suggNutrition() {
+  if (nutriBusy || !PROVIDER) return; nutriBusy = true;
+  try {
+    for (let fails = 0; fails < 15;) {
+      const r = (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND coalesce(data->'nutrition'->>'sig','') <> 'v2' ORDER BY position LIMIT 1")).rows[0];
+      if (!r) break;
+      try { const n = await aiNutrition(r.data); if (n && n.grams) await q("UPDATE suggestions SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ nutrition: { ...n, sig: 'v2' } }), r.id]); else fails++; await sleep(2500); }
+      catch (e) { fails++; console.error('nutricion sugerencia', e.message); await sleep(65000); }
+    }
+  } finally { nutriBusy = false; }
+}
 async function processSuggestionArt() {
   if (artBusy) return; artBusy = true;
   try {
@@ -1341,12 +1356,7 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).j
       } catch (e) { console.error('tipos', e.message); break; }
       await sleep(3000);
     }
-    // tabla nutricional de las recomendadas
-    if (PROVIDER) for (const r of (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND coalesce(data->'nutrition'->>'sig','') <> 'v2' ORDER BY position LIMIT 200")).rows) {
-      try { const n = await aiNutrition(r.data); if (n) await q("UPDATE suggestions SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ nutrition: { ...n, sig: 'v2' } }), r.id]); }
-      catch (e) { console.error('nutricion sugerencia', e.message); if (e.status === 429) break; }
-      await sleep(2500);
-    }
+    suggNutrition().catch(() => {});
     // fotos generadas que falten
     const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;
     for (const s of rows) {
@@ -1503,13 +1513,15 @@ function NUTRI_PDF(doc, n) {
   const per = n.grams ? 100 / n.grams : null;
   const f = (v, u) => v == null ? '–' : (Math.round(v * 10) / 10).toLocaleString('es-ES') + u;
   const rows = [['Energía', 'kcal', ' kcal'], ['Hidratos de carbono', 'carbs', ' g'], ['   de los cuales azúcares', 'sugars', ' g'], ['Grasas', 'fat', ' g'], ['   de las cuales saturadas', 'satfat', ' g'], ['Proteínas', 'protein', ' g'], ['Fibra', 'fiber', ' g'], ['Sal', 'salt', ' g']];
-  let y = doc.y + 6; const c1 = x0 + w - 230, c2 = x0 + w - 110;
-  doc.font('Times-Italic').fontSize(10).fillColor(PARCH.muted).text(`Por ración${n.grams ? ` (${Math.round(n.grams)} g)` : ''}`, c1, y, { width: 110, align: 'right' }).text('Por 100 g', c2, y, { width: 110, align: 'right' });
+  let y = doc.y + 6; const c1 = x0 + w - 270, c2 = x0 + w - 180, c3 = x0 + w - 90;
+  doc.font('Times-Italic').fontSize(10).fillColor(PARCH.muted).text(`Ración${n.grams ? ` (${Math.round(n.grams)} g)` : ''}`, c1, y, { width: 90, align: 'right' }).text('Por 100 g', c2, y, { width: 90, align: 'right' }).text('Plato 250 g', c3, y, { width: 90, align: 'right' });
   y += 16;
   for (const [label, k, u] of rows) {
-    doc.font(label.startsWith(' ') ? 'Times-Italic' : 'Times-Roman').fontSize(11).fillColor(PARCH.ink).text(label, x0 + 6, y, { width: 260 });
-    doc.text(f(k === 'kcal' ? Math.round(n.kcal) : n[k], u), c1, y, { width: 110, align: 'right' });
-    doc.text(per ? f(k === 'kcal' ? Math.round(n.kcal * per) : (n[k] == null ? null : n[k] * per), u) : '–', c2, y, { width: 110, align: 'right' });
+    doc.font(label.startsWith(' ') ? 'Times-Italic' : 'Times-Roman').fontSize(11).fillColor(PARCH.ink).text(label, x0 + 6, y, { width: 200 });
+    const val = m => k === 'kcal' ? Math.round(n.kcal * m) : (n[k] == null ? null : n[k] * m);
+    doc.text(f(val(1), u), c1, y, { width: 90, align: 'right' });
+    doc.text(per ? f(val(per), u) : '–', c2, y, { width: 90, align: 'right' });
+    doc.text(per ? f(val(per * 2.5), u) : '–', c3, y, { width: 90, align: 'right' });
     y += 16; doc.save().lineWidth(0.4).strokeColor(PARCH.line).moveTo(x0, y - 3).lineTo(x0 + w, y - 3).stroke().restore();
   }
   doc.y = y + 4; doc.x = x0;
@@ -1874,5 +1886,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setInterval(backfillRecipes, 3 * 3600e3); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setTimeout(() => suggNutrition().catch(() => {}), 40000); setInterval(backfillRecipes, 3 * 3600e3); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });

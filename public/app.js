@@ -453,13 +453,13 @@ function viewLibrary(){
   </div>
   <div class="fam-tools lib-search">
     <input id="libQ" class="inp" type="search" placeholder="Buscar en tus recetas: nombre o ingrediente" value="${esc(S.libQ||'')}" aria-label="Buscar en tus recetas">
-    <select id="libF" class="inp" aria-label="Recetario"><option value="">Todos los recetarios (${S.recipes.length})</option>${S.folders.map(f=>`<option value="${esc(f.id)}" ${S.libF===f.id?'selected':''}>${esc(f.name)} (${S.recipes.filter(r=>r.folderId===f.id).length})</option>`).join('')}${none.length?`<option value="none" ${S.libF==='none'?'selected':''}>Sin recetario (${none.length})</option>`:''}</select>
+    <select id="libF" class="inp" aria-label="Tipo de receta">${libTypeOptions()}</select>
   </div>
   <section class="lib-res" id="libRes">${libResultsHtml()}</section>
   <div class="shelf-wrap"><div class="shelves">${books}</div></div>
   <section class="recent">
     <h2>Últimas recetas</h2>
-    ${recent.length?`<div class="cards">${recent.map(cardHtml).join('')}</div>`:
+    ${recent.length?`<div class="cards fam-grid">${recent.map(libCard).join('')}</div>`:
       `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina o de un vídeo, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
   </section>
   <section class="recent sugg">
@@ -474,18 +474,30 @@ function viewLibrary(){
   </section>`;
 }
 /* Buscador de la biblioteca */
+/* Tipos de receta, como en las recomendadas: Postres (26), Huevos (18)… */
+function libTypeOptions(){
+  const counts={}; S.recipes.forEach(r=>{ if(r.category) counts[r.category]=(counts[r.category]||0)+1; });
+  const cats=Object.entries(counts).sort((a,b)=>b[1]-a[1]);
+  return `<option value="">Todos los tipos</option>${cats.map(([c,n])=>`<option value="${esc(c)}" ${S.libF===c?'selected':''}>${esc(c)} (${n})</option>`).join('')}`;
+}
+function libCard(r){
+  return `<div class="rcard sg"><button class="sg-open" data-act="openRecipe" data-id="${esc(r.id)}">
+    <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+    <span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([r.category,r.time].filter(Boolean).join(' · ')||S.folders.find(f=>f.id===r.folderId)?.name||'')}</span></span></button>
+    <button class="btn sm tbtn" data-act="shareRecipe" data-id="${esc(r.id)}" aria-label="Compartir" title="Compartir">${ico('share')}<span class="lbl">Compartir</span></button></div>`;
+}
 function libResultsHtml(){
   const q=(S.libQ||'').trim().toLowerCase(), f=S.libF||'';
   if(!q && !f) return '';
   const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
   const nq=norm(q);
   const list=S.recipes.filter(r=>{
-    if(f==='none' ? (r.folderId && S.folders.some(x=>x.id===r.folderId)) : (f && r.folderId!==f)) return false;
+    if(f && r.category!==f) return false;
     if(!nq) return true;
     return norm(r.title).includes(nq) || (r.ingredients||[]).some(i=>norm(i).includes(nq)) || norm(r.notes).includes(nq);
   }).sort(byTitle);
-  return `<div class="lr-h"><h2>${list.length} ${list.length===1?'receta':'recetas'}</h2><button class="btn ghost sm" data-act="libClear">${ico('x')}Quitar búsqueda</button></div>
-    ${list.length?`<div class="cards">${list.slice(0,60).map(cardHtml).join('')}</div>`:'<p class="muted" style="margin:0">No tienes recetas con esa búsqueda.</p>'}`;
+  return `<div class="lr-h"><p class="muted" style="margin:0;font-size:14px">${list.length} ${list.length===1?'receta':'recetas'}</p><button class="btn ghost sm" data-act="libClear">${ico('x')}Quitar búsqueda</button></div>
+    ${list.length?`<div class="cards fam-grid">${list.slice(0,60).map(libCard).join('')}</div>`:'<p class="muted" style="margin:0">No tienes recetas con esa búsqueda.</p>'}`;
 }
 let libT=null;
 function bindLibSearch(){
@@ -655,6 +667,7 @@ function belowHtml(){
   const f=scaleOf(r);
   const from = r.fromUid && r.fromUid!==S.uid && S.profiles[r.fromUid] ? `<p class="src">Compartida por ${esc(pname(r.fromUid))}</p>`:'';
   return `<article class="recipe-read">
+    ${r.image?`<div class="rr-img"><img src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>`:''}
     <header><h2>${esc(r.title||'Sin título')}</h2>
       <div class="meta">${servSelect(r)}${r.time?`<span>${ico('clock')}${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div></header>
     <div class="rr-cols">
@@ -669,13 +682,13 @@ function belowHtml(){
 function nutritionHtml(r){
   const n=r.nutrition;
   if(!n||!n.kcal) return (S.recipes.some(x=>x.id===r.id) && S.ai) ? `<section class="nutri"><h3>Información nutricional</h3><p class="muted" style="margin:0">Calculándola… aparecerá en unos segundos.</p></section>` : '';
-  const per=n.grams?100/n.grams:null;
-  const g=(v,u=' g')=>v==null?'—':fmtNum(Math.round(v*10)/10)+u;
-  const rows=[['Energía','kcal',1],['Hidratos de carbono','carbs',1],['de los cuales azúcares','sugars',0],['Grasas','fat',1],['de las cuales saturadas','satfat',0],['Proteínas','protein',1],['Fibra','fiber',1],['Sal','salt',1]];
+  const per=n.grams?100/n.grams:null, plate=n.grams?250/n.grams:null;
+  const g=(v,u=' g')=>v==null?'—':(Math.round(v*10)/10).toLocaleString('es-ES')+u;
+  const rows=[['Energía','kcal',1],['Hidratos de carbono','carbs',1],['Azúcares','sugars',0],['Grasas','fat',1],['Saturadas','satfat',0],['Proteínas','protein',1],['Fibra','fiber',1],['Sal','salt',1]];
   const cell=(k,f)=>k==='kcal'?`${Math.round(n.kcal*f)} kcal`:g(n[k]==null?null:n[k]*f);
   return `<section class="nutri"><h3>Información nutricional <small class="muted">aproximada</small></h3>
-    <table class="nutri-t"><thead><tr><th></th><th>Por ración${n.grams?`<small> (${Math.round(n.grams)} g)</small>`:''}</th>${per?'<th>Por 100 g</th>':''}</tr></thead>
-    <tbody>${rows.map(([a,k,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${cell(k,1)}</td>${per?`<td>${cell(k,per)}</td>`:''}</tr>`).join('')}</tbody></table></section>`;
+    <div class="nutri-w"><table class="nutri-t"><thead><tr><th></th><th>Ración${n.grams?`<small>${Math.round(n.grams)} g</small>`:''}</th>${per?'<th>Por<small>100 g</small></th><th>Plato<small>250 g</small></th>':''}</tr></thead>
+    <tbody>${rows.map(([a,k,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${cell(k,1)}</td>${per?`<td>${cell(k,per)}</td><td>${cell(k,plate)}</td>`:''}</tr>`).join('')}</tbody></table></div></section>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
@@ -696,7 +709,7 @@ function pageHtml(p,num){
   if(p.k==='rl'){
     return wrap(`<h2>${esc(r.title||'Sin título')}</h2>
       <div class="meta">${(()=>{ const n=parseInt(r.servings)?(S.scale[r.id]||parseInt(r.servings)):0; return n?`<span>${n} ${n===1?'ración':'raciones'}</span>`:(r.servings?`<span>${esc(r.servings)}</span>`:''); })()}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
-      ${r.image?`<div class="pimgw" style="--pimg:url('${esc(r.image).replace(/'/g,'%27')}')"><img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.parentNode.remove();fitPages()"></div>`:''}
+      ${r.image?`<figure class="pimgw"><img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.parentNode.remove();fitPages()"></figure>`:''}
       <h3>Ingredientes</h3>
       ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}`);
   }
@@ -1074,7 +1087,8 @@ function colorField(id, value, presets, more){
   return `<div class="cfield" id="${id}" data-value="${esc(value)}">
     <div class="swatches">${presets.map(([c,n])=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="${esc(n)}"></button>`).join('')}
       <button type="button" class="sw wheelbtn" aria-label="Elegir otro color con la ruleta" aria-expanded="false"></button></div>
-    ${more?`<select class="inp cmore" aria-label="Más colores"><option value="">Más colores…</option>${more.map(([c,n])=>`<option value="${c}">● ${esc(n)}</option>`).join('')}</select>`:''}
+    ${more?`<div class="cmore-w"><button type="button" class="btn sm cmore-btn" aria-expanded="false" aria-haspopup="listbox"><span class="cm-dot"></span><span class="cm-name">Más colores</span>${ico('down')}</button>
+      <div class="cmore-list" role="listbox" hidden>${more.map(([c,n])=>`<button type="button" role="option" class="cm-opt" data-mc="${c}"><span class="cm-dot" style="background:${c}"></span>${esc(n)}</button>`).join('')}</div></div>`:''}
     <div class="wheelbox" hidden>
       <div class="wheel"><canvas width="360" height="360" aria-label="Ruleta de color"></canvas><span class="knob"></span></div>
       <div class="wheelside">
@@ -1097,9 +1111,13 @@ function initColorField(root, id, onChange){
   const sync=from=>{ const c=rgbToHex(...hsvToRgb(h,s,v)); el.dataset.value=c; prev.style.background=c; if(from!=='hex') hex.value=c; sl.value=Math.round(v*100);
     const a=h*Math.PI/180; knob.style.left=(50+Math.cos(a)*s*50)+'%'; knob.style.top=(50+Math.sin(a)*s*50)+'%'; knob.style.background=c;
     let preset=false; el.querySelectorAll('.sw[data-c]').forEach(b=>{ const on=b.dataset.c.toUpperCase()===c; preset=preset||on; b.setAttribute('aria-pressed',on); });
-    const cm=el.querySelector('.cmore'); if(cm){ const o=[...cm.options].find(x=>x.value.toUpperCase()===c); cm.value=o?o.value:''; cm.style.borderLeft=`14px solid ${c}`; if(o) preset=true; }
+    const cmb=el.querySelector('.cmore-btn'); if(cmb){ const o=[...el.querySelectorAll('.cm-opt')].find(x=>x.dataset.mc.toUpperCase()===c);
+      el.querySelectorAll('.cm-opt').forEach(x=>x.setAttribute('aria-selected',String(x===o)));
+      cmb.querySelector('.cm-dot').style.background=o?c:''; cmb.querySelector('.cm-name').textContent=o?o.textContent.trim():'Más colores'; cmb.classList.toggle('on',!!o); if(o) preset=true; }
     wb.setAttribute('aria-pressed',!preset); onChange?.(c); };
-  const cmore=el.querySelector('.cmore'); if(cmore) cmore.onchange=()=>{ if(!cmore.value) return; [h,s,v]=rgbToHsv(...hexToRgb(cmore.value)); if(!box.hidden) draw(); sync(); };
+  const cmb=el.querySelector('.cmore-btn'), cml=el.querySelector('.cmore-list');
+  if(cmb){ cmb.onclick=()=>{ cml.hidden=!cml.hidden; cmb.setAttribute('aria-expanded',String(!cml.hidden)); };
+    cml.onclick=e=>{ const o=e.target.closest('[data-mc]'); if(!o) return; [h,s,v]=rgbToHsv(...hexToRgb(o.dataset.mc)); if(!box.hidden) draw(); sync(); cml.hidden=true; cmb.setAttribute('aria-expanded','false'); }; }
   el.querySelectorAll('.sw[data-c]').forEach(b=>b.onclick=()=>{ [h,s,v]=rgbToHsv(...hexToRgb(b.dataset.c)); if(!box.hidden) draw(); sync(); });
   wb.onclick=()=>{ box.hidden=!box.hidden; wb.setAttribute('aria-expanded',!box.hidden); if(!box.hidden){ if(v<.75) v=.85; draw(); sync(); } };
   const pick=e=>{ const r=cv.getBoundingClientRect(); const x=(e.clientX-r.left)/r.width*2-1, y=(e.clientY-r.top)/r.height*2-1;
@@ -2206,15 +2224,17 @@ const MEALS=[['desayuno','Desayuno','☕'],['comida','Comida','🍲'],['cena','C
 function menuHtml(m){
   const today=(new Date().getDay()+6)%7;
   const mon=new Date(); mon.setDate(mon.getDate()-today);
-  const cell=x=>{ if(!x||!x.name) return '<span class="muted">—</span>';
+  const cell=(x,k,l)=>{ const lab=`<span class="pl-lab">${l}</span>`; if(!x||!x.name) return `<div class="pl-cell">${lab}<span class="muted">—</span></div>`;
     const [t,id]=String(x.ref||'').split(':');
-    return x.ref?`<button class="mdish" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}"><span>${esc(x.name)}</span>${ico('book')}</button>`
-      :`<button class="mdish free" data-act="menuAsk" data-n="${esc(x.name)}" title="Pedir la receta a la IA"><span>${esc(x.name)}</span>${ico('sparkle')}</button>`; };
-  const day=(d,i)=>{ const dt=new Date(mon); dt.setDate(mon.getDate()+i);
-    return `<section class="wk-day ${i===today?'today':''}"><header><span class="wk-dn">${esc(d.day)}</span><span class="wk-dd">${dt.getDate()}</span>${i===today?'<span class="wk-today">Hoy</span>':''}</header>
-      ${MEALS.map(([k,l,e])=>`<div class="wk-meal m-${k}"><span class="wk-ml"><span aria-hidden="true">${e}</span>${l}</span>${cell(d[k])}</div>`).join('')}</section>`; };
-  return `<div class="wk">${m.days.map(day).join('')}</div>
-    <p class="muted wk-leg">${ico('book')} receta de tus recetarios o de las recomendadas · ${ico('sparkle')} pídesela a la IA</p>`;
+    const inner=`${lab}<span class="pl-dish">${esc(x.name)}</span><span class="pl-tag">${x.ref?ico('book')+'Receta':ico('sparkle')+'Pedir a la IA'}</span>`;
+    return x.ref?`<button class="pl-cell pl-${k}" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}">${inner}</button>`
+      :`<button class="pl-cell pl-${k} free" data-act="menuAsk" data-n="${esc(x.name)}">${inner}</button>`; };
+  return `<div class="plan">
+    <div class="pl-head"><span></span>${MEALS.map(([k,l,e])=>`<span class="pl-h pl-${k}"><span aria-hidden="true">${e}</span>${l}</span>`).join('')}</div>
+    ${m.days.map((d,i)=>{ const dt=new Date(mon); dt.setDate(mon.getDate()+i);
+      return `<div class="pl-row ${i===today?'today':''}"><div class="pl-day"><span class="pl-dn">${esc(d.day)}</span><span class="pl-dd">${dt.getDate()} ${dt.toLocaleDateString('es-ES',{month:'short'}).replace('.','')}</span>${i===today?'<span class="pl-today">Hoy</span>':''}</div>
+        ${MEALS.map(([k,l])=>cell(d[k],k,l)).join('')}</div>`; }).join('')}
+  </div>`;
 }
 async function afterMenu(force){
   const box=$('#menuBox'); if(!box) return;
@@ -2256,7 +2276,7 @@ const EQ_LIQ=[ // recipiente, mililitros
   ['Cucharadita',5],['Cucharada de postre',10],['Cucharada sopera',15],['Chorrito',15],['Chupito',40],['Taza de café',100],['Vaso de vino',100],
   ['Copa',150],['Vaso de agua',200],['Taza de desayuno',250],['Taza americana (cup)',240],['Tazón',350],['Lata de refresco',330],['Litro',1000]
 ];
-const EQ_DENS=[['Agua, leche o caldo',1],['Nata',1],['Zumo',1.04],['Vino',0.99],['Aceite',0.92],['Miel',1.42]];
+const EQ_DENS=[['Agua',1],['Leche',1.03],['Caldo',1],['Nata',1],['Zumo',1.04],['Vino',0.99],['Cerveza',1.01],['Aceite de oliva',0.92],['Aceite de girasol',0.92],['Vinagre',1.01],['Salsa de soja',1.15],['Miel',1.42],['Sirope o jarabe',1.33],['Leche condensada',1.3],['Yogur líquido',1.05],['Licor',0.95]];
 const EQ_PIECES=[['Huevo pequeño (S) sin cáscara','43 g'],['Huevo mediano (M) sin cáscara','53 g'],['Huevo grande (L) sin cáscara','63 g'],['Huevo extragrande (XL) sin cáscara','73 g'],
   ['Yema de huevo','18 g'],['Clara de huevo','33 g'],['Diente de ajo','5 g'],['Cebolla mediana','150 g'],['Patata mediana','200 g'],['Tomate mediano','150 g'],
   ['Zanahoria mediana','80 g'],['Pimiento rojo mediano','200 g'],['Zumo de un limón','40 ml'],['Zumo de una naranja','80 ml'],['Ralladura de un limón','1 cucharadita (3 g)'],
@@ -2277,7 +2297,8 @@ function viewEquiv(){
   <p class="muted eq-intro">Los <b>sólidos</b> se miden en gramos y los <b>líquidos</b> en mililitros. Las cantidades son aproximadas, tal como se mide en casa: cucharada sopera = 15 ml, cucharadita = 5 ml, vaso de agua = 200 ml y taza de desayuno = 250 ml.</p>
   <section class="card eq-card"><h2>${ico('scale')}Calculadora</h2>
     <div class="eq-calc">
-      <div class="field"><label for="eqI">Ingrediente</label><select id="eqI" class="inp"><optgroup label="Sólidos">${EQ_SOLID.map((e,i)=>`<option value="s${i}">${esc(e[0])}</option>`).join('')}</optgroup><optgroup label="Líquidos">${EQ_DENS.map((e,i)=>`<option value="l${i}">${esc(e[0])}</option>`).join('')}</optgroup></select></div>
+      <div class="field eq-combo"><label for="eqQ">Ingrediente</label><input id="eqQ" class="inp" autocomplete="off" placeholder="Escribe: harina, leche, huevo…" value="Harina de trigo" role="combobox" aria-expanded="false" aria-controls="eqList"><input type="hidden" id="eqI" value="s0">
+        <div class="eq-list" id="eqList" role="listbox" hidden></div></div>
       <div class="eq-row2"><div class="field"><label for="eqN">Cantidad</label><input id="eqN" class="inp" type="number" min="0" step="0.25" value="1" inputmode="decimal"></div>
       <div class="field"><label for="eqU">Medida</label><select id="eqU" class="inp"></select></div></div>
     </div>
@@ -2294,24 +2315,48 @@ function viewEquiv(){
   <section class="card eq-card"><h2>Medidas inglesas y americanas</h2>${eqTable(['Medida','Equivale a'], EQ_IMP.map(r=>r.map(esc)))}</section>
   </div>`;
 }
+const EQ_ALL=()=>[...EQ_SOLID.map((e,i)=>({id:'s'+i,n:e[0],t:'Sólido'})),...EQ_DENS.map((e,i)=>({id:'l'+i,n:e[0],t:'Líquido'})),...EQ_PIECES.map((e,i)=>({id:'p'+i,n:e[0],t:'Pieza'}))];
 function bindEquiv(){
-  const n=$('#eqN'), u=$('#eqU'), i=$('#eqI'), o=$('#eqOut'); if(!n) return;
+  const n=$('#eqN'), u=$('#eqU'), i=$('#eqI'), o=$('#eqOut'), qi=$('#eqQ'), list=$('#eqList'); if(!n) return;
   const r=x=>fmtNum(Math.round(x*10)/10);
-  const units=()=>{ const v=i.value, k=v[0], e=k==='s'?EQ_SOLID[+v.slice(1)]:EQ_DENS[+v.slice(1)];
-    const opts = k==='s'
-      ? [['g','gramos'],...(e[1]?[['cs','cucharadas rasas'],['csc','cucharadas colmadas'],['cc','cucharaditas rasas']]:[]),...(e[4]?[['taza','tazas de desayuno'],['vaso','vasos de agua']]:[])]
-      : [['ml','mililitros'],['g','gramos'],['cc','cucharaditas'],['cs','cucharadas soperas'],['cafe','tazas de café'],['vaso','vasos de agua'],['taza','tazas de desayuno']];
+  const pl=(x,a,b)=>`${r(x)} ${Math.abs(x-1)<0.01?a:b}`;
+  const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'');
+  let act=0, opts=[];
+  const drawList=()=>{ const q=norm(qi.value.trim()); const all=EQ_ALL();
+    opts=(q?all.filter(x=>norm(x.n).includes(q)).sort((a,b)=>norm(a.n).indexOf(q)-norm(b.n).indexOf(q)):all);
+    if(!opts.length){ list.innerHTML='<p class="muted" style="margin:6px 8px">No está en las tablas. Prueba con otro nombre.</p>'; list.hidden=false; return; }
+    act=Math.min(act,opts.length-1);
+    list.innerHTML=opts.map((x,k)=>`<button type="button" role="option" class="eq-opt" aria-selected="${k===act}" data-id="${x.id}"><span>${esc(x.n)}</span><small>${x.t}</small></button>`).join('');
+    list.hidden=false; qi.setAttribute('aria-expanded','true'); };
+  const choose=id=>{ const x=EQ_ALL().find(y=>y.id===id); if(!x) return; i.value=id; qi.value=x.n; list.hidden=true; qi.setAttribute('aria-expanded','false'); units(); calc(); };
+  qi.addEventListener('focus',()=>{ qi.select(); act=0; drawList(); });
+  qi.addEventListener('input',()=>{ act=0; drawList(); });
+  qi.addEventListener('keydown',e=>{ if(list.hidden) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); act=(act+1)%opts.length; drawList(); list.querySelector('[aria-selected=true]')?.scrollIntoView({block:'nearest'}); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); act=(act-1+opts.length)%opts.length; drawList(); list.querySelector('[aria-selected=true]')?.scrollIntoView({block:'nearest'}); }
+    else if(e.key==='Enter'){ e.preventDefault(); if(opts[act]) choose(opts[act].id); }
+    else if(e.key==='Escape'){ list.hidden=true; } });
+  list.addEventListener('mousedown',e=>e.preventDefault());
+  list.addEventListener('click',e=>{ const b=e.target.closest('[data-id]'); if(b) choose(b.dataset.id); });
+  document.addEventListener('click',e=>{ if(!e.target.closest('.eq-combo') && list) list.hidden=true; });
+  const units=()=>{ const v=i.value, k=v[0];
+    let opts;
+    if(k==='s'){ const e=EQ_SOLID[+v.slice(1)]; opts=[['g','gramos'],...(e[1]?[['cs','cucharadas rasas'],['csc','cucharadas colmadas'],['cc','cucharaditas rasas']]:[]),...(e[4]?[['taza','tazas de desayuno'],['vaso','vasos de agua']]:[])]; }
+    else if(k==='l') opts=[['ml','mililitros'],['g','gramos'],['cc','cucharaditas'],['cs','cucharadas soperas'],['cafe','tazas de café'],['vaso','vasos de agua'],['taza','tazas de desayuno']];
+    else opts=[['ud','unidades']];
     const keep=u.value; u.innerHTML=opts.map(([a,b])=>`<option value="${a}">${b}</option>`).join(''); if(opts.some(x=>x[0]===keep)) u.value=keep; };
   const calc=()=>{
     const v=i.value, k=v[0], q=parseFloat(String(n.value).replace(',','.'))||0;
+    let parts;
     if(k==='s'){ const e=EQ_SOLID[+v.slice(1)]; const per={g:1,cs:e[1],csc:e[2],cc:e[3],taza:e[4],vaso:e[5]}; const gr=q*(per[u.value]||1);
-      const parts=[`<b>${r(gr)} g</b>`]; if(e[1]) parts.push(`${r(gr/e[1])} cucharadas rasas`,`${r(gr/e[2])} colmadas`,`${r(gr/e[3])} cucharaditas`); if(e[4]) parts.push(`${r(gr/e[4])} tazas de desayuno`,`${r(gr/e[5])} vasos`);
-      o.innerHTML=parts.map(x=>`<span>${x}</span>`).join(''); }
-    else { const d=EQ_DENS[+v.slice(1)][1]; const per={ml:1,g:1/d,cc:5,cs:15,cafe:100,vaso:200,taza:250}; const ml=q*(per[u.value]||1);
-      const pl=(x,a,b)=>`${r(x)} ${Math.abs(x-1)<0.01?a:b}`;
-      o.innerHTML=[`<b>${r(ml)} ml</b>`,`${r(ml*d)} g`,pl(ml/15,'cucharada','cucharadas'),pl(ml/5,'cucharadita','cucharaditas'),pl(ml/200,'vaso','vasos'),pl(ml/250,'taza de desayuno','tazas de desayuno')].map(x=>`<span>${x}</span>`).join(''); }
+      parts=[`<b>${r(gr)} g</b>`]; if(e[1]) parts.push(pl(gr/e[1],'cucharada rasa','cucharadas rasas'),pl(gr/e[2],'colmada','colmadas'),pl(gr/e[3],'cucharadita','cucharaditas')); if(e[4]) parts.push(pl(gr/e[4],'taza de desayuno','tazas de desayuno'),pl(gr/e[5],'vaso','vasos')); }
+    else if(k==='l'){ const d=EQ_DENS[+v.slice(1)][1]; const per={ml:1,g:1/d,cc:5,cs:15,cafe:100,vaso:200,taza:250}; const ml=q*(per[u.value]||1);
+      parts=[`<b>${r(ml)} ml</b>`,`${r(ml*d)} g`,pl(ml/15,'cucharada','cucharadas'),pl(ml/5,'cucharadita','cucharaditas'),pl(ml/200,'vaso','vasos'),pl(ml/250,'taza de desayuno','tazas de desayuno')]; }
+    else { const e=EQ_PIECES[+v.slice(1)]; const m=String(e[1]).match(/^([\d,.]+)\s*(g|ml)\b/);
+      parts = m ? [`<b>${r(parseFloat(m[1].replace(',','.'))*q)} ${m[2]}</b>`, `${r(q)} × ${esc(e[0].toLowerCase())}`] : [`<b>${esc(e[1])}</b>`]; }
+    o.innerHTML=parts.map(x=>`<span>${x}</span>`).join('');
   };
-  i.addEventListener('change',()=>{ units(); calc(); }); [n,u].forEach(x=>x.addEventListener('input',calc)); u.addEventListener('change',calc);
+  [n,u].forEach(x=>x.addEventListener('input',calc)); u.addEventListener('change',calc);
   units(); calc();
 }
 /* ===== Acciones ===== */
