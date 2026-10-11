@@ -5,8 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Entre Fogones</title>
 <link rel="icon" href="/icon.svg" type="image/svg+xml"><link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32"><link rel="apple-touch-icon" href="/apple-touch-icon.png" sizes="180x180"><link rel="manifest" href="/manifest.webmanifest"><meta name="apple-mobile-web-app-title" content="Entre Fogones"><meta name="application-name" content="Entre Fogones"><meta name="theme-color" content="#B5562B"><meta name="description" content="Guarda tus recetas en libros, compártelas y chatea con tus amigos.">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700;12..96,800&family=Young+Serif&family=Caveat:wght@500&display=swap">
+<link rel="stylesheet" href="/fonts/bricolage/index.css"><link rel="stylesheet" href="/fonts/young-serif/index.css"><link rel="stylesheet" href="/fonts/caveat/500.css">
 <style>
 html,body{margin:0}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}img{max-width:100%}[hidden]{display:none!important}
 
@@ -16,7 +15,7 @@ html,body{margin:0}:root{padding-top:env(safe-area-inset-top,0px);padding-bottom
   --accent:#B5562B; --accent-ink:#FFF6EE; --accent-soft:#F3E0D2;
   --paper:#FFFBF4; --paper-ink:#2E1A11; --paper-muted:#7D6150; --paper-line:#EADCCB;
   --shelf:#8A5A3B; --shelf-edge:#6E4429; --ok:#2F7D5B; --danger:#A33A2A;
-  --f-ui:'Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;
+  --f-ui:'Bricolage Grotesque Variable','Bricolage Grotesque',ui-sans-serif,system-ui,sans-serif;
   --f-book:'Young Serif',Georgia,'Times New Roman',serif;
   --f-hand:'Caveat','Segoe Print','Bradley Hand',cursive;
   --r:12px;
@@ -197,6 +196,44 @@ main{padding-block:24px 64px}
 .legal-foot{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;padding:4px 16px 28px;font-size:13px}
 .legal-foot a{color:var(--muted)}
 .in-book .legal-foot{display:none}
+.row.nowrap{flex-wrap:nowrap}
+/* barra superior en una sola línea */
+.top .wrap{flex-wrap:nowrap}
+.nav{flex-wrap:nowrap;align-items:center}
+.nav button{display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.nav .ico{width:17px;height:17px}
+.nav .short{display:none}
+.tools,.composer .tools{flex-wrap:nowrap}
+/* opciones de nueva receta */
+.opts{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.opt{display:grid;gap:4px;justify-items:start;text-align:left;background:var(--bg);border:1px solid var(--line);border-radius:14px;padding:14px;min-height:108px}
+.opt:hover{border-color:var(--accent)}
+.opt .ico{width:24px;height:24px;color:var(--accent);margin-bottom:4px}
+.opt .ot{font-weight:700;font-size:15px}
+.opt .od{font-size:13px;color:var(--muted);line-height:1.35}
+#tabWrap{display:grid;gap:10px}#tabWrap[hidden]{display:none}
+#optBack{justify-self:start}
+.opt-h{font-size:18px;font-weight:800}
+@media (max-width:640px){
+  .brand .w{display:none}
+  .nav{gap:2px;margin-left:auto}
+  .nav button{flex-direction:column;gap:2px;padding:5px 8px;font-size:11px;border-radius:12px;position:relative}
+  .nav .ico{width:20px;height:20px}
+  .nav .badge{position:absolute;top:0;right:2px;margin:0;min-width:16px;height:16px;font-size:10px}
+  .nav .long{display:none}.nav .short{display:inline}
+  .nav .login,.nav .me{border:0;background:none;padding:5px 8px}
+  .nav .me .av{width:22px;height:22px;font-size:10px}
+  .nav .me .nl{max-width:64px;overflow:hidden;text-overflow:ellipsis}
+  .tbtn{padding:0;width:40px;min-height:40px;justify-content:center}
+  .tbtn .lbl{display:none}
+  .book-head{flex-wrap:nowrap}
+  .book-head h1{font-size:18px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .book-head .row{flex-wrap:nowrap;gap:4px}
+  .book-foot{flex-wrap:nowrap}
+  .book-foot .hint{display:none}
+  .pager{gap:6px}.pager .muted{font-size:13px}
+  .composer .tools{gap:6px}
+}
 /* formato en el editor */
 .fmtbar{display:flex;gap:4px;align-items:center}
 .fmtbar button{width:32px;height:28px;border-radius:6px;border:1px solid var(--line);background:var(--surface);font-family:var(--f-book);font-size:15px;line-height:1}
@@ -277,7 +314,7 @@ textarea.inp{resize:vertical;line-height:1.5}
 <header class="top"><div class="wrap" id="topbar"></div></header>
 <main><div class="wrap" id="main"><div class="splash"><div><div id="splashLogo"></div><p class="muted">Encendiendo los fogones…</p></div></div></div></main>
 <div id="modal-root"></div>
-<footer class="legal-foot"><a href="/legal/aviso-legal">Aviso legal</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
+<footer class="legal-foot"><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/app.js?v=7"></script>

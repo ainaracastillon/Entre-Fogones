@@ -36,6 +36,7 @@ const ICONS = {
   hand:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>', user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+  users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5.5 6.5-5.5s5.5 2 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.6c2 .8 3.2 2.6 3.5 5.4"/>',
   expand:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   play:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
   upload:'<path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/>'
@@ -192,10 +193,10 @@ function renderTop(){
   $('#topbar').innerHTML = `
     <button class="brand" data-act="go" data-v="library" aria-label="Entre Fogones, ir a la biblioteca">${spoon(38)}<span class="w"><span class="w1" style="display:block">entre</span><span class="w2" style="display:block">fogones</span></span></button>
     <nav class="nav" aria-label="Secciones">
-      <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>Biblioteca</button>
-      <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>Chat${unread?`<span class="badge">${unread}</span>`:''}</button>
-      <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>Amigos${pend?`<span class="badge">${pend}</span>`:''}</button>
-      ${!S.booted?'':canSocial()?`<button class="me" data-act="account">${avatar(S.uid)}<span>@${esc(S.profile.username)}</span></button>`:`<button class="login" data-act="login">${ico('user')}Iniciar sesión</button>`}
+      <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
+      <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
+      <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
+      ${!S.booted?'':canSocial()?`<button class="me" data-act="account" aria-label="Tu cuenta">${avatar(S.uid)}<span class="nl">@${esc(S.profile.username)}</span></button>`:`<button class="login" data-act="login">${ico('user')}<span class="nl"><span class="long">Iniciar sesión</span><span class="short">Entrar</span></span></button>`}
     </nav>`;
 }
 function render(){
@@ -321,15 +322,10 @@ function openBook(id, recipeId){
 function bookTools(){
   const b=S.book, cur=currentRecipe(); let t='';
   if(b.visiting){
-    t = cur ? `<button class="btn pri sm" data-act="saveCopy">${ico('save')}Guardar en mi libro</button>` : '';
-    if(b.folder && b.recipes.length) t += `<button class="btn sm" data-act="saveFolderCopy">${ico('book')}Guardar la carpeta entera</button>`;
-  } else if(cur) t = `<button class="btn sm" data-act="editRecipe" data-id="${esc(cur.id)}">${ico('edit')}Editar</button>
-      <button class="btn sm" data-act="shareRecipe" data-id="${esc(cur.id)}">${ico('share')}Compartir</button>
-      <button class="btn sm" data-act="moveRecipe" data-id="${esc(cur.id)}">${ico('move')}Mover</button>
-      <button class="btn sm danger" data-act="delRecipe" data-id="${esc(cur.id)}">${ico('trash')}Borrar</button>`;
-  else if(b.folder) t = `<button class="btn sm" data-act="shareFolder">${ico('share')}Compartir carpeta</button>
-      <button class="btn sm" data-act="editFolder">${ico('edit')}Renombrar o color</button>
-      <button class="btn sm danger" data-act="delFolder">${ico('trash')}Borrar carpeta</button>`;
+    t = cur ? `<button class="btn sm tbtn pri" data-act="saveCopy" aria-label="Guardar en mi libro" title="Guardar en mi libro">${ico('save')}<span class="lbl">Guardar en mi libro</span></button>` : '';
+    if(b.folder && b.recipes.length) t += `<button class="btn sm tbtn " data-act="saveFolderCopy" aria-label="Guardar la carpeta entera" title="Guardar la carpeta entera">${ico('book')}<span class="lbl">Guardar la carpeta entera</span></button>`;
+  } else if(cur) t = `<button class="btn sm tbtn " data-act="editRecipe" data-id="${esc(cur.id)}" aria-label="Editar" title="Editar">${ico('edit')}<span class="lbl">Editar</span></button><button class="btn sm tbtn " data-act="shareRecipe" data-id="${esc(cur.id)}" aria-label="Compartir" title="Compartir">${ico('share')}<span class="lbl">Compartir</span></button><button class="btn sm tbtn " data-act="moveRecipe" data-id="${esc(cur.id)}" aria-label="Mover" title="Mover">${ico('move')}<span class="lbl">Mover</span></button><button class="btn sm tbtn danger" data-act="delRecipe" data-id="${esc(cur.id)}" aria-label="Borrar" title="Borrar">${ico('trash')}<span class="lbl">Borrar</span></button>`;
+  else if(b.folder) t = `<button class="btn sm tbtn " data-act="shareFolder" aria-label="Compartir carpeta" title="Compartir carpeta">${ico('share')}<span class="lbl">Compartir carpeta</span></button><button class="btn sm tbtn " data-act="editFolder" aria-label="Renombrar o color" title="Renombrar o color">${ico('edit')}<span class="lbl">Renombrar o color</span></button><button class="btn sm tbtn danger" data-act="delFolder" aria-label="Borrar carpeta" title="Borrar carpeta">${ico('trash')}<span class="lbl">Borrar carpeta</span></button>`;
   return t;
 }
 function viewBook(){
@@ -353,7 +349,7 @@ function viewBook(){
   }
   const ownerLabel = b.visiting ? `de ${esc(b.ownerName||'')}` : '';
   return `<div class="book-head">
-      <button class="btn ghost sm" data-act="closeBook">${ico('back')}${b.visiting?'Volver':'Estantería'}</button>
+      <button class="btn ghost sm tbtn" data-act="closeBook" aria-label="${b.visiting?'Volver':'Estantería'}">${ico('back')}<span class="lbl">${b.visiting?'Volver':'Estantería'}</span></button>
       <h1>${esc(b.name)} <span class="muted" style="font-weight:500;font-size:15px">${ownerLabel}</span></h1>
       <span class="sp"></span>
       <div class="row">${bookTools()}</div>
@@ -362,9 +358,9 @@ function viewBook(){
     <div class="book-foot">
       ${pager}
       <span class="hint">Toca una página para verla más grande</span>
-      <div class="row">
-        <button class="btn sm" data-act="zoomFull">${ico('expand')}Ampliar libro</button>
-        ${!b.visiting?`<button class="btn pri sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir receta aquí</button>`:''}
+      <div class="row nowrap">
+        <button class="btn sm tbtn " data-act="zoomFull" aria-label="Ampliar libro" title="Ampliar libro">${ico('expand')}<span class="lbl">Ampliar libro</span></button>
+        ${!b.visiting?`<button class="btn pri sm tbtn" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}" aria-label="Añadir receta aquí">${ico('plus')}<span class="lbl">Añadir receta aquí</span></button>`:''}
       </div>
     </div>`;
 }
@@ -520,15 +516,11 @@ function folderModal(f){
 const aiName = () => S.aiName || 'la IA';
 const noAiHtml = what => `<div class="empty" style="padding:22px">${ico('sparkle')}<p style="margin:0;max-width:440px">${what} usa inteligencia artificial y todavía no está activada en el servidor. Mientras tanto puedes importar desde un enlace o escribir la receta a mano.</p></div>`;
 function newRecipeModal(folderId){
+  const OPTS=[['url','link','Desde enlace','La dirección de una web de recetas'],['video','play','Desde vídeo','TikTok, Instagram, Facebook o YouTube'],
+    ['photo','camera','Desde foto','De un libro, una revista o un papel'],['ai','sparkle','Con '+aiName(),'Pídela y ajústala hablando'],['hand','edit','A mano','Escríbela tú']];
   const m=openModal(`${mHead('Nueva receta')}
-    <div class="tabs" role="tablist">
-      <button role="tab" aria-selected="true" data-tab="url">${ico('link')}Desde enlace</button>
-      <button role="tab" aria-selected="false" data-tab="video">${ico('play')}Desde vídeo</button>
-      <button role="tab" aria-selected="false" data-tab="photo">${ico('camera')}Desde foto</button>
-      <button role="tab" aria-selected="false" data-tab="ai">${ico('sparkle')}Con ${esc(aiName())}</button>
-      <button role="tab" aria-selected="false" data-tab="hand">${ico('edit')}A mano</button>
-    </div>
-    <div id="tabBody"></div>`,{wide:true});
+    <div class="opts" id="opts">${OPTS.map(([k,i,t,d])=>`<button type="button" class="opt" data-tab="${k}">${ico(i)}<span class="ot">${esc(t)}</span><span class="od">${esc(d)}</span></button>`).join('')}</div>
+    <div id="tabWrap" hidden><button type="button" class="btn ghost sm" id="optBack">${ico('back')}Otras formas</button><h3 class="opt-h" id="optTitle"></h3><div id="tabBody"></div></div>`,{wide:true});
   const body=$('#tabBody',m);
   const busy=(el,t)=>el.innerHTML=`<div class="status"><span class="spin"></span>${esc(t)}</div>`;
   const tabs={
@@ -638,8 +630,10 @@ function newRecipeModal(folderId){
     },
     hand:()=>{ closeModal(); editorModal({folderId}); }
   };
-  m.querySelectorAll('[data-tab]').forEach(t=>t.onclick=()=>{m.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-selected',x===t));tabs[t.dataset.tab]()});
-  tabs.url();
+  const show=k=>{ if(k==='ai'&&S.ai){ tabs.ai(); return; } if(k==='hand'){ tabs.hand(); return; }
+    $('#opts',m).hidden=true; $('#tabWrap',m).hidden=false; $('#optTitle',m).textContent=OPTS.find(o=>o[0]===k)[2]; tabs[k](); m.querySelector('#tabBody input:not([hidden]),#tabBody textarea')?.focus(); };
+  m.querySelectorAll('[data-tab]').forEach(t=>t.onclick=()=>show(t.dataset.tab));
+  $('#optBack',m).onclick=()=>{ $('#tabWrap',m).hidden=true; $('#opts',m).hidden=false; $('#tabBody',m).innerHTML=''; };
 }
 function recipePreview(r){
   return `<div class="rprev"><div class="rp-col">
@@ -918,7 +912,7 @@ function authModal(mode='login'){
           <span class="muted" style="font-size:13px">Al menos 6 caracteres.</span></div>
         <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
         <label class="row" style="font-size:14px;align-items:flex-start;flex-wrap:nowrap"><input type="checkbox" id="racc" required style="margin-top:4px">
-          <span>He leído y acepto el <a href="/legal/aviso-legal" target="_blank">aviso legal y condiciones de uso</a> y la <a href="/legal/privacidad" target="_blank">política de privacidad</a>. Tengo al menos 14 años.</span></label>
+          <span>He leído y acepto los <a href="/legal/aviso-legal" target="_blank">Términos de uso</a> y la <a href="/legal/privacidad" target="_blank">Política de privacidad</a>.</span></label>
         <div id="rstatus"></div>
         <div class="row" style="justify-content:flex-end"><button class="btn pri" id="rgo">Crear cuenta</button></div>
       </form>`;
@@ -974,7 +968,7 @@ function accountModal(){
       <div id="astatus"></div>
       <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="aout">${ico('out')}Cerrar sesión</button><button class="btn pri" id="ago">Guardar</button></div>
       <div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding-top:12px">
-        <span class="muted" style="font-size:13px"><a href="/legal/privacidad" target="_blank">Privacidad</a> · <a href="/legal/aviso-legal" target="_blank">Condiciones</a></span>
+        <span class="muted" style="font-size:13px"><a href="/legal/privacidad" target="_blank">Privacidad</a> · <a href="/legal/aviso-legal" target="_blank">Términos de uso</a></span>
         <button type="button" class="btn ghost sm danger" id="adel">${ico('trash')}Borrar mi cuenta</button></div>
     </form>`);
   initColorField(m,'pcolor',c=>{color=c});
@@ -1075,10 +1069,10 @@ function viewChat(){
       <div class="msgs" id="msgs" aria-live="polite"><div class="chat-empty"><span class="spin"></span></div></div>
       <div class="composer">
         <div class="tools">
-          <button class="btn sm" data-act="chatShareRecipe">${ico('book')}Compartir receta</button>
-          <button class="btn sm" data-act="chatShareFolder">${ico('move')}Compartir carpeta</button>
-          <button class="btn sm" data-act="chatAsk">${ico('hand')}Pedir receta</button>
-          <button class="btn sm" data-act="chatSuggest">${ico('sparkle')}Sugerir receta</button>
+          <button class="btn sm tbtn " data-act="chatShareRecipe" aria-label="Compartir receta" title="Compartir receta">${ico('book')}<span class="lbl">Compartir receta</span></button>
+          <button class="btn sm tbtn " data-act="chatShareFolder" aria-label="Compartir carpeta" title="Compartir carpeta">${ico('move')}<span class="lbl">Compartir carpeta</span></button>
+          <button class="btn sm tbtn " data-act="chatAsk" aria-label="Pedir receta" title="Pedir receta">${ico('hand')}<span class="lbl">Pedir receta</span></button>
+          <button class="btn sm tbtn " data-act="chatSuggest" aria-label="Sugerir receta" title="Sugerir receta">${ico('sparkle')}<span class="lbl">Sugerir receta</span></button>
         </div>
         <form id="cform"><textarea id="ctext" rows="1" placeholder="Escribe un mensaje" aria-label="Mensaje"></textarea><button class="btn pri" aria-label="Enviar">${ico('send')}</button></form>
       </div>`:`<div class="chat-empty"><div>${spoon(54,'var(--muted)','var(--surface)')}<p>Elige una conversación para chatear, pedir recetas o sugerir alguna.</p></div></div>`}

@@ -126,6 +126,9 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '6mb' }));
 app.get('/healthz', (req, res) => res.send('ok'));
+// Tipografías servidas desde la propia app (paquetes de Fontsource), sin Google Fonts
+const FONT_PKGS = { bricolage: '@fontsource-variable/bricolage-grotesque', 'young-serif': '@fontsource/young-serif', caveat: '@fontsource/caveat' };
+for (const [k, pkg] of Object.entries(FONT_PKGS)) app.use('/fonts/' + k, express.static(path.join(__dirname, 'node_modules', pkg), { maxAge: '30d', immutable: true }));
 // HTML, JS y manifiesto se revalidan siempre para que se vea la última versión al momento
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders(res, file) {
   if (/\.(html|js|css|webmanifest)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
@@ -176,7 +179,7 @@ api.post('/register', async (req, res, next) => {
     if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
     if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido. Lo necesitarás si olvidas la contraseña.' });
     if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
-    if (!req.body.accept) return res.status(400).json({ error: 'Para crear la cuenta tienes que aceptar las condiciones y la política de privacidad.' });
+    if (!req.body.accept) return res.status(400).json({ error: 'Para crear la cuenta tienes que aceptar los Términos de uso y la Política de privacidad.' });
     if ((await q('SELECT 1 FROM users WHERE username=$1', [username])).rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
     if ((await q('SELECT 1 FROM users WHERE lower(email)=$1', [email])).rows[0]) return res.status(409).json({ error: 'Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.' });
     await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',

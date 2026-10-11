@@ -9,7 +9,7 @@ function legalPages({ name, email, host }) {
   const who = name ? `${name}, persona física` : 'la persona titular de Entre Fogones';
   return {
     'aviso-legal': {
-      title: 'Aviso legal y condiciones de uso',
+      title: 'Aviso legal y términos de uso',
       body: `
 <h2>1. Quién está detrás de Entre Fogones</h2>
 <p>Entre Fogones (${host}) es una aplicación web gratuita y sin ánimo de lucro para guardar, organizar y compartir recetas de cocina. Su titular es ${who} (en adelante, «nosotros»). Puedes contactar con nosotros ${contact}.</p>
@@ -18,7 +18,7 @@ function legalPages({ name, email, host }) {
 <p>Al usar Entre Fogones aceptas estas condiciones. Si creas una cuenta, además declaras haber leído la <a href="/legal/privacidad">política de privacidad</a>. Si no estás de acuerdo, no uses la aplicación.</p>
 
 <h2>3. Edad mínima</h2>
-<p>Para crear una cuenta tienes que tener al menos 14 años. Si eres menor de 14 años necesitas el consentimiento de tu madre, padre o tutor legal, que será responsable de tu uso de la aplicación.</p>
+<p>Para crear una cuenta tienes que tener al menos 14 años; al aceptar estos términos confirmas que los tienes. Si eres menor de 14 años necesitas el consentimiento de tu madre, padre o tutor legal, que será responsable de tu uso de la aplicación.</p>
 
 <h2>4. Uso sin cuenta y con cuenta</h2>
 <p>Puedes guardar recetas sin crear una cuenta: quedan asociadas a este navegador mediante una cookie técnica y se pierden si la borras. Con una cuenta (nombre de usuario, correo y contraseña) tus recetas están en todos tus dispositivos y puedes tener amigos y usar el chat. Eres responsable de guardar tu contraseña en secreto y de lo que se haga con tu cuenta.</p>
@@ -79,7 +79,6 @@ function legalPages({ name, email, host }) {
 <li><strong>Render</strong> (Render Services, Inc., EE. UU.): alojamiento de la aplicación, en su región de Fráncfort (UE).</li>
 <li><strong>Neon</strong> (Databricks, Inc., EE. UU.): base de datos, en Fráncfort (UE), sobre Amazon Web Services.</li>
 <li><strong>Groq</strong> (Groq, Inc., EE. UU.): inteligencia artificial. Solo recibe lo que envías al usar esas funciones: el texto que escribes en el chat de recetas, las fotos o vídeos que subes para leerlos y el texto de las webs o vídeos que importas. No le enviamos tu nombre, tu correo ni tu identificador.</li>
-<li><strong>Google Fonts</strong> (Google LLC, EE. UU.): las tipografías de la página; tu navegador se conecta a Google para descargarlas, lo que le comunica tu dirección IP.</li>
 <li><strong>Servicio de correo</strong>: solo para enviarte el enlace de recuperar la contraseña.</li>
 </ul>
 <p>Algunos de estos proveedores son de EE. UU. Las transferencias se amparan en el Marco de Privacidad de Datos UE-EE. UU. o en las cláusulas contractuales tipo aprobadas por la Comisión Europea.</p>
@@ -102,14 +101,14 @@ function legalPages({ name, email, host }) {
       body: `
 <h2>Qué usamos</h2>
 <p>Entre Fogones solo usa lo imprescindible para funcionar. No usamos cookies de publicidad, de analítica ni de redes sociales, así que no te pedimos consentimiento (art. 22.2 de la LSSI-CE).</p>
-<div class="tbl"><table>
+<table class="ck">
 <thead><tr><th>Nombre</th><th>Tipo</th><th>Para qué</th><th>Duración</th></tr></thead>
 <tbody>
-<tr><td><code>ef</code></td><td>Cookie técnica propia</td><td>Mantener tu sesión y saber qué estantería es la tuya, con o sin cuenta.</td><td>Hasta 400 días o hasta que cierres sesión</td></tr>
-<tr><td><code>ef_hide_banner</code></td><td>Almacenamiento local</td><td>Recordar que cerraste el aviso de usar la app sin cuenta.</td><td>Hasta que lo borres</td></tr>
-<tr><td><code>ef_draft_…</code></td><td>Almacenamiento local</td><td>Guardar el mensaje del chat que estabas escribiendo.</td><td>Hasta que lo envíes o lo borres</td></tr>
-</tbody></table></div>
-<p>Al cargar las tipografías desde Google Fonts, tu navegador se conecta a servidores de Google, que no instalan cookies para este servicio.</p>
+<tr><td data-l="Nombre"><code>ef</code></td><td data-l="Tipo">Cookie técnica propia</td><td data-l="Para qué">Mantener tu sesión y saber qué estantería es la tuya, con o sin cuenta.</td><td data-l="Duración">Hasta 400 días o hasta que cierres sesión</td></tr>
+<tr><td data-l="Nombre"><code>ef_hide_banner</code></td><td data-l="Tipo">Almacenamiento local</td><td data-l="Para qué">Recordar que cerraste el aviso de usar la app sin cuenta.</td><td data-l="Duración">Hasta que lo borres</td></tr>
+<tr><td data-l="Nombre"><code>ef_draft_…</code></td><td data-l="Tipo">Almacenamiento local</td><td data-l="Para qué">Guardar el mensaje del chat que estabas escribiendo.</td><td data-l="Duración">Hasta que lo envíes o lo borres</td></tr>
+</tbody></table>
+<p>Las tipografías se sirven desde nuestro propio servidor: no se conecta con Google ni con otros terceros para mostrarlas.</p>
 <h2>Cómo borrarlas</h2>
 <p>Puedes borrar las cookies y el almacenamiento local desde los ajustes de tu navegador. Si borras la cookie <code>ef</code> sin tener cuenta, perderás el acceso a las recetas que guardaste sin cuenta.</p>`
     },
@@ -135,24 +134,30 @@ if(!r.ok) throw j; e.target.reset(); st.textContent='Mensaje enviado. Te respond
 
 function legalHtml(page, opts) {
   const pages = legalPages(opts); const p = pages[page]; if (!p) return null;
-  const nav = [['aviso-legal', 'Aviso legal'], ['privacidad', 'Privacidad'], ['cookies', 'Cookies'], ['contacto', 'Contacto']]
+  const nav = [['aviso-legal', 'Términos'], ['privacidad', 'Privacidad'], ['cookies', 'Cookies'], ['contacto', 'Contacto']]
     .map(([k, t]) => `<a href="/legal/${k}"${k === page ? ' aria-current="page"' : ''}>${t}</a>`).join('');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${p.title} · Entre Fogones</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><meta name="robots" content="noindex">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,700;12..96,800&display=swap">
+<link rel="stylesheet" href="/fonts/bricolage/index.css">
 <style>
 :root{--bg:#F6EEE6;--fg:#3B2116;--muted:#7A5C4C;--line:#E7D5C5;--accent:#B5562B;--card:#FFFAF5}
 @media (prefers-color-scheme:dark){:root{--bg:#1C1310;--fg:#F3E6DA;--muted:#BFA391;--line:#3B2B23;--accent:#E8834F;--card:#271B16;color-scheme:dark}}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 'Bricolage Grotesque',system-ui,sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 'Bricolage Grotesque Variable','Bricolage Grotesque',system-ui,sans-serif}
 .w{max-width:760px;margin:0 auto;padding:24px 16px 64px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 header a.home{color:var(--fg);text-decoration:none;font-weight:800;font-size:20px}
-nav{display:flex;gap:6px;flex-wrap:wrap}nav a{color:var(--muted);text-decoration:none;padding:5px 12px;border-radius:999px;border:1px solid transparent;font-size:14px}
+nav{display:flex;gap:2px;flex-wrap:nowrap;max-width:100%}nav a{color:var(--muted);text-decoration:none;padding:5px 10px;border-radius:999px;border:1px solid transparent;font-size:14px;white-space:nowrap}
+@media (max-width:480px){nav a{padding:4px 7px;font-size:13px}}
 nav a[aria-current]{border-color:var(--line);background:var(--card);color:var(--fg)}
 h1{font-size:32px;line-height:1.15;margin:0 0 6px}h2{font-size:19px;margin:28px 0 6px}
 a{color:var(--accent)}.upd{color:var(--muted);font-size:14px;margin-top:32px}
 ul{padding-left:20px}li{margin:4px 0}code{font-size:.9em}
-.tbl{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px}th,td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top}
+.ck{border-collapse:collapse;width:100%;font-size:14px;table-layout:fixed}
+.ck th,.ck td{border-bottom:1px solid var(--line);padding:8px 6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.ck th:nth-child(1){width:22%}.ck th:nth-child(2){width:20%}.ck th:nth-child(4){width:22%}
+@media (max-width:640px){.ck,.ck thead,.ck tbody,.ck tr,.ck td{display:block;width:auto}.ck thead{display:none}
+.ck tr{border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-bottom:10px;background:var(--card)}
+.ck td{border:0;padding:4px 0}.ck td::before{content:attr(data-l);display:block;font-size:12px;color:var(--muted)}}
 .cf{display:grid;gap:14px;max-width:520px}.cf label{display:grid;gap:4px;font-size:14px;color:var(--muted)}
 .cf input,.cf select,.cf textarea{font:inherit;color:var(--fg);background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .cf button{justify-self:start;font:inherit;font-weight:700;background:var(--accent);color:#fff;border:0;border-radius:999px;padding:10px 20px;cursor:pointer}
