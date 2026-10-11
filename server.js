@@ -78,6 +78,8 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS recipe_imgs(recipe_id TEXT PRIMARY KEY, img BYTEA NOT NULL, type TEXT, created BIGINT);
   CREATE TABLE IF NOT EXISTS menus(user_id TEXT NOT NULL, week TEXT NOT NULL, data JSONB NOT NULL, created BIGINT, PRIMARY KEY(user_id, week));
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS credit TEXT;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_v INT;
+  ALTER TABLE recipe_imgs ADD COLUMN IF NOT EXISTS v INT;
   CREATE TABLE IF NOT EXISTS pending_signups(
     email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, data JSONB NOT NULL, anon_id TEXT NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL, tries INT NOT NULL DEFAULT 0);
   ALTER TABLE contact_messages ADD COLUMN IF NOT EXISTS status TEXT;
@@ -473,7 +475,8 @@ api.delete('/recipes/:id', async (req, res, next) => {
 const recipeQueue = new Set(); let recipeBusy = false, imgPauseUntil = 0;
 async function backfillRecipes() {
   try {
-    const rows = (await q("SELECT id FROM recipes WHERE coalesce(data->>'image','')='' OR (data->'nutrition'->>'grams') IS NULL OR coalesce(data->>'category','')='' ORDER BY updated DESC LIMIT 500")).rows;
+    const rows = (await q(`SELECT r.id FROM recipes r LEFT JOIN recipe_imgs i ON i.recipe_id=r.id WHERE coalesce(r.data->>'image','')='' OR (r.data->'nutrition'->>'grams') IS NULL OR coalesce(r.data->>'category','')=''
+      OR (r.data->>'image' LIKE '/img/r/%' AND coalesce(i.v,0) < ${IMG_V}) ORDER BY r.updated DESC LIMIT 500`)).rows;
     rows.forEach(r => recipeQueue.add(r.id)); runRecipeQueue();
   } catch (e) { console.error('backfill', e.message); }
 }
@@ -485,11 +488,12 @@ async function runRecipeQueue() {
     while (recipeQueue.size) {
       const id = recipeQueue.values().next().value; recipeQueue.delete(id);
       const r = (await q('SELECT data FROM recipes WHERE id=$1', [id])).rows[0]; if (!r) continue;
-      const d = r.data; let changed = false;
+      const d = r.data; let changed = false; const oldImage = d.image || '';
+      if (/^\/img\/r\//.test(d.image || '')) { const iv = (await q('SELECT v FROM recipe_imgs WHERE recipe_id=$1', [id])).rows[0]; if (!iv || (iv.v || 0) < IMG_V) d.image = ''; }
       if (!d.image && d.title && Date.now() > imgPauseUntil) {
         try {
-          const { buf, type } = await aiImage(d.title, (d.ingredients || []).slice(0, 5).join(', '));
-          await q('INSERT INTO recipe_imgs(recipe_id,img,type,created) VALUES($1,$2,$3,$4) ON CONFLICT(recipe_id) DO UPDATE SET img=$2, type=$3, created=$4', [id, buf, type, now()]);
+          const { buf, type } = await aiImage(d.title, '', await dishPrompt(d));
+          await q('INSERT INTO recipe_imgs(recipe_id,img,type,created,v) VALUES($1,$2,$3,$4,$5) ON CONFLICT(recipe_id) DO UPDATE SET img=$2, type=$3, created=$4, v=$5', [id, buf, type, now(), IMG_V]);
           d.image = `/img/r/${id}?v=${now()}`; changed = true;
         } catch (e) { console.error('foto receta', e.message); if (e.quota) imgPauseUntil = Date.now() + 3600e3; }
       }
@@ -499,7 +503,7 @@ async function runRecipeQueue() {
       if (PROVIDER && !d.category && d.title) {
         try { const c = await categorize([{ id, title: d.title, ingredients: d.ingredients }]); if (c[id]) { d.category = c[id]; changed = true; } } catch (e) { console.error('tipo receta', e.message); }
       }
-      if (changed) await q("UPDATE recipes SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ image: d.image, ...(d.nutrition ? { nutrition: d.nutrition } : {}), ...(d.category ? { category: d.category } : {}) }), id]);
+      if (changed) await q("UPDATE recipes SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ image: d.image || oldImage, ...(d.nutrition ? { nutrition: d.nutrition } : {}), ...(d.category ? { category: d.category } : {}) }), id]);
       await sleep(1500);
     }
   } finally { recipeBusy = false; }
@@ -1296,8 +1300,24 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join('
 }
 /* Foto generada con IA para no usar fotos de otras personas.
    Con CF_ACCOUNT_ID y CF_API_TOKEN usa Cloudflare Workers AI (gratis con cuenta); si no, Pollinations. */
-async function aiImage(title, extra = '') {
-  const prompt = `appetizing homemade food photography of ${title}${extra ? ' (' + extra + ')' : ''}, the whole dish centered and fully visible with margin around it, spanish home cooking, natural window light, rustic wooden table, no text, no people`;
+/* La foto tiene que ser de ESE plato: la IA describe en inglés cómo queda el plato terminado a partir de la receta entera */
+const IMG_V = 2;
+async function dishPrompt(d) {
+  const fallback = `${d.title}${(d.ingredients || []).length ? ', made with ' + d.ingredients.slice(0, 6).join(', ') : ''}`;
+  if (!PROVIDER) return fallback;
+  try {
+    countAi();
+    const out = parseJson(await llm({ maxTokens: 500, messages: [{ role: 'user', text: `Describe en INGLÉS, para un generador de imágenes, cómo se ve exactamente el plato terminado de esta receta tal y como se sirve: qué es (tipo de plato), forma, colores, textura, ingredientes que se ven, en qué recipiente se sirve (plato, cuenco, vaso, bandeja, molde) y la guarnición si la tiene. Debe ser fiel a la receta: no añadas ingredientes que no lleva ni cambies el tipo de plato (si es una bebida, una bebida; si es un postre, ese postre; si es una salsa, la salsa en un cuenco). Máximo 60 palabras, sin nombres propios.
+Devuelve SOLO un objeto JSON: {"prompt": "..."}
+Receta: ${String(d.title || '').slice(0, 160)}
+Ingredientes: ${(d.ingredients || []).slice(0, 25).join('; ').slice(0, 1500)}
+Preparación: ${(d.steps || []).join(' ').slice(0, 1500)}` }] }));
+    const p = out && String(out.prompt || '').trim();
+    return p && p.length > 15 ? p.slice(0, 600) : fallback;
+  } catch { return fallback; }
+}
+async function aiImage(title, extra = '', described = '') {
+  const prompt = `${described ? described : `appetizing homemade food: ${title}${extra ? ' (' + extra + ')' : ''}`}. Realistic food photography, the whole dish centered and fully visible with some margin around it, natural window light, simple rustic wooden table, no text, no people, no hands`;
   if (CF_ACCOUNT && CF_TOKEN) {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST', signal: AbortSignal.timeout(90000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
@@ -1380,9 +1400,9 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).j
     }
     suggNutrition().catch(() => {});
     // fotos generadas que falten
-    const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;
+    const rows = (await q(`SELECT id, title, data FROM suggestions WHERE data IS NOT NULL AND (img IS NULL OR coalesce(img_v,0) < ${IMG_V}) AND coalesce(img_tries,0)<3 ORDER BY (img IS NULL) DESC, position LIMIT 200`)).rows;
     for (const s of rows) {
-      try { const { buf, type } = await aiImage(s.title); await q('UPDATE suggestions SET img=$1, img_type=$2 WHERE id=$3', [buf, type, s.id]); }
+      try { const { buf, type } = await aiImage(s.title, '', await dishPrompt({ ...s.data, title: s.title })); await q('UPDATE suggestions SET img=$1, img_type=$2, img_v=$3 WHERE id=$4', [buf, type, IMG_V, s.id]); }
       catch (e) { console.error('foto', s.title, e.message); if (e.quota) break; await q('UPDATE suggestions SET img_tries=coalesce(img_tries,0)+1 WHERE id=$1', [s.id]); }
       await sleep(CF_ACCOUNT ? 2000 : 15000);
     }
@@ -1392,7 +1412,7 @@ app.get('/img/s/:id', async (req, res) => {
   try {
     const r = (await q('SELECT img, img_type FROM suggestions WHERE id=$1 AND img IS NOT NULL', [req.params.id])).rows[0];
     if (!r) return res.status(404).end();
-    res.setHeader('Content-Type', r.img_type || 'image/jpeg'); res.setHeader('Cache-Control', 'public, max-age=604800');
+    res.setHeader('Content-Type', r.img_type || 'image/jpeg'); res.setHeader('Cache-Control', 'public, max-age=1800');
     res.end(r.img);
   } catch { res.status(500).end(); }
 });
