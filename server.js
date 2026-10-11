@@ -1824,6 +1824,58 @@ adm.post('/bulk/file', express.raw({ type: () => true, limit: '40mb' }), async (
     res.json({ recipes });
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : 'No he podido procesar el archivo.' }); }
 });
+function parseJsonLdAll(html) {
+  const out = [];
+  const isR = o => o && (o['@type'] === 'Recipe' || (Array.isArray(o['@type']) && o['@type'].includes('Recipe')));
+  const walk = o => { if (!o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(walk); if (isR(o)) out.push(o); if (o['@graph']) walk(o['@graph']); if (o.mainEntity) walk(o.mainEntity); if (o.itemListElement) walk(o.itemListElement); if (o.item) walk(o.item); };
+  for (const m of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) { try { walk(JSON.parse(m[1].trim())); } catch { } }
+  return out.map(rec => parseJsonLd(`<script type="application/ld+json">${JSON.stringify(rec)}</script>`)).filter(r => r && r.ingredients.length);
+}
+const bulkErr = (res, e) => { console.error(e); res.status(e.status === 429 ? 429 : 502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : (e.userMsg || 'No he podido procesar esto.') }); };
+// Enlace (web o vídeo): todas las recetas que tenga
+adm.post('/bulk/url', async (req, res) => {
+  try {
+    const url = String(req.body.url || '').trim();
+    if (isVideoUrl(url)) {
+      const v = await videoText(url);
+      if (!v.text) return res.status(422).json({ error: 'Ese vídeo no trae texto ni se ha podido escuchar.' });
+      const recipes = await extractMany((v.title ? 'Título: ' + v.title + '\n' : '') + v.text);
+      if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en ese vídeo.' });
+      return res.json({ recipes: recipes.map(r => ({ ...r, image: '', source: url })) });
+    }
+    const r = await safeFetch(url); if (!r.ok) return res.status(422).json({ error: 'No he podido abrir esa web.' });
+    const html = await r.text();
+    const ld = parseJsonLdAll(html);
+    if (ld.length) return res.json({ recipes: ld.map(x => ({ ...x, source: url })) });
+    const recipes = await extractMany(htmlToText(html));
+    if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en esa web.' });
+    res.json({ recipes: recipes.map(x => ({ ...x, source: url })) });
+  } catch (e) { bulkErr(res, e); }
+});
+// Foto: todas las recetas que se lean en ella
+adm.post('/bulk/photo', async (req, res) => {
+  const m = String(req.body.image || '').match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
+  if (!m) return res.status(400).json({ error: 'Esa imagen no se puede leer.' });
+  try {
+    countAi();
+    const out = parseJson(await llm({ maxTokens: 7000, messages: [{ role: 'user', image: { media: m[1], data: m[2] }, text: `La imagen es una foto de una o varias recetas (de un libro, revista, pantalla o papel escrito a mano). Transcribe TODAS las recetas que aparezcan, cada una por separado. Ingredientes y cantidades tal y como se leen; la preparación redáctala clara, en español de España, un paso por elemento sin numerar.
+Devuelve SOLO un objeto JSON: {"recipes": [${SCHEMA}, ...]}. Si no hay ninguna, {"recipes": []}.` }] }));
+    const recipes = (out && Array.isArray(out.recipes) ? out.recipes : []).map(cleanAi).filter(r => r && (r.ingredients.length || r.steps.length));
+    if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en la foto.' });
+    res.json({ recipes });
+  } catch (e) { bulkErr(res, e); }
+});
+// Vídeo o audio subido: se escucha y se sacan todas las recetas
+adm.post('/bulk/video', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'El archivo está vacío.' });
+    const text = await transcribe(req.body, String(req.query.type || 'video/mp4'));
+    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir.' });
+    const recipes = await extractMany('Lo que se dice en el vídeo: ' + text);
+    if (!recipes.length) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado recetas.' });
+    res.json({ recipes });
+  } catch (e) { bulkErr(res, e); }
+});
 // Subida masiva: cada receta ya leída (de enlace, vídeo, foto o texto) se guarda donde diga el administrador
 adm.post('/bulk/save', async (req, res, next) => {
   try {

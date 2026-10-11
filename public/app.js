@@ -2009,7 +2009,7 @@ function admBulkHtml(){
       <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea></div>
       <div class="field"><label>Archivos de cualquier tipo: PDF, Word, TXT, JSON, HTML, fotos, vídeos o audios</label><div class="row"><label class="btn" for="bkFiles">${ico('upload')}Elegir archivos</label><input id="bkFiles" type="file" multiple hidden><span class="muted" id="bkFn" style="font-size:13px"></span></div>
         <span class="muted" style="font-size:13px">Si un archivo tiene varias recetas (un recetario en PDF o Word, por ejemplo), se sacan todas.</span></div>
-      <div class="field"><label for="bkText">Recetas en texto (separa cada receta con una línea que tenga solo ---)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>
+      <div class="field"><label for="bkText">Recetas en texto (pega una o varias; se separan solas)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>
       <fieldset class="nt-opts"><legend>Dónde salen</legend>
         <label class="opt-line"><input type="radio" name="bkDest" value="sugg" checked> En «Recetas recomendadas», para todo el mundo</label>
         <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una o varias personas</label>
@@ -2029,32 +2029,28 @@ function bindAdmBulk(){
   f.onsubmit=async e=>{ e.preventDefault();
     const urls=$('#bkUrls').value.split('\n').map(x=>x.trim()).filter(x=>/^https?:\/\//.test(x));
     const files=[...$('#bkFiles').files];
-    const texts=$('#bkText').value.split(/\n\s*---+\s*\n/).map(x=>x.trim()).filter(x=>x.length>20);
+    const textAll=$('#bkText').value.trim();
     const kindOf=x=>/^image\//.test(x.type)||/\.(jpe?g|png|webp|heic|gif)$/i.test(x.name)?'photo':/^(video|audio)\//.test(x.type)||/\.(mp4|mov|m4v|webm|mp3|m4a|wav|ogg)$/i.test(x.name)?'video':'file';
-    const jobs=[...urls.map(u=>({k:'url',v:u,l:u})), ...files.map(x=>({k:kindOf(x),v:x,l:x.name})), ...texts.map((t,i)=>({k:'text',v:t,l:'Texto '+(i+1)+': '+t.split('\n')[0].slice(0,50)}))];
+    const jobs=[...urls.map(u=>({k:'url',v:u,l:u})), ...files.map(x=>({k:kindOf(x),v:x,l:x.name})), ...(textAll.length>20?[{k:'text',v:textAll,l:'Texto pegado'}]:[])];
     if(!jobs.length){ toast('Añade enlaces, archivos o texto'); return; }
     const dest=f.querySelector('input[name=bkDest]:checked').value==='user'?{type:'user', username:$('#bkU').value.trim(), folder:$('#bkFo').value.trim(), public:$('#bkPub').checked}:{type:'sugg'};
-    if(dest.type==='user' && !dest.username){ toast('Escribe el usuario'); return; }
+    if(dest.type==='user' && !dest.username.replace(/[,\s@]/g,'')){ toast('Escribe al menos un usuario'); return; }
     const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML='';
+    const raw=async(path,blob,type)=>{ const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/octet-stream'},body:blob}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; return jj; };
     let ok=0;
     for(const j of jobs){
-      const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)}`; log.append(li);
+      const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — leyendo…`; log.append(li);
       try{
-        if(j.k==='file'){
-          li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — leyendo el archivo…`;
-          const r=await fetch('/api/admin/bulk/file?name='+encodeURIComponent(j.v.name)+'&type='+encodeURIComponent(j.v.type||''),{method:'POST',credentials:'same-origin',headers:{'content-type':'application/octet-stream'},body:j.v});
-          const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error};
-          let n=0; for(const rec of jj.recipes){ try{ await api('POST','/admin/bulk/save',{recipe:rec, dest, credit}); n++; ok++; }catch{} }
-          li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(jj.recipes.slice(0,6).map(x=>x.title).join(', '))}${jj.recipes.length>6?'…':''}`; li.className='ok';
-          continue;
-        }
-        let recipe;
-        if(j.k==='url') recipe=(await api('POST','/import',{url:j.v})).recipe;
-        else if(j.k==='text') recipe=(await api('POST','/ai/extract',{text:j.v})).recipe;
-        else if(j.k==='photo'){ const big=await toDataUrl(j.v,1600,.85,2600000); recipe=(await api('POST','/ai/photo',{image:big})).recipe; }
-        else { const r=await fetch('/api/import/video-file',{method:'POST',credentials:'same-origin',headers:{'content-type':j.v.type||'video/mp4'},body:j.v}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; recipe=jj.recipe; }
-        await api('POST','/admin/bulk/save',{recipe, dest, credit});
-        ok++; li.innerHTML=`${ico('check')} ${esc(recipe.title||j.l)}`; li.className='ok';
+        let out;
+        if(j.k==='url') out=await api('POST','/admin/bulk/url',{url:j.v});
+        else if(j.k==='photo'){ const big=await toDataUrl(j.v,1800,.85,3000000); out=await api('POST','/admin/bulk/photo',{image:big}); }
+        else if(j.k==='video') out=await raw('/api/admin/bulk/video?type='+encodeURIComponent(j.v.type||'video/mp4'), j.v);
+        else if(j.k==='text') out=await raw('/api/admin/bulk/file?name=texto.txt&type=text/plain', new Blob([j.v],{type:'text/plain'}));
+        else out=await raw('/api/admin/bulk/file?name='+encodeURIComponent(j.v.name)+'&type='+encodeURIComponent(j.v.type||''), j.v);
+        const recs=out.recipes||[]; let n=0;
+        li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — ${recs.length} ${recs.length===1?'receta encontrada':'recetas encontradas'}, guardando…`;
+        for(const rec of recs){ try{ await api('POST','/admin/bulk/save',{recipe:rec, dest, credit}); n++; ok++; }catch{} }
+        li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(recs.slice(0,8).map(x=>x.title).join(', '))}${recs.length>8?'…':''}`; li.className='ok';
       }catch(err){ li.innerHTML=`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
     }
     b.disabled=false; toast(`${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null;
