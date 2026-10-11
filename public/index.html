@@ -88,7 +88,7 @@ main{padding-block:24px 64px}
 .spine::before,.spine::after{content:"";position:absolute;left:0;right:0;height:3px;background:rgba(255,235,190,.55)}
 .spine::before{top:22px}.spine::after{bottom:30px}
 .spine:hover{transform:translateY(-8px)}
-.spine .st{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;line-height:1.08;text-align:center;white-space:normal;overflow-wrap:anywhere;flex:1;min-height:0;width:100%;max-width:52px;overflow:hidden;margin:30px 0 8px;padding:0 5px;box-sizing:border-box}
+.spine .st{display:flex;justify-content:center;align-items:center;writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;line-height:1.08;text-align:center;white-space:normal;overflow-wrap:anywhere;flex:1;min-height:0;width:100%;max-width:52px;overflow:hidden;margin:30px 0 8px;padding:0 5px;box-sizing:border-box}
 .spine.add .st{flex:none;max-height:150px}
 .spine .sc{font-size:11px;font-weight:700;background:rgba(0,0,0,.22);border-radius:999px;padding:1px 7px;font-variant-numeric:tabular-nums}
 .spine.all{background:repeating-linear-gradient(90deg,var(--cloth) 0 14px,color-mix(in srgb,var(--cloth) 82%,#000) 14px 16px)}
@@ -513,7 +513,8 @@ input[type=radio],input[type=checkbox]{accent-color:var(--accent)}
 .replybar .rq span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .composer{grid-template-columns:minmax(0,1fr)}
 .composer form{align-items:flex-end;min-width:0}
-.composer textarea{min-width:0}
+.composer textarea{min-width:0;line-height:1.4;overflow-y:auto}
+.composer textarea::placeholder{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .sopt .pb{display:grid;min-width:0}
 .cbtns{display:flex;gap:2px;align-self:center}
 .ibtn{width:38px;height:38px;border-radius:50%;border:0;background:none;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
@@ -599,9 +600,11 @@ textarea.inp{resize:vertical;line-height:1.5}
 .spine.community .sc svg{width:18px;height:18px}
 .nutri{margin-top:20px;border-top:1px dashed var(--paper-line);padding-top:6px}
 .nutri h3 small{font-size:11px;letter-spacing:0;text-transform:none;font-weight:400}
-.nutri-t{border-collapse:collapse;width:100%;max-width:420px;font-size:calc(15px * var(--rfs,1))}
+.nutri-t{border-collapse:collapse;width:100%;max-width:520px;font-size:calc(15px * var(--rfs,1))}
 .nutri-t th,.nutri-t td{padding:5px 0;border-bottom:1px solid var(--paper-line);text-align:left;font-weight:600}
-.nutri-t td{text-align:right;font-variant-numeric:tabular-nums}
+.nutri-t td{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;padding-left:12px}
+.nutri-t thead th{font-size:12px;color:var(--paper-muted);text-align:right;font-weight:700;padding-left:12px}
+.nutri-t thead th small{font-weight:400}
 .nutri-t tr.sub th,.nutri-t tr.sub td{font-weight:400;color:var(--paper-muted);padding-left:14px;font-size:.92em}
 .rlink{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
 .recipe-read a{color:var(--accent)}
@@ -611,14 +614,41 @@ textarea.inp{resize:vertical;line-height:1.5}
 .bp-row{display:flex;align-items:center;gap:10px;padding:6px 4px;border-bottom:1px solid var(--line);cursor:pointer}
 .bp-row input{width:18px;height:18px;flex:none;accent-color:var(--accent)}
 .bp-t{display:grid;min-width:0}.bp-t small{color:var(--muted);font-size:12px}
-.menu-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:14px}
-.mday{display:grid;gap:8px}
-.mday h3{margin:0;font-size:18px;display:flex;align-items:center;gap:8px}
-.mday.today{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent-soft)}
-.mrow{display:grid;gap:2px}
-.mlbl{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700}
-.mdish{border:0;background:none;padding:0;text-align:left;font:inherit;font-weight:600;color:var(--ink);cursor:pointer;text-decoration:underline;text-decoration-color:var(--accent-soft);text-underline-offset:3px}
-.mdish.free{font-weight:500;text-decoration-style:dotted}
+.menu-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.menu-head h1{font-size:clamp(26px,4vw,36px);font-weight:800;letter-spacing:-.5px}
+.menu-head p.muted{margin:4px 0 0;font-size:14px}
+.wk{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px}
+.wk-day{background:var(--surface);border:1px solid var(--line);border-radius:16px;display:grid;grid-template-rows:auto 1fr 1fr 1fr;overflow:hidden;min-height:0}
+.wk-day header{display:flex;align-items:baseline;gap:6px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--bg)}
+.wk-dn{font-weight:800}
+.wk-dd{font-family:var(--f-book);font-size:20px;margin-left:auto;color:var(--muted)}
+.wk-today{font-size:11px;font-weight:700;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:1px 8px;order:3}
+.wk-day.today{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.wk-day.today header{background:var(--accent-soft)}
+.wk-day.today .wk-dd{color:var(--accent)}
+.wk-meal{padding:10px 12px;display:flex;flex-direction:column;gap:6px;min-height:0;border-top:1px dashed var(--line)}
+.wk-meal:first-of-type{border-top:0}
+.wk-ml{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700;display:flex;gap:6px;align-items:center}
+.wk-ml span{font-size:14px;letter-spacing:0}
+.m-desayuno{background:linear-gradient(180deg,color-mix(in srgb,#E9B44C 10%,transparent),transparent)}
+.m-comida{background:linear-gradient(180deg,color-mix(in srgb,var(--accent) 9%,transparent),transparent)}
+.m-cena{background:linear-gradient(180deg,color-mix(in srgb,#4B5D8C 10%,transparent),transparent)}
+.mdish{border:0;background:none;padding:0;text-align:left;font:inherit;font-family:var(--f-book);font-size:15.5px;line-height:1.25;color:var(--ink);cursor:pointer;display:flex;gap:6px;align-items:flex-start;justify-content:space-between}
+.mdish span{overflow:hidden;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical}
+.mdish svg{width:14px;height:14px;flex:none;margin-top:3px;color:var(--accent);opacity:.7}
+.mdish:hover span{text-decoration:underline;text-decoration-color:var(--accent);text-underline-offset:3px}
+.mdish.free svg{color:var(--muted)}
+.wk-leg{font-size:12.5px;margin:10px 0 0;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.wk-leg svg{width:13px;height:13px}
+/* en el ordenador, el menú cabe entero sin desplazar la página */
+@media (min-width:1000px) and (min-height:600px){
+  html.in-menu,html.in-menu body{overflow:hidden;height:100%}
+  .in-menu main{padding-block:18px 8px}
+  .in-menu .menu-page{height:calc(100dvh - var(--toph,64px) - 26px - 52px);display:flex;flex-direction:column}
+  .in-menu .menu-box{flex:1;min-height:0;display:flex;flex-direction:column}
+  .in-menu .wk{flex:1;min-height:0}
+}
+@media (max-width:999px){.wk{grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}.wk-day{grid-template-rows:auto}}
 .help{display:grid;gap:14px}
 .help-sec h2{display:flex;align-items:center;gap:8px;font-size:19px}
 .help-sec h2 svg{width:20px;height:20px;color:var(--accent)}
@@ -647,6 +677,6 @@ details.bulk summary svg{width:20px;height:20px;vertical-align:-3px;margin-right
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=15"></script>
+<script src="/app.js?v=16"></script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 'use strict';
 /* ===== Entre Fogones · cliente ===== */
+const MORE_CLOTHS = [['#1F3B2D','Verde botella'],['#4F7942','Helecho'],['#6B8E23','Oliva'],['#8A9A5B','Salvia'],['#2E8B57','Esmeralda'],['#0F6E6E','Petróleo'],['#2A7F9E','Turquesa'],['#4682B4','Acero'],['#1E2F4D','Medianoche'],['#5470A8','Lavanda azul'],['#7B68EE','Violeta'],['#4B2E5A','Berenjena'],['#8E4585','Malva'],['#C71585','Fucsia'],['#D46A84','Rosa palo'],['#E8A0A0','Rosa empolvado'],['#9B1B30','Burdeos'],['#C0392B','Tomate'],['#D35400','Calabaza'],['#E67E22','Naranja'],['#CC8899','Frambuesa'],['#D4A017','Oro viejo'],['#E1C16E','Trigo'],['#C2B280','Arena'],['#A0522D','Siena'],['#6F4E37','Café'],['#4A2C2A','Chocolate'],['#8B8589','Topo'],['#708090','Pizarra'],['#1C1C1C','Negro']];
 const CLOTHS = [['#2F5D46','Bosque'],['#7A2E2E','Granate'],['#26405F','Marino'],['#B2861E','Mostaza'],['#5B3E63','Ciruela'],['#B5562B','Canela'],['#3D3D3D','Carbón']];
 const AVCOLORS = ['#B5562B','#2F5D46','#26405F','#7A2E2E','#5B3E63','#B2861E','#2F7D85'];
 
@@ -164,22 +165,39 @@ function wrapSel(ta,mk){
   ta.focus(); ta.dispatchEvent(new Event('input'));
 }
 const fmtBar = id => `<span class="fmtbar"><button type="button" data-fmt="**" data-for="${id}" aria-label="Negrita" title="Negrita (Ctrl+B)"><b>N</b></button><button type="button" data-fmt="*" data-for="${id}" aria-label="Cursiva" title="Cursiva (Ctrl+I)"><i>C</i></button><button type="button" data-fmt="link" data-for="${id}" aria-label="Enlace" title="Poner un enlace en las palabras seleccionadas">${ico('link')}</button></span>`;
-document.addEventListener('mousedown',e=>{ const b=e.target.closest('[data-fmt]'); if(!b) return; e.preventDefault(); const ta=document.getElementById(b.dataset.for); if(!ta) return; if(b.dataset.fmt==='link') linkSel(ta); else wrapSel(ta,b.dataset.fmt); });
+// se guarda la selección de cada cuadro de texto para no perderla al tocar los botones (en el móvil se pierde)
+['select','keyup','mouseup','touchend','input','focus'].forEach(t=>document.addEventListener(t,e=>{ const ta=e.target; if(ta && ta.tagName==='TEXTAREA') setTimeout(()=>{ ta._sel=[ta.selectionStart,ta.selectionEnd]; },0); },true));
+document.addEventListener('mousedown',e=>{ if(e.target.closest('[data-fmt]')) e.preventDefault(); });
+document.addEventListener('click',e=>{ const b=e.target.closest('[data-fmt]'); if(!b) return; e.preventDefault(); const ta=document.getElementById(b.dataset.for); if(!ta) return;
+  if(document.activeElement!==ta && ta._sel){ ta.focus({preventScroll:true}); ta.setSelectionRange(ta._sel[0],ta._sel[1]); }
+  if(b.dataset.fmt==='link') linkSel(ta); else wrapSel(ta,b.dataset.fmt); });
 /* Enlace dentro de las palabras: a una web o a otra receta tuya */
 function linkSel(ta){
-  const a=ta.selectionStart, b=ta.selectionEnd, sel=ta.value.slice(a,b).trim();
-  const host=$('#modal-root .modal'); if(!host) return;
+  document.querySelectorAll('.linkpop').forEach(x=>x.remove());
+  let a=ta.selectionStart, b=ta.selectionEnd;
+  if(a===b){ // sin selección: la palabra donde está el cursor
+    const v=ta.value; while(a>0 && /[\p{L}\p{N}]/u.test(v[a-1])) a--; while(b<v.length && /[\p{L}\p{N}]/u.test(v[b])) b++; }
+  const sel=ta.value.slice(a,b).trim();
   const box=document.createElement('div'); box.className='linkpop';
-  box.innerHTML=`<div class="field"><label>Enlace para «${esc(sel||'texto')}»</label><input class="inp" id="lpUrl" placeholder="https://… o busca una receta tuya" autocomplete="off"></div><div class="pick" id="lpRes"></div><div class="row" style="justify-content:flex-end"><button type="button" class="btn sm" id="lpNo">Cancelar</button><button type="button" class="btn sm pri" id="lpOk">Poner enlace</button></div>`;
-  ta.closest('.field').after(box);
-  const inp=$('#lpUrl',box), res=$('#lpRes',box);
-  const put=u=>{ ta.setRangeText(`[${sel||'texto'}](${u})`,a,b,'end'); ta.dispatchEvent(new Event('input')); box.remove(); ta.focus(); };
-  const draw=()=>{ const q=inp.value.trim().toLowerCase(); if(!q||/^https?:/.test(q)){ res.innerHTML=''; return; }
-    res.innerHTML=S.recipes.filter(r=>(r.title||'').toLowerCase().includes(q)).slice(0,6).map(r=>`<button type="button" class="btn sm" data-rid="${esc(r.id)}">${ico('book')}${esc(r.title)}</button>`).join(''); };
-  inp.oninput=draw; res.onclick=e=>{ const x=e.target.closest('[data-rid]'); if(x) put('#r~'+x.dataset.rid); };
+  box.innerHTML=`<div class="lp-h"><b>Enlace en «${esc(sel||'texto')}»</b><button type="button" class="x" id="lpNo" aria-label="Cerrar">${ico('x')}</button></div>
+    <p class="muted" style="margin:0;font-size:13px">Toca una de tus recetas para enlazarla, o pega la dirección de una web.</p>
+    <input class="inp" id="lpUrl" placeholder="Buscar receta o pegar https://…" autocomplete="off" enterkeyhint="done">
+    <div class="pick lp-res" id="lpRes"></div>
+    <div class="row" style="justify-content:flex-end"><button type="button" class="btn sm pri" id="lpOk">${ico('link')}Poner enlace web</button></div>`;
+  (ta.closest('.field')||ta.parentNode).after(box);
+  const inp=$('#lpUrl',box), res=$('#lpRes',box), ok=$('#lpOk',box);
+  const put=u=>{ const txt=sel||'texto'; ta.focus({preventScroll:true}); ta.setRangeText(`[${txt}](${u})`,a,b,'end'); ta.dispatchEvent(new Event('input')); box.remove(); toast('Enlace puesto'); };
+  const draw=()=>{ const q=inp.value.trim().toLowerCase(); const isUrl=/^(https?:\/\/|www\.)/.test(q);
+    ok.hidden=!isUrl;
+    if(isUrl){ res.innerHTML=''; return; }
+    const list=S.recipes.filter(r=>(r.title||'').toLowerCase().includes(q||(sel||'').toLowerCase())||!q).sort(byTitle).slice(0,30);
+    res.innerHTML=list.length?list.map(r=>`<button type="button" class="btn sm" data-rid="${esc(r.id)}">${ico('book')}${esc(r.title||'Sin título')}</button>`).join(''):'<p class="muted" style="margin:0">No tienes recetas con ese nombre.</p>'; };
+  inp.oninput=draw;
+  inp.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); const q=inp.value.trim(); if(/^(https?:\/\/|www\.)/i.test(q)) put(/^https?:/i.test(q)?q:'https://'+q); else { const f=res.querySelector('[data-rid]'); if(f) put('#r~'+f.dataset.rid); } } else if(e.key==='Escape'){ e.stopPropagation(); box.remove(); } };
+  res.onclick=e=>{ const x=e.target.closest('[data-rid]'); if(x) put('#r~'+x.dataset.rid); };
   $('#lpNo',box).onclick=()=>box.remove();
-  $('#lpOk',box).onclick=()=>{ let u=inp.value.trim(); if(!u) return; if(!/^https?:\/\//.test(u)) u='https://'+u; put(u); };
-  setTimeout(()=>inp.focus(),20);
+  ok.onclick=()=>{ const q=inp.value.trim(); if(q) put(/^https?:/i.test(q)?q:'https://'+q); };
+  draw(); box.scrollIntoView({block:'nearest',behavior:'smooth'});
 }
 
 function scaleLine(line,f){
@@ -260,9 +278,8 @@ function renderTop(){
           <div class="um-head"><b>${esc(S.profile.display||'')}</b><small>@${esc(S.profile.username)}${S.me.email?' · '+esc(S.me.email):''}</small></div>
           <button role="menuitem" data-act="go" data-v="account" class="${cur==='account'?'active':''}">${ico('user')}Mi cuenta</button>
           ${isAdminMe()?`<button role="menuitem" data-act="go" data-v="admin" class="${cur==='admin'?'active':''}">${ico('shield')}Panel de administración</button>`:''}
-          <button role="menuitem" data-act="go" data-v="help">${ico('help')}Ayuda y manual de uso</button>
+          <button role="menuitem" data-act="go" data-v="help">${ico('help')}Manual de uso</button>
           <button role="menuitem" data-act="go" data-v="equiv">${ico('scale')}Equivalencias de medidas</button>
-          <a role="menuitem" class="um-link" href="/legal/aviso-legal" target="_blank" rel="noopener">${ico('doc')}Textos legales</a>
           <a role="menuitem" class="um-link" href="/legal/contacto" target="_blank" rel="noopener">${ico('mail')}Contacto</a>
           <hr>
           <button role="menuitem" class="danger" data-act="logout">${ico('out')}Cerrar sesión</button>
@@ -287,6 +304,7 @@ function render(){
   if(S.me?.suspended){ renderTop(); $('#main').innerHTML=viewSuspended(); return; }
   document.body.classList.toggle('in-book', S.view==='book');
   document.documentElement.classList.toggle('in-chat', S.view==='chat');
+  document.documentElement.classList.toggle('in-menu', S.view==='menu');
   if(['account','admin'].includes(S.view) && !S.profile) S.view='library';
   if(S.view==='admin' && !isAdminMe()) S.view='library';
   renderTop();
@@ -423,7 +441,6 @@ function viewLibrary(){
     slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`),
     ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
     none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
-    slot(`<button class="spine community" style="--cloth:#3F5E3A;height:240px" data-act="go" data-v="community" aria-label="Recetas de la comunidad: las que crean otras personas"><span class="st">Recetas de la comunidad</span><span class="sc">${ico('users')}</span></button>`),
     slot(`<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
   ].join('');
   const recent = S.recipes.slice(0,3);
@@ -436,7 +453,7 @@ function viewLibrary(){
   </div>
   <div class="fam-tools lib-search">
     <input id="libQ" class="inp" type="search" placeholder="Buscar en tus recetas: nombre o ingrediente" value="${esc(S.libQ||'')}" aria-label="Buscar en tus recetas">
-    <select id="libF" class="inp" aria-label="Recetario"><option value="">Todos los recetarios</option>${S.folders.map(f=>`<option value="${esc(f.id)}" ${S.libF===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="none" ${S.libF==='none'?'selected':''}>Sin recetario</option></select>
+    <select id="libF" class="inp" aria-label="Recetario"><option value="">Todos los recetarios (${S.recipes.length})</option>${S.folders.map(f=>`<option value="${esc(f.id)}" ${S.libF===f.id?'selected':''}>${esc(f.name)} (${S.recipes.filter(r=>r.folderId===f.id).length})</option>`).join('')}${none.length?`<option value="none" ${S.libF==='none'?'selected':''}>Sin recetario (${none.length})</option>`:''}</select>
   </div>
   <section class="lib-res" id="libRes">${libResultsHtml()}</section>
   <div class="shelf-wrap"><div class="shelves">${books}</div></div>
@@ -449,6 +466,11 @@ function viewLibrary(){
     <div class="sugg-h"><h2>Recetas recomendadas</h2><p class="muted">Cambian cada día. Ábrelas y guarda las que te gusten en tus recetarios.</p></div>
     <div class="cards" id="suggList">${suggHtml(6)}</div>
     <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="famous">Ver todas las recetas recomendadas ${ico('next')}</button></div>
+  </section>
+  <section class="recent sugg">
+    <div class="sugg-h"><h2>Recetas de la comunidad</h2><p class="muted">Las que otras personas han creado y compartido con todo el mundo.</p></div>
+    <div class="cards" id="comPrev">${communityPreviewHtml()}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="community">Ver todas las recetas de la comunidad ${ico('next')}</button></div>
   </section>`;
 }
 /* Buscador de la biblioteca */
@@ -646,11 +668,14 @@ function belowHtml(){
 /* Tabla nutricional por ración (la calcula la IA al guardar la receta) */
 function nutritionHtml(r){
   const n=r.nutrition;
-  if(!n||!n.kcal) return (!r.visiting && S.recipes.some(x=>x.id===r.id) && S.ai) ? `<section class="nutri"><h3>Información nutricional</h3><p class="muted" style="margin:0">Calculándola… aparecerá en unos segundos.</p></section>` : '';
-  const g=v=>v==null?'—':fmtNum(v)+' g';
-  const rows=[['Energía',`${Math.round(n.kcal)} kcal`,1],['Hidratos de carbono',g(n.carbs),1],['de los cuales azúcares',g(n.sugars),0],['Grasas',g(n.fat),1],['de las cuales saturadas',g(n.satfat),0],['Proteínas',g(n.protein),1],['Fibra',g(n.fiber),1],['Sal',g(n.salt),1]];
-  return `<section class="nutri"><h3>Información nutricional <small class="muted">por ración, aproximada</small></h3>
-    <table class="nutri-t"><tbody>${rows.map(([a,b,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${b}</td></tr>`).join('')}</tbody></table></section>`;
+  if(!n||!n.kcal) return (S.recipes.some(x=>x.id===r.id) && S.ai) ? `<section class="nutri"><h3>Información nutricional</h3><p class="muted" style="margin:0">Calculándola… aparecerá en unos segundos.</p></section>` : '';
+  const per=n.grams?100/n.grams:null;
+  const g=(v,u=' g')=>v==null?'—':fmtNum(Math.round(v*10)/10)+u;
+  const rows=[['Energía','kcal',1],['Hidratos de carbono','carbs',1],['de los cuales azúcares','sugars',0],['Grasas','fat',1],['de las cuales saturadas','satfat',0],['Proteínas','protein',1],['Fibra','fiber',1],['Sal','salt',1]];
+  const cell=(k,f)=>k==='kcal'?`${Math.round(n.kcal*f)} kcal`:g(n[k]==null?null:n[k]*f);
+  return `<section class="nutri"><h3>Información nutricional <small class="muted">aproximada</small></h3>
+    <table class="nutri-t"><thead><tr><th></th><th>Por ración${n.grams?`<small> (${Math.round(n.grams)} g)</small>`:''}</th>${per?'<th>Por 100 g</th>':''}</tr></thead>
+    <tbody>${rows.map(([a,k,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${cell(k,1)}</td>${per?`<td>${cell(k,per)}</td>`:''}</tr>`).join('')}</tbody></table></section>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
@@ -670,7 +695,7 @@ function pageHtml(p,num){
   const r=p.r, f=scaleOf(r);
   if(p.k==='rl'){
     return wrap(`<h2>${esc(r.title||'Sin título')}</h2>
-      <div class="meta">${servSelect(r,'onpage')}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
+      <div class="meta">${(()=>{ const n=parseInt(r.servings)?(S.scale[r.id]||parseInt(r.servings)):0; return n?`<span>${n} ${n===1?'ración':'raciones'}</span>`:(r.servings?`<span>${esc(r.servings)}</span>`:''); })()}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
       ${r.image?`<div class="pimgw" style="--pimg:url('${esc(r.image).replace(/'/g,'%27')}')"><img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.parentNode.remove();fitPages()"></div>`:''}
       <h3>Ingredientes</h3>
       ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}`);
@@ -799,7 +824,7 @@ function folderModal(f,{onCreated,simple}={}){
   const m=openModal(`${mHead(isNew?'Nuevo recetario':'Editar recetario')}
     <form id="ff" style="display:grid;gap:16px">
       <div class="field"><label for="fname">Nombre</label><input id="fname" class="inp" required maxlength="40" value="${esc(f.name)}" placeholder="Postres, Cenas rápidas, De la abuela…"></div>
-      <div class="field"><label>Color de la tela</label>${colorField('fcolor', color, CLOTHS)}</div>
+      <div class="field"><label>Color de la tela</label>${colorField('fcolor', color, CLOTHS, MORE_CLOTHS)}</div>
       ${bulk?`<div class="field"><label>Añadir recetas que ya tienes (opcional)</label>
         <div class="tabs" role="tablist"><button type="button" role="tab" data-bt="mine" aria-selected="true">Subidas por ti</button><button type="button" role="tab" data-bt="sugg" aria-selected="false">Recomendadas</button></div>
         <input id="bq" class="inp" type="search" placeholder="Buscar" aria-label="Buscar recetas">
@@ -1045,10 +1070,11 @@ function rgbToHex(r,g,b){return '#'+[r,g,b].map(x=>Math.max(0,Math.min(255,Math.
 function hsvToRgb(h,s,v){const f=n=>{const k=(n+h/60)%6;return v-v*s*Math.max(0,Math.min(k,4-k,1))};return [f(5)*255,f(3)*255,f(1)*255]}
 function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=((g-b)/d)%6;else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;if(h<0)h+=360}return [h,mx?d/mx:0,mx]}
 function inkOn(hex){ const [r,g,b]=hexToRgb(hex).map(x=>{x/=255;return x<=.03928?x/12.92:((x+.055)/1.055)**2.4}); return (.2126*r+.7152*g+.0722*b)>.42?'#2E1A11':'#FBF3E8'; }
-function colorField(id, value, presets){
+function colorField(id, value, presets, more){
   return `<div class="cfield" id="${id}" data-value="${esc(value)}">
     <div class="swatches">${presets.map(([c,n])=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="${esc(n)}"></button>`).join('')}
       <button type="button" class="sw wheelbtn" aria-label="Elegir otro color con la ruleta" aria-expanded="false"></button></div>
+    ${more?`<select class="inp cmore" aria-label="Más colores"><option value="">Más colores…</option>${more.map(([c,n])=>`<option value="${c}">● ${esc(n)}</option>`).join('')}</select>`:''}
     <div class="wheelbox" hidden>
       <div class="wheel"><canvas width="360" height="360" aria-label="Ruleta de color"></canvas><span class="knob"></span></div>
       <div class="wheelside">
@@ -1071,7 +1097,9 @@ function initColorField(root, id, onChange){
   const sync=from=>{ const c=rgbToHex(...hsvToRgb(h,s,v)); el.dataset.value=c; prev.style.background=c; if(from!=='hex') hex.value=c; sl.value=Math.round(v*100);
     const a=h*Math.PI/180; knob.style.left=(50+Math.cos(a)*s*50)+'%'; knob.style.top=(50+Math.sin(a)*s*50)+'%'; knob.style.background=c;
     let preset=false; el.querySelectorAll('.sw[data-c]').forEach(b=>{ const on=b.dataset.c.toUpperCase()===c; preset=preset||on; b.setAttribute('aria-pressed',on); });
+    const cm=el.querySelector('.cmore'); if(cm){ const o=[...cm.options].find(x=>x.value.toUpperCase()===c); cm.value=o?o.value:''; cm.style.borderLeft=`14px solid ${c}`; if(o) preset=true; }
     wb.setAttribute('aria-pressed',!preset); onChange?.(c); };
+  const cmore=el.querySelector('.cmore'); if(cmore) cmore.onchange=()=>{ if(!cmore.value) return; [h,s,v]=rgbToHsv(...hexToRgb(cmore.value)); if(!box.hidden) draw(); sync(); };
   el.querySelectorAll('.sw[data-c]').forEach(b=>b.onclick=()=>{ [h,s,v]=rgbToHsv(...hexToRgb(b.dataset.c)); if(!box.hidden) draw(); sync(); });
   wb.onclick=()=>{ box.hidden=!box.hidden; wb.setAttribute('aria-expanded',!box.hidden); if(!box.hidden){ if(v<.75) v=.85; draw(); sync(); } };
   const pick=e=>{ const r=cv.getBoundingClientRect(); const x=(e.clientX-r.left)/r.width*2-1, y=(e.clientY-r.top)/r.height*2-1;
@@ -1705,7 +1733,8 @@ function afterChat(){
   const f=$('#cform'); if(!f) return;
   const ta=$('#ctext');
   const draft=lsGet('ef_draft_'+S.chatWith); if(draft) ta.value=draft;
-  ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';lsSet('ef_draft_'+S.chatWith,ta.value)});
+  const fit=()=>{ta.style.height='auto';ta.style.height=Math.min(Math.max(ta.scrollHeight+2,42),130)+'px';};
+  ta.addEventListener('input',()=>{fit();lsSet('ef_draft_'+S.chatWith,ta.value)}); setTimeout(fit,0);
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();f.requestSubmit()}});
   f.onsubmit=async e=>{e.preventDefault();const t=ta.value.trim();if(!t)return;ta.value='';ta.style.height='auto';lsSet('ef_draft_'+S.chatWith,'');
     const type=S.askMode?'ask':'text'; S.askMode=false; ta.placeholder='Mensaje';
@@ -1894,8 +1923,8 @@ function admBulkHtml(){
       <div class="field"><label for="bkText">Recetas en texto (separa cada receta con una línea que tenga solo ---)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>
       <fieldset class="nt-opts"><legend>Dónde salen</legend>
         <label class="opt-line"><input type="radio" name="bkDest" value="sugg" checked> En «Recetas recomendadas», para todo el mundo</label>
-        <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una persona</label>
-        <div class="grid2" id="bkUser" hidden><div class="field"><label for="bkU">Usuario</label><input id="bkU" class="inp" placeholder="@usuario"></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
+        <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una o varias personas</label>
+        <div class="grid2" id="bkUser" hidden><div class="field"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="@lourdessalguero, @entrefogones"></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
           <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas de la comunidad)</label></div></fieldset>
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
       <div><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
@@ -2131,10 +2160,24 @@ function viewSuspended(){
 }
 
 /* ===== Recetas de la comunidad (las que la gente hace públicas) ===== */
+function communityCard(r){
+  return `<div class="rcard sg"><button class="sg-open" data-act="openCommunity" data-id="${esc(r.id)}">
+      <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">de ${esc(r.owner.display||'@'+r.owner.username)}${r.time?' · '+esc(r.time):''}</span></span></button>
+    <button class="btn sm tbtn" data-act="saveCommunity" data-id="${esc(r.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button></div>`;
+}
+let comPrevLoaded=0;
+function communityPreviewHtml(){
+  if(!S.communityAll || Date.now()-comPrevLoaded>5*60e3){ comPrevLoaded=Date.now(); api('GET','/community').then(l=>{ S.communityAll=l; l.forEach(r=>{ S.profiles[r.owner.id]=S.profiles[r.owner.id]||r.owner; }); const b=$('#comPrev'); if(b) b.innerHTML=communityPreviewHtml(); }).catch(()=>{}); }
+  const l=S.communityAll; if(!l) return '<p class="muted" style="margin:0">Cargando…</p>';
+  if(!l.length) return '<p class="muted" style="margin:0">Todavía nadie ha compartido recetas públicas. Al crear o editar una receta puedes marcarla como pública.</p>';
+  return l.slice(0,6).map(communityCard).join('');
+}
 function viewCommunity(){
   return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas de la comunidad</h1></div>
     <p class="muted" style="margin:0 0 12px">Recetas que otras personas han creado y han querido compartir con todo el mundo. Ábrelas y guárdate las que te gusten.</p>
-    <div class="fam-tools"><input id="comQ" class="inp" type="search" placeholder="Buscar en las recetas de la comunidad" value="${esc(S.comQ||'')}" aria-label="Buscar"></div>
+    ${S.profile?`<div class="fam-tools"><input id="comQ" class="inp" type="search" placeholder="Buscar en las recetas de la comunidad" value="${esc(S.comQ||'')}" aria-label="Buscar"></div>`
+      :`<div class="banner">${ico('lock')}<span style="flex:1;min-width:200px">Sin cuenta solo se ven las 6 últimas recetas publicadas. Inicia sesión o crea una cuenta gratis para verlas todas y buscar entre ellas.</span><button class="btn sm pri" data-act="login">Iniciar sesión</button></div>`}
     <div class="cards fam-grid" id="comList"><p class="muted">Cargando…</p></div>`;
 }
 let comT=null;
@@ -2142,9 +2185,7 @@ async function loadCommunity(){
   const box=$('#comList'); if(!box) return;
   try{ const list=await api('GET','/community?q='+encodeURIComponent(S.comQ||'')); S.community=list;
     list.forEach(r=>{ S.profiles[r.owner.id]=S.profiles[r.owner.id]||r.owner; });
-    box.innerHTML=list.length?list.map(r=>`<button class="rcard" data-act="openCommunity" data-id="${esc(r.id)}">
-      <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
-      <span style="min-width:0"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">de ${esc(r.owner.display||'@'+r.owner.username)}${r.time?' · '+esc(r.time):''}</span></span></button>`).join('')
+    box.innerHTML=list.length?list.map(communityCard).join('')
       :`<p class="muted" style="margin:0">${S.comQ?'No hay recetas con esa búsqueda.':'Todavía nadie ha compartido recetas públicas. Al crear o editar una receta puedes marcarla como pública.'}</p>`;
   }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se han podido cargar.')}</p>`; }
 }
@@ -2153,20 +2194,27 @@ function afterCommunity(){ const i=$('#comQ'); if(i) i.oninput=()=>{ S.comQ=i.va
 /* ===== Menú semanal ===== */
 function viewMenu(){
   if(!S.profile) return needProfileView('Menú semanal');
-  return `<div class="lib-head"><div><p class="eyebrow">Esta semana</p><h1>Menú semanal</h1></div>
-    <div class="row nowrap"><button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div></div>
-    <p class="muted" style="margin:-8px 0 16px">Cada semana se prepara solo un menú distinto con desayuno, comida y cena${(S.me.allergens||[]).length||S.me.prefs?.diabetes?', teniendo en cuenta tus alérgenos y necesidades':''}. Toca un plato para ver la receta.</p>
-    <div id="menuBox"><div class="status"><span class="spin"></span>Preparando tu menú…</div></div>`;
+  const mon=new Date(); mon.setDate(mon.getDate()-((mon.getDay()+6)%7)); const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  const f=d=>d.toLocaleDateString('es-ES',{day:'numeric',month:'long'});
+  return `<div class="menu-page">
+    <div class="menu-head"><div><p class="eyebrow">Semana del ${f(mon)} al ${f(sun)}</p><h1>Menú semanal</h1>
+      <p class="muted">Un menú distinto cada semana${(S.me.allergens||[]).length||S.me.prefs?.diabetes?', pensado para tus alérgenos y necesidades':''}. Toca un plato para ver la receta.</p></div>
+      <button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div>
+    <div id="menuBox" class="menu-box"><div class="status"><span class="spin"></span>Preparando tu menú…</div></div></div>`;
 }
+const MEALS=[['desayuno','Desayuno','☕'],['comida','Comida','🍲'],['cena','Cena','🌙']];
 function menuHtml(m){
   const today=(new Date().getDay()+6)%7;
-  const cell=(x,k)=>{ if(!x||!x.name) return '<span class="muted">—</span>';
+  const mon=new Date(); mon.setDate(mon.getDate()-today);
+  const cell=x=>{ if(!x||!x.name) return '<span class="muted">—</span>';
     const [t,id]=String(x.ref||'').split(':');
-    return x.ref?`<button class="mdish" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}">${esc(x.name)}</button>`:`<button class="mdish free" data-act="menuAsk" data-n="${esc(x.name)}" title="Pedir la receta a la IA">${esc(x.name)}</button>`; };
-  return `<div class="menu-grid">${m.days.map((d,i)=>`<section class="mday card ${i===today?'today':''}"><h3>${esc(d.day)}${i===today?' <span class="role r-admin">Hoy</span>':''}</h3>
-    <div class="mrow"><span class="mlbl">Desayuno</span>${cell(d.desayuno)}</div>
-    <div class="mrow"><span class="mlbl">Comida</span>${cell(d.comida)}</div>
-    <div class="mrow"><span class="mlbl">Cena</span>${cell(d.cena)}</div></section>`).join('')}</div>`;
+    return x.ref?`<button class="mdish" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}"><span>${esc(x.name)}</span>${ico('book')}</button>`
+      :`<button class="mdish free" data-act="menuAsk" data-n="${esc(x.name)}" title="Pedir la receta a la IA"><span>${esc(x.name)}</span>${ico('sparkle')}</button>`; };
+  const day=(d,i)=>{ const dt=new Date(mon); dt.setDate(mon.getDate()+i);
+    return `<section class="wk-day ${i===today?'today':''}"><header><span class="wk-dn">${esc(d.day)}</span><span class="wk-dd">${dt.getDate()}</span>${i===today?'<span class="wk-today">Hoy</span>':''}</header>
+      ${MEALS.map(([k,l,e])=>`<div class="wk-meal m-${k}"><span class="wk-ml"><span aria-hidden="true">${e}</span>${l}</span>${cell(d[k])}</div>`).join('')}</section>`; };
+  return `<div class="wk">${m.days.map(day).join('')}</div>
+    <p class="muted wk-leg">${ico('book')} receta de tus recetarios o de las recomendadas · ${ico('sparkle')} pídesela a la IA</p>`;
 }
 async function afterMenu(force){
   const box=$('#menuBox'); if(!box) return;
@@ -2201,7 +2249,7 @@ const EQUIV=[
 function viewEquiv(){
   return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Equivalencias de medidas</h1></div></div>
   <p class="muted" style="margin:-8px 0 16px">Valores aproximados para cucharadas rasas y tazas de 240 ml. Una cucharada colmada es más o menos el doble de una rasa.</p>
-  <section class="card"><h2>Calculadora</h2>
+  <div class="help eq-page"><section class="card"><h2>Calculadora</h2>
     <div class="eq-calc"><input id="eqN" class="inp" type="number" min="0" step="0.25" value="1" aria-label="Cantidad">
       <select id="eqU" class="inp" aria-label="Medida"><option value="cs">cucharada rasa</option><option value="cc">cucharadita rasa</option><option value="taza">taza</option><option value="g">gramos</option></select>
       <span>de</span><select id="eqI" class="inp" aria-label="Ingrediente">${EQUIV.map((e,i)=>`<option value="${i}">${esc(e[0].toLowerCase())}</option>`).join('')}</select></div>
@@ -2212,7 +2260,7 @@ function viewEquiv(){
     <tr><td>1 cucharada</td><td>15 ml</td></tr><tr><td>1 cucharadita</td><td>5 ml</td></tr><tr><td>1 cucharada de postre</td><td>10 ml</td></tr><tr><td>1 taza</td><td>240 ml</td></tr><tr><td>1 vaso de agua</td><td>200–250 ml</td></tr><tr><td>1 taza de café</td><td>100 ml</td></tr><tr><td>1 chorrito</td><td>10–15 ml</td></tr><tr><td>1 pizca</td><td>menos de 1 g</td></tr><tr><td>1 onza líquida (fl oz)</td><td>30 ml</td></tr><tr><td>1 pinta (EE. UU.)</td><td>473 ml</td></tr></tbody></table></div></section>
   <section class="card"><h2>Peso y temperatura</h2><div class="tbl-wrap"><table class="eq-tbl"><tbody>
     <tr><td>1 onza (oz)</td><td>28 g</td></tr><tr><td>1 libra (lb)</td><td>454 g</td></tr><tr><td>1 huevo mediano sin cáscara</td><td>50–55 g</td></tr><tr><td>1 sobre de levadura química</td><td>16 g</td></tr><tr><td>1 diente de ajo</td><td>4–5 g</td></tr><tr><td>1 nuez de mantequilla</td><td>10–15 g</td></tr>
-    <tr><td>Horno suave</td><td>150–160 °C</td></tr><tr><td>Horno medio</td><td>180 °C (350 °F)</td></tr><tr><td>Horno fuerte</td><td>200–220 °C (400–425 °F)</td></tr><tr><td>Horno con ventilador</td><td>unos 20 °C menos</td></tr></tbody></table></div></section>`;
+    <tr><td>Horno suave</td><td>150–160 °C</td></tr><tr><td>Horno medio</td><td>180 °C (350 °F)</td></tr><tr><td>Horno fuerte</td><td>200–220 °C (400–425 °F)</td></tr><tr><td>Horno con ventilador</td><td>unos 20 °C menos</td></tr></tbody></table></div></section></div>`;
 }
 function bindEquiv(){
   const n=$('#eqN'), u=$('#eqU'), i=$('#eqI'), o=$('#eqOut'); if(!n) return;
@@ -2233,7 +2281,8 @@ const ACT = {
   pdfFolder:el=>downloadPdf('/api/pdf/folder/'+el.dataset.id),
   menuOpen:el=>{ if(el.dataset.t==='r') ACT.openRecipe(el); else openSuggestion(el.dataset.id); },
   menuAsk:el=>{ if(!S.ai) return toast('La IA no está disponible ahora'); aiChatModal({prompt:'Dame la receta de '+el.dataset.n}); },
-  openCommunity:el=>{ const r=(S.community||[]).find(x=>x.id===el.dataset.id); if(r) showVisiting({id:'c-'+r.id, name:r.title, color:'#6E4429', owner:r.owner.id, ownerName:r.owner.display||('@'+r.owner.username), visiting:true, recipes:[r]}, 2); },
+  saveCommunity:el=>{ const r=[...(S.community||[]),...(S.communityAll||[])].find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Guardar en…', async fid=>{ try{ const {owner,id,folderId,public:_p,...rest}=r; await store.saveRecipe({...rest, id:gid(), folderId:fid, fromUid:owner.id, created:now()}); toast('Guardada en tu recetario'); }catch(e){ fail(e); } }); },
+  openCommunity:el=>{ const r=[...(S.community||[]),...(S.communityAll||[])].find(x=>x.id===el.dataset.id); if(r) showVisiting({id:'c-'+r.id, name:r.title, color:'#6E4429', owner:r.owner.id, ownerName:r.owner.display||('@'+r.owner.username), visiting:true, recipes:[r]}, 2); },
   openSugg:el=>openSuggestion(el.dataset.id),
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
@@ -2274,7 +2323,7 @@ const ACT = {
   chatSuggest:()=>recipePicker('Sugerir una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'suggest',t).catch(fail)),
   answerAsk:()=>recipePicker('Enviarle una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'answer',t).catch(fail)),
   chatShareFolder:()=>{ if(!S.folders.length) return; folderPicker('Compartir un recetario', fid=>{ const f=S.folders.find(x=>x.id===fid); if(f) sendShare(S.chatWith,'folder',f,'share').catch(fail); },{allowNone:false}); },
-  chatAsk:()=>{ S.askMode=true; const ta=$('#ctext'); ta.placeholder='¿Qué receta le pides? Ej.: ¿me pasas la de tu tarta de queso?'; ta.focus(); toast('Escribe qué receta le pides'); },
+  chatAsk:()=>{ S.askMode=true; const ta=$('#ctext'); ta.placeholder='¿Qué receta le pides?'; ta.focus(); toast('Escribe qué receta le pides'); },
   openRef:el=>openShared({kind:el.dataset.k, id:el.dataset.i}),
   saveRef:async el=>{
     const {k,i}=el.dataset;

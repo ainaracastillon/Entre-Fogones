@@ -171,7 +171,7 @@ function cleanRecipe(b) {
   let image = s(b.image, 400000);
   if (image && !/^data:image\/(jpeg|png|webp);base64,/.test(image) && !/^https?:\/\//.test(image) && !/^\/img\/[rs]\/[A-Za-z0-9]+(\?v=\d+)?$/.test(image)) image = '';
   const num = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n < 100000 ? Math.round(n * 10) / 10 : null; };
-  const nu = b.nutrition && typeof b.nutrition === 'object' ? Object.fromEntries(['kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt'].map(k => [k, num(b.nutrition[k])]).filter(([, v]) => v !== null)) : null;
+  const nu = b.nutrition && typeof b.nutrition === 'object' ? Object.fromEntries(['kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt', 'grams'].map(k => [k, num(b.nutrition[k])]).filter(([, v]) => v !== null)) : null;
   return {
     title: s(b.title, 160) || 'Sin título', image, servings: s(b.servings, 20), time: s(b.time, 40), difficulty: s(b.difficulty, 20),
     ingredients: arr(b.ingredients, 120, 300), steps: arr(b.steps, 80, 2000), notes: s(b.notes, 2000),
@@ -456,7 +456,7 @@ async function backfillRecipes() {
   } catch (e) { console.error('backfill', e.message); }
 }
 function queueRecipeWork(id) { recipeQueue.add(id); runRecipeQueue(); }
-const nutriSig = d => sha(JSON.stringify([d.ingredients || [], d.servings || ''])).slice(0, 16);
+const nutriSig = d => sha(JSON.stringify(['v2', d.ingredients || [], d.servings || ''])).slice(0, 16);
 async function runRecipeQueue() {
   if (recipeBusy) return; recipeBusy = true;
   try {
@@ -482,12 +482,12 @@ async function runRecipeQueue() {
 async function aiNutrition(d) {
   countAi();
   const out = parseJson(await llm({ maxTokens: 700, messages: [{ role: 'user', text: `Calcula la información nutricional aproximada POR RACIÓN de esta receta (${parseInt(d.servings) || 'calcula tú las'} raciones), con valores típicos de tablas de composición de alimentos.
-Devuelve SOLO un objeto JSON: {"kcal": número, "carbs": gramos de hidratos de carbono, "sugars": gramos de azúcares, "fat": gramos de grasas, "satfat": gramos de grasas saturadas, "protein": gramos de proteínas, "fiber": gramos de fibra, "salt": gramos de sal}.
+Devuelve SOLO un objeto JSON: {"grams": peso en gramos de una ración ya cocinada, "kcal": número, "carbs": gramos de hidratos de carbono, "sugars": gramos de azúcares, "fat": gramos de grasas, "satfat": gramos de grasas saturadas, "protein": gramos de proteínas, "fiber": gramos de fibra, "salt": gramos de sal}.
 Receta: ${String(d.title || '').slice(0, 160)}
 Ingredientes:
 ${(d.ingredients || []).slice(0, 60).join('\n')}` }] }));
   if (!out || !Number(out.kcal)) return null;
-  const o = {}; for (const k of ['kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt']) { const n = Number(out[k]); if (Number.isFinite(n) && n >= 0) o[k] = Math.round(n * 10) / 10; }
+  const o = {}; for (const k of ['grams', 'kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt']) { const n = Number(out[k]); if (Number.isFinite(n) && n >= 0) o[k] = Math.round(n * 10) / 10; }
   return o;
 }
 app.get('/img/r/:id', async (req, res) => {
@@ -500,10 +500,12 @@ app.get('/img/r/:id', async (req, res) => {
 // Recetas que la gente ha hecho públicas
 api.get('/community', async (req, res, next) => {
   try {
-    const term = String(req.query.q || '').trim().toLowerCase().slice(0, 60);
+    // sin cuenta solo se ven las 6 últimas publicadas
+    const full = !!req.user.username;
+    const term = full ? String(req.query.q || '').trim().toLowerCase().slice(0, 60) : '';
     const rows = (await q(`SELECT r.*, u.username, u.display, u.color FROM recipes r JOIN users u ON u.id=r.user_id
       WHERE (r.data->>'public')='true' AND u.username IS NOT NULL AND NOT u.blocked AND ($1='' OR lower(r.data->>'title') LIKE '%'||$1||'%' OR lower(r.data::text) LIKE '%'||$1||'%')
-      ORDER BY r.updated DESC LIMIT 200`, [term])).rows;
+      ORDER BY r.created DESC LIMIT $2`, [term, full ? 200 : 6])).rows;
     res.json(rows.map(r => ({ ...recipeOut(r), owner: { id: r.user_id, username: r.username, display: r.display, color: r.color } })));
   } catch (e) { next(e); }
 });
@@ -1048,7 +1050,9 @@ api.post('/ai/chat', needProfile, async (req, res) => {
     const out = parseJson(await llm({ system: CHEF + (h ? '\n\nMUY IMPORTANTE, ten siempre en cuenta esto:\n' + h : ''), messages: msgs, maxTokens: 3500 }));
     if (!out) return res.status(502).json({ error: 'No he entendido la respuesta. Vuelve a intentarlo.' });
     const wantImg = !!out.newImage || /\b(foto|imagen|picture|image)\b/i.test(msgs[msgs.length - 1].text) && /\b(pon|ponle|cambia|nueva|otra|genera|crea|haz|añade|mejor)\w*/i.test(msgs[msgs.length - 1].text);
-    res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe), newImage: wantImg });
+    let reply = String(out.reply || '');
+    if (wantImg && (/no puedo|no es posible|no tengo la capacidad|lo siento/i.test(reply) || !reply)) reply = 'Hecho: al guardar la receta se creará una foto nueva del plato con IA.';
+    res.json({ reply, recipe: cleanAi(out.recipe), newImage: wantImg });
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
 api.post('/ai/photo', needProfile, async (req, res) => {
@@ -1337,6 +1341,12 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).j
       } catch (e) { console.error('tipos', e.message); break; }
       await sleep(3000);
     }
+    // tabla nutricional de las recomendadas
+    if (PROVIDER) for (const r of (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND coalesce(data->'nutrition'->>'sig','') <> 'v2' ORDER BY position LIMIT 200")).rows) {
+      try { const n = await aiNutrition(r.data); if (n) await q("UPDATE suggestions SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ nutrition: { ...n, sig: 'v2' } }), r.id]); }
+      catch (e) { console.error('nutricion sugerencia', e.message); if (e.status === 429) break; }
+      await sleep(2500);
+    }
     // fotos generadas que falten
     const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;
     for (const s of rows) {
@@ -1461,41 +1471,94 @@ async function pdfImage(src) {
   return null;
 }
 const plain = t => String(t || '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+/* PDF con estética de pergamino antiguo */
+const PARCH = { bg: '#F1E2BC', bg2: '#E3CB94', ink: '#3E2A17', red: '#8B2E1A', muted: '#7A5A36', line: '#B8955A' };
+function parchmentPage(doc) {
+  const W = doc.page.width, H = doc.page.height;
+  doc.save();
+  const g = doc.radialGradient(W / 2, H / 2, Math.min(W, H) * 0.2, W / 2, H / 2, Math.max(W, H) * 0.75);
+  g.stop(0, PARCH.bg).stop(1, PARCH.bg2);
+  doc.rect(0, 0, W, H).fill(g);
+  // manchas suaves de papel viejo
+  const spots = [[0.15, 0.12, 60], [0.85, 0.2, 45], [0.2, 0.85, 70], [0.8, 0.9, 55], [0.55, 0.5, 90]];
+  for (const [x, y, r] of spots) { doc.circle(W * x, H * y, r).fillOpacity(0.05).fill('#8A6A3A'); }
+  doc.fillOpacity(1);
+  // marco doble con esquinas
+  doc.lineWidth(1.6).strokeColor(PARCH.line).rect(24, 24, W - 48, H - 48).stroke();
+  doc.lineWidth(0.6).rect(30, 30, W - 60, H - 60).stroke();
+  for (const [x, y] of [[30, 30], [W - 30, 30], [30, H - 30], [W - 30, H - 30]]) { doc.save().translate(x, y).rotate(45).rect(-4, -4, 8, 8).fill(PARCH.line).restore(); }
+  doc.restore();
+  doc.fillColor(PARCH.ink);
+}
+function ornament(doc, y) {
+  const W = doc.page.width, cx = W / 2; y = y ?? doc.y;
+  doc.save().lineWidth(0.8).strokeColor(PARCH.line).moveTo(cx - 110, y).lineTo(cx - 12, y).stroke().moveTo(cx + 12, y).lineTo(cx + 110, y).stroke();
+  doc.translate(cx, y).rotate(45).rect(-4, -4, 8, 8).fill(PARCH.red).restore();
+  doc.y = y + 12; doc.x = doc.page.margins.left;
+}
+function NUTRI_PDF(doc, n) {
+  const x0 = doc.page.margins.left, w = doc.page.width - x0 - doc.page.margins.right;
+  if (doc.y > doc.page.height - 230) doc.addPage();
+  doc.moveDown(0.8).font('Times-Bold').fontSize(14).fillColor(PARCH.red).text('Información nutricional', x0, doc.y, { width: w });
+  const per = n.grams ? 100 / n.grams : null;
+  const f = (v, u) => v == null ? '–' : (Math.round(v * 10) / 10).toLocaleString('es-ES') + u;
+  const rows = [['Energía', 'kcal', ' kcal'], ['Hidratos de carbono', 'carbs', ' g'], ['   de los cuales azúcares', 'sugars', ' g'], ['Grasas', 'fat', ' g'], ['   de las cuales saturadas', 'satfat', ' g'], ['Proteínas', 'protein', ' g'], ['Fibra', 'fiber', ' g'], ['Sal', 'salt', ' g']];
+  let y = doc.y + 6; const c1 = x0 + w - 230, c2 = x0 + w - 110;
+  doc.font('Times-Italic').fontSize(10).fillColor(PARCH.muted).text(`Por ración${n.grams ? ` (${Math.round(n.grams)} g)` : ''}`, c1, y, { width: 110, align: 'right' }).text('Por 100 g', c2, y, { width: 110, align: 'right' });
+  y += 16;
+  for (const [label, k, u] of rows) {
+    doc.font(label.startsWith(' ') ? 'Times-Italic' : 'Times-Roman').fontSize(11).fillColor(PARCH.ink).text(label, x0 + 6, y, { width: 260 });
+    doc.text(f(k === 'kcal' ? Math.round(n.kcal) : n[k], u), c1, y, { width: 110, align: 'right' });
+    doc.text(per ? f(k === 'kcal' ? Math.round(n.kcal * per) : (n[k] == null ? null : n[k] * per), u) : '–', c2, y, { width: 110, align: 'right' });
+    y += 16; doc.save().lineWidth(0.4).strokeColor(PARCH.line).moveTo(x0, y - 3).lineTo(x0 + w, y - 3).stroke().restore();
+  }
+  doc.y = y + 4; doc.x = x0;
+}
 async function buildPdf(title, recipes, res) {
   let PDFDocument;
   try { PDFDocument = require('pdfkit'); } catch { return res.status(503).json({ error: 'La descarga en PDF se está instalando. Prueba en unos minutos.' }); }
-  const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: title, Author: 'Entre Fogones' } });
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 62, bottom: 62, left: 62, right: 62 }, info: { Title: title, Author: 'Entre Fogones' }, bufferPages: true });
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title).replace(/%20/g, ' ')}.pdf"; filename*=UTF-8''${encodeURIComponent(title)}.pdf`);
   doc.pipe(res);
-  const ink = '#3B2116', accent = '#B5562B', muted = '#7A5C4C';
+  parchmentPage(doc); doc.on('pageAdded', () => parchmentPage(doc));
+  const W = doc.page.width, L = 62, CW = W - 124;
   if (recipes.length > 1) {
-    doc.moveDown(8).font('Times-Bold').fontSize(34).fillColor(ink).text(title, { align: 'center' });
-    doc.moveDown(0.5).font('Helvetica').fontSize(13).fillColor(muted).text(`${recipes.length} recetas · Entre Fogones`, { align: 'center' });
-    doc.addPage().font('Times-Bold').fontSize(22).fillColor(ink).text('Índice').moveDown(0.6);
-    recipes.forEach((r, i) => doc.font('Helvetica').fontSize(12).fillColor(ink).text(`${i + 1}. ${plain(r.title)}`).moveDown(0.2));
+    doc.y = 230; ornament(doc);
+    doc.moveDown(0.6).font('Times-Bold').fontSize(38).fillColor(PARCH.ink).text(title, L, doc.y, { width: CW, align: 'center' });
+    doc.moveDown(0.4); ornament(doc);
+    doc.moveDown(0.6).font('Times-Italic').fontSize(14).fillColor(PARCH.muted).text(`${recipes.length} recetas · Entre Fogones`, L, doc.y, { width: CW, align: 'center' });
+    doc.addPage().font('Times-Bold').fontSize(26).fillColor(PARCH.red).text('Índice', L, doc.y, { width: CW, align: 'center' }); ornament(doc, doc.y + 6); doc.moveDown(0.6);
+    recipes.forEach((r, i) => doc.font('Times-Roman').fontSize(13).fillColor(PARCH.ink).text(`${i + 1}.  ${plain(r.title)}`, L + 20, doc.y, { width: CW - 40 }).moveDown(0.25));
   }
   for (let i = 0; i < recipes.length; i++) {
     const r = recipes[i];
     if (recipes.length > 1 || i > 0) doc.addPage();
-    doc.font('Times-Bold').fontSize(26).fillColor(ink).text(plain(r.title || 'Sin título'));
-    const meta = [r.servings && `${r.servings} ${r.servings === '1' ? 'ración' : 'raciones'}`, r.time, r.difficulty].filter(Boolean).join('  ·  ');
-    if (meta) doc.moveDown(0.2).font('Helvetica').fontSize(11).fillColor(muted).text(meta);
-    doc.moveDown(0.6);
+    doc.font('Times-Bold').fontSize(30).fillColor(PARCH.ink).text(plain(r.title || 'Sin título'), L, doc.y, { width: CW, align: 'center' });
+    const meta = [r.servings && `${r.servings} ${r.servings === '1' ? 'ración' : 'raciones'}`, r.time, r.difficulty].filter(Boolean).join('   ·   ');
+    if (meta) doc.moveDown(0.2).font('Times-Italic').fontSize(12).fillColor(PARCH.muted).text(meta, L, doc.y, { width: CW, align: 'center' });
+    doc.moveDown(0.4); ornament(doc); doc.moveDown(0.3);
     const img = await pdfImage(r.image);
-    if (img) { try { const y = doc.y; doc.image(img, { fit: [495, 240], align: 'center' }); if (doc.y < y + 10) doc.y = y + 240; doc.moveDown(0.8); } catch { } }
-    doc.font('Helvetica-Bold').fontSize(14).fillColor(accent).text('Ingredientes').moveDown(0.3);
-    (r.ingredients || []).forEach(x => doc.font('Helvetica').fontSize(11).fillColor(ink).text('•  ' + plain(x), { indent: 6 }).moveDown(0.15));
-    doc.moveDown(0.6).font('Helvetica-Bold').fontSize(14).fillColor(accent).text('Preparación').moveDown(0.3);
-    (r.steps || []).forEach((x, k) => doc.font('Helvetica').fontSize(11).fillColor(ink).text(`${k + 1}.  ${plain(x)}`, { indent: 6, lineGap: 2 }).moveDown(0.3));
-    if (r.notes) doc.moveDown(0.4).font('Helvetica-Oblique').fontSize(11).fillColor(muted).text(plain(r.notes));
-    const n = r.nutrition;
-    if (n && n.kcal) {
-      doc.moveDown(0.6).font('Helvetica-Bold').fontSize(12).fillColor(accent).text('Información nutricional por ración (aprox.)').moveDown(0.2);
-      const rows = [['Energía', `${Math.round(n.kcal)} kcal`], ['Hidratos de carbono', `${n.carbs ?? '–'} g`], ['  de los cuales azúcares', `${n.sugars ?? '–'} g`], ['Grasas', `${n.fat ?? '–'} g`], ['  de las cuales saturadas', `${n.satfat ?? '–'} g`], ['Proteínas', `${n.protein ?? '–'} g`], ['Fibra', `${n.fiber ?? '–'} g`], ['Sal', `${n.salt ?? '–'} g`]];
-      rows.forEach(([a, b]) => { const y = doc.y; doc.font('Helvetica').fontSize(10).fillColor(ink).text(a, 56, y, { width: 260 }); doc.text(b, 320, y, { width: 120, align: 'right' }); doc.moveDown(0.1); });
-      doc.x = 50;
-    }
+    if (img) { try { const y = doc.y, h = 210, w = 300, x = (W - w) / 2;
+      doc.save().lineWidth(3).strokeColor('#FFF8E6').rect(x - 4, y - 4, w + 8, h + 8).stroke().restore();
+      doc.save().rect(x, y, w, h).clip().image(img, x, y, { cover: [w, h], align: 'center', valign: 'center' }).restore();
+      doc.save().lineWidth(0.8).strokeColor(PARCH.line).rect(x - 6, y - 6, w + 12, h + 12).stroke().restore();
+      doc.y = y + h + 18; doc.x = L; } catch { } }
+    doc.font('Times-Bold').fontSize(16).fillColor(PARCH.red).text('Ingredientes', L, doc.y, { width: CW }).moveDown(0.3);
+    (r.ingredients || []).forEach(x => doc.font('Times-Roman').fontSize(12).fillColor(PARCH.ink).text('❧  '.replace('❧', '•') + plain(x), L + 8, doc.y, { width: CW - 8 }).moveDown(0.15));
+    doc.moveDown(0.6).font('Times-Bold').fontSize(16).fillColor(PARCH.red).text('Preparación', L, doc.y, { width: CW }).moveDown(0.3);
+    (r.steps || []).forEach((x, k) => doc.font('Times-Roman').fontSize(12).fillColor(PARCH.ink).text(`${k + 1}.  ${plain(x)}`, L + 8, doc.y, { width: CW - 8, lineGap: 2, align: 'justify' }).moveDown(0.35));
+    if (r.notes) { doc.moveDown(0.4); ornament(doc); doc.font('Times-Italic').fontSize(13).fillColor(PARCH.muted).text(plain(r.notes), L + 20, doc.y, { width: CW - 40, align: 'center' }); }
+    if (r.credit) doc.moveDown(0.3).font('Times-Italic').fontSize(10).fillColor(PARCH.muted).text('Receta de ' + r.credit, L, doc.y, { width: CW, align: 'right' });
+    if (r.nutrition && r.nutrition.kcal) NUTRI_PDF(doc, r.nutrition);
+  }
+  // números de página y pie
+  const range = doc.bufferedPageRange();
+  for (let p = range.start; p < range.start + range.count; p++) {
+    doc.switchToPage(p);
+    const bm = doc.page.margins.bottom; doc.page.margins.bottom = 0;
+    doc.font('Times-Italic').fontSize(9).fillColor(PARCH.muted).text(`Entre Fogones  ·  ${p - range.start + 1}`, 0, doc.page.height - 44, { width: W, align: 'center', lineBreak: false });
+    doc.page.margins.bottom = bm;
   }
   doc.end();
 }
@@ -1646,17 +1709,23 @@ adm.post('/bulk/save', async (req, res, next) => {
     if (!d.ingredients.length && !d.steps.length) return res.status(400).json({ error: 'La receta está vacía.' });
     d.credit = String(req.body.credit || d.credit || '').slice(0, 120);
     if (dest.type === 'user') {
-      const u = (await q('SELECT id FROM users WHERE username=$1', [String(dest.username || '').toLowerCase().replace(/^@/, '')])).rows[0];
-      if (!u) return res.status(404).json({ error: `No existe @${dest.username}.` });
-      let fid = null; const fname = String(dest.folder || '').trim().slice(0, 40);
-      if (fname) {
-        const f = (await q('SELECT id FROM folders WHERE user_id=$1 AND lower(name)=lower($2)', [u.id, fname])).rows[0];
-        fid = f ? f.id : gid(); if (!f) await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [fid, u.id, fname, '#7A2E2E', now()]);
+      const names = [...new Set(String(dest.username || '').split(/[,;\s]+/).map(x => x.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))].slice(0, 50);
+      if (!names.length) return res.status(400).json({ error: 'Escribe al menos un usuario.' });
+      const users = (await q('SELECT id, username FROM users WHERE username = ANY($1)', [names])).rows;
+      const missing = names.filter(n => !users.some(u => u.username === n));
+      if (missing.length) return res.status(404).json({ error: `No existe: ${missing.map(n => '@' + n).join(', ')}.` });
+      const fname = String(dest.folder || '').trim().slice(0, 40);
+      for (const u of users) {
+        let fid = null;
+        if (fname) {
+          const f = (await q('SELECT id FROM folders WHERE user_id=$1 AND lower(name)=lower($2)', [u.id, fname])).rows[0];
+          fid = f ? f.id : gid(); if (!f) await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [fid, u.id, fname, '#7A2E2E', now()]);
+        }
+        const id = gid();
+        await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
+        queueRecipeWork(id);
       }
-      const id = gid();
-      await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
-      queueRecipeWork(id);
-      return res.json({ ok: true, id });
+      return res.json({ ok: true, n: users.length });
     }
     // por defecto, a Recetas recomendadas (visibles para todo el mundo)
     const id = gid(), pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
