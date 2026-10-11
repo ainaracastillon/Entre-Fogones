@@ -12,7 +12,7 @@ function legalPages({ name, email, host }) {
       title: 'Aviso legal y términos de uso',
       body: `
 <h2>1. Quién está detrás de Entre Fogones</h2>
-<p>Entre Fogones (${host}) es una aplicación web gratuita y sin ánimo de lucro para guardar, organizar y compartir recetas de cocina. Su titular es ${who} (en adelante, «nosotros»). Puedes contactar con nosotros ${contact}.</p>
+<p>Entre Fogones (${host}) es una aplicación web gratuita y sin ánimo de lucro para guardar, organizar en recetarios y compartir recetas de cocina. Su titular es ${who} (en adelante, «nosotros»). Puedes contactar con nosotros ${contact}.</p>
 
 <h2>2. Aceptación</h2>
 <p>Al usar Entre Fogones aceptas estas condiciones. Si creas una cuenta, además declaras haber leído la <a href="/legal/privacidad">política de privacidad</a>. Si no estás de acuerdo, no uses la aplicación.</p>
@@ -24,12 +24,12 @@ function legalPages({ name, email, host }) {
 <p>Puedes guardar recetas sin crear una cuenta: quedan asociadas a este navegador mediante una cookie técnica y se pierden si la borras. Con una cuenta (nombre de usuario, correo y contraseña) tus recetas están en todos tus dispositivos y puedes tener amigos y usar el chat. Eres responsable de guardar tu contraseña en secreto y de lo que se haga con tu cuenta.</p>
 
 <h2>5. Lo que publicas</h2>
-<p>Las recetas, fotos, notas y mensajes que subes son tuyos y sigues siendo su titular. Para que la aplicación funcione nos das permiso para guardarlos, mostrarlos y enviarlos a las personas con quien decidas compartirlos, solo con esa finalidad y mientras no los borres.</p>
+<p>Las recetas, recetarios, fotos, notas y mensajes que subes son tuyos y sigues siendo su titular. Para que la aplicación funcione nos das permiso para guardarlos, mostrarlos y enviarlos a las personas con quien decidas compartirlos, solo con esa finalidad y mientras no los borres.</p>
 <p>Al subir contenido garantizas que tienes derecho a hacerlo. Las recetas importadas de webs, vídeos o fotos de libros pueden tener autor: guárdalas para tu uso personal y, si las compartes, respeta los derechos de sus autores e indica la fuente. Nos reservamos el derecho a retirar contenido ilícito, ofensivo o que infrinja derechos de terceros, y a cerrar cuentas que incumplan estas condiciones.</p>
 <p>Está prohibido usar Entre Fogones para acosar a otras personas, enviar publicidad no deseada, suplantar a nadie o intentar acceder a datos ajenos o dañar el servicio.</p>
 
 <h2>6. Enlaces compartidos</h2>
-<p>Cuando compartes una receta o carpeta con un enlace, cualquier persona que tenga ese enlace puede verla y guardarse una copia. No compartas por enlace nada que quieras mantener privado.</p>
+<p>Cuando compartes una receta o un recetario con un enlace, cualquier persona que tenga ese enlace puede verla y guardarse una copia. No compartas por enlace nada que quieras mantener privado.</p>
 
 <h2>7. Funciones con inteligencia artificial</h2>
 <p>Las funciones de crear recetas en el chat, leer fotos, leer vídeos y leer webs usan un servicio externo de inteligencia artificial. Sus respuestas pueden contener errores: revisa siempre ingredientes, cantidades, tiempos, temperaturas y alérgenos antes de cocinar. Entre Fogones no da consejos médicos ni nutricionales.</p>
@@ -41,7 +41,7 @@ function legalPages({ name, email, host }) {
 <p>El diseño, el logotipo, el nombre y el código de Entre Fogones son de su titular. No puedes copiarlos ni usarlos con fines comerciales sin permiso.</p>
 
 <h2>10. Darte de baja</h2>
-<p>Puedes borrar tu cuenta cuando quieras desde «Tu cuenta › Borrar mi cuenta». Se borran tu perfil, tus recetas, tus carpetas, tus amistades y los mensajes que has enviado.</p>
+<p>Puedes borrar tu cuenta cuando quieras desde «Tu cuenta › Borrar mi cuenta». Se borran tu perfil, tus recetas, tus recetarios, tus amistades y los mensajes que has enviado.</p>
 
 <h2>11. Cambios</h2>
 <p>Podemos actualizar estas condiciones. Si el cambio es importante te avisaremos en la aplicación. La fecha de la última actualización aparece al final de esta página.</p>
@@ -57,9 +57,9 @@ function legalPages({ name, email, host }) {
 
 <h2>Qué datos tratamos</h2>
 <ul>
-<li><strong>Si usas la app sin cuenta:</strong> un identificador anónimo guardado en una cookie técnica, y las recetas y carpetas que crees.</li>
+<li><strong>Si usas la app sin cuenta:</strong> un identificador anónimo guardado en una cookie técnica, y las recetas y recetarios que crees.</li>
 <li><strong>Si creas una cuenta:</strong> tu nombre, tu nombre de usuario, tu correo electrónico, tu contraseña (guardada cifrada, nunca en claro) y el color que eliges.</li>
-<li><strong>Tu contenido:</strong> recetas, fotos, notas, carpetas, amistades y mensajes del chat.</li>
+<li><strong>Tu contenido:</strong> recetas, fotos, notas, recetarios, amistades y mensajes del chat.</li>
 <li><strong>Datos técnicos:</strong> la dirección IP y datos de la conexión que registran los servidores por seguridad.</li>
 </ul>
 <p>No pedimos datos especialmente sensibles. No metas en las recetas ni en el chat información de salud u otros datos personales que no quieras compartir.</p>
@@ -73,7 +73,7 @@ function legalPages({ name, email, host }) {
 <p>No vendemos tus datos, no hacemos publicidad ni perfiles comerciales, y no enviamos boletines.</p>
 
 <h2>Quién más ve tus datos</h2>
-<p>Las personas con quien compartes recetas, carpetas o mensajes, y cualquiera que tenga un enlace que hayas compartido. Tus amigos ven tu nombre, tu usuario y tu color; tu correo no se muestra a nadie.</p>
+<p>Las personas con quien compartes recetas, recetarios o mensajes, y cualquiera que tenga un enlace que hayas compartido. Tus amigos ven tu nombre, tu usuario y tu color; tu correo no se muestra a nadie.</p>
 <p>Además usamos estos proveedores, que tratan los datos solo por cuenta nuestra:</p>
 <ul>
 <li><strong>Render</strong> (Render Services, Inc., EE. UU.): alojamiento de la aplicación, en su región de Fráncfort (UE).</li>
@@ -138,11 +138,11 @@ function legalHtml(page, opts) {
     .map(([k, t]) => `<a href="/legal/${k}"${k === page ? ' aria-current="page"' : ''}>${t}</a>`).join('');
   return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${p.title} · Entre Fogones</title><link rel="icon" href="/icon.svg" type="image/svg+xml"><meta name="robots" content="noindex">
-<link rel="stylesheet" href="/fonts/bricolage/index.css">
+<link rel="stylesheet" href="/fonts/fonts.css">
 <style>
 :root{--bg:#F6EEE6;--fg:#3B2116;--muted:#7A5C4C;--line:#E7D5C5;--accent:#B5562B;--card:#FFFAF5}
 @media (prefers-color-scheme:dark){:root{--bg:#1C1310;--fg:#F3E6DA;--muted:#BFA391;--line:#3B2B23;--accent:#E8834F;--card:#271B16;color-scheme:dark}}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 'Bricolage Grotesque Variable','Bricolage Grotesque',system-ui,sans-serif}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 'Bricolage Grotesque',system-ui,sans-serif}
 .w{max-width:760px;margin:0 auto;padding:24px 16px 64px}
 header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px}
 header a.home{color:var(--fg);text-decoration:none;font-weight:800;font-size:20px}

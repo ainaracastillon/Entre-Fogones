@@ -58,6 +58,15 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS contact_messages(
     id TEXT PRIMARY KEY, email TEXT NOT NULL, subject TEXT, message TEXT NOT NULL, user_id TEXT, created BIGINT NOT NULL);
   ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT false;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS allergens JSONB NOT NULL DEFAULT '[]'::jsonb;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen BIGINT;
+  ALTER TABLE contact_messages ADD COLUMN IF NOT EXISTS status TEXT;
+  CREATE TABLE IF NOT EXISTS suggestions(
+    id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, author TEXT, image TEXT, position INT NOT NULL DEFAULT 0, hidden BOOLEAN, tries INT, created BIGINT NOT NULL);
+  CREATE TABLE IF NOT EXISTS ai_usage(day TEXT PRIMARY KEY, n INT NOT NULL DEFAULT 0);
   ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_at BIGINT;
   CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(lower(email)) WHERE email IS NOT NULL;
   CREATE TABLE IF NOT EXISTS password_resets(
@@ -93,7 +102,14 @@ async function auth(req, res, next) {
     const token = parseCookies(req.headers.cookie).ef;
     if (token) {
       const r = await q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1', [token]);
-      if (r.rows[0]) { req.user = r.rows[0]; req.token = token; return next(); }
+      const u = r.rows[0];
+      if (u && !u.blocked) {
+        if (u.username && u.email && u.email.toLowerCase() === SUPERADMIN_EMAIL && u.role !== 'superadmin') { await q("UPDATE users SET role='superadmin' WHERE id=$1", [u.id]); u.role = 'superadmin'; }
+        req.user = u; req.token = token;
+        if (u.username && (!u.last_seen || now() - Number(u.last_seen) > 600e3)) q('UPDATE users SET last_seen=$1 WHERE id=$2', [now(), u.id]).catch(() => {});
+        return next();
+      }
+      if (u && u.blocked) await q('DELETE FROM sessions WHERE token=$1', [token]);
     }
     const id = gid();
     await q('INSERT INTO users(id,created) VALUES($1,$2)', [id, now()]);
@@ -103,10 +119,10 @@ async function auth(req, res, next) {
     next();
   } catch (e) { next(e); }
 }
-const needProfile = (req, res, next) => req.user.username ? next() : res.status(403).json({ error: 'Necesitas un perfil para esto.' });
+const needProfile = (req, res, next) => req.user.username ? next() : res.status(403).json({ error: 'Inicia sesión o crea una cuenta para usar esto.', needAccount: true });
 
 /* ---------- Ayudantes ---------- */
-const pub = u => u ? { id: u.id, username: u.username, display: u.display, color: u.color } : null;
+const pub = u => u ? { id: u.id, username: u.username, display: u.display, color: u.color, avatar: u.avatar || null } : null;
 function recipeOut(r) { return { ...r.data, id: r.id, folderId: r.folder_id, created: Number(r.created), updated: Number(r.updated) }; }
 function cleanRecipe(b) {
   const s = (v, n) => String(v ?? '').slice(0, n);
@@ -126,9 +142,6 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '6mb' }));
 app.get('/healthz', (req, res) => res.send('ok'));
-// Tipografías servidas desde la propia app (paquetes de Fontsource), sin Google Fonts
-const FONT_PKGS = { bricolage: '@fontsource-variable/bricolage-grotesque', 'young-serif': '@fontsource/young-serif', caveat: '@fontsource/caveat' };
-for (const [k, pkg] of Object.entries(FONT_PKGS)) app.use('/fonts/' + k, express.static(path.join(__dirname, 'node_modules', pkg), { maxAge: '30d', immutable: true }));
 // HTML, JS y manifiesto se revalidan siempre para que se vea la última versión al momento
 app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders(res, file) {
   if (/\.(html|js|css|webmanifest)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
@@ -154,10 +167,10 @@ api.get('/state', async (req, res, next) => {
     chats.rows.forEach(c => { ids.add(c.a); ids.add(c.b); });
     recipes.rows.forEach(r => r.data.fromUid && ids.add(r.data.fromUid));
     ids.delete(me);
-    const people = ids.size ? (await q('SELECT id,username,display,color FROM users WHERE id = ANY($1)', [[...ids]])).rows : [];
+    const people = ids.size ? (await q('SELECT id,username,display,color,avatar FROM users WHERE id = ANY($1)', [[...ids]])).rows : [];
     const profiles = {}; people.forEach(p => profiles[p.id] = pub(p));
     res.json({
-      me: { ...pub(req.user), email: req.user.email || null, lastRead: req.user.last_read || {} }, profiles,
+      me: { ...pub(req.user), email: req.user.email || null, role: req.user.username ? req.user.role : 'user', allergens: req.user.allergens || [], lastRead: req.user.last_read || {} }, profiles,
       folders: folders.rows.map(f => ({ id: f.id, name: f.name, color: f.color, created: Number(f.created) })),
       recipes: recipes.rows.map(recipeOut),
       requests: reqs.rows.map(r => ({ from: r.from_id, to: r.to_id, status: r.status, ts: Number(r.ts) })),
@@ -184,6 +197,7 @@ api.post('/register', async (req, res, next) => {
     if ((await q('SELECT 1 FROM users WHERE lower(email)=$1', [email])).rows[0]) return res.status(409).json({ error: 'Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.' });
     await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',
       [username, display, String(req.body.color || '#B5562B').slice(0, 9), hashPass(password), email, now(), req.user.id]);
+    await syncRole(req.user.id, email);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -204,6 +218,8 @@ api.post('/login', async (req, res, next) => {
     const r = await q('SELECT * FROM users WHERE username=$1 OR (email IS NOT NULL AND lower(email)=$1) LIMIT 1', [who]);
     const u = r.rows[0];
     if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
+    if (u.blocked) return res.status(403).json({ error: 'Esta cuenta está bloqueada. Si crees que es un error, escríbenos desde Contacto.' });
+    await syncRole(u.id, u.email);
     await adoptAnon(req, u.id);
     await newSession(res, u.id);
     res.json({ ok: true });
@@ -348,7 +364,7 @@ api.get('/public/recipe/:id', async (req, res, next) => {
 api.get('/public/folder/:id', async (req, res, next) => {
   try {
     const f = (await q('SELECT f.*, u.username, u.display, u.color AS ucolor FROM folders f JOIN users u ON u.id=f.user_id WHERE f.id=$1', [req.params.id])).rows[0];
-    if (!f) return res.status(404).json({ error: 'Esta carpeta ya no existe.' });
+    if (!f) return res.status(404).json({ error: 'Este recetario ya no existe.' });
     const rs = await q('SELECT * FROM recipes WHERE folder_id=$1 AND user_id=$2', [f.id, f.user_id]);
     res.json({ folder: { id: f.id, name: f.name, color: f.color }, recipes: rs.rows.map(recipeOut), owner: { id: f.user_id, username: f.username, display: f.display, color: f.ucolor } });
   } catch (e) { next(e); }
@@ -402,7 +418,7 @@ api.post('/chats/:other/messages', needProfile, async (req, res, next) => {
     if (b.snap) data.snap = { title: String(b.snap.title || '').slice(0, 160), time: String(b.snap.time || '').slice(0, 40), servings: String(b.snap.servings || '').slice(0, 20), n: Number(b.snap.n) || 0 };
     if (type === 'text' && !data.text) return res.status(400).json({ error: 'Mensaje vacío' });
     await q('INSERT INTO messages(id,chat_id,from_id,ts,data) VALUES($1,$2,$3,$4,$5)', [gid(), key, me, ts, data]);
-    const preview = type === 'recipe' ? `Receta: ${data.snap?.title || ''}` : type === 'folder' ? `Carpeta: ${data.snap?.title || ''}` : (type === 'ask' ? 'Pide una receta: ' : '') + data.text;
+    const preview = type === 'recipe' ? `Receta: ${data.snap?.title || ''}` : type === 'folder' ? `Recetario: ${data.snap?.title || ''}` : (type === 'ask' ? 'Pide una receta: ' : '') + data.text;
     const [a, bb] = [me, other].sort();
     await q(`INSERT INTO chats(id,a,b,ts,last) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET ts=$4, last=$5`, [key, a, bb, ts, { from: me, text: preview.slice(0, 140) }]);
     res.json({ ok: true, ts });
@@ -537,7 +553,8 @@ async function importVideo(url, res) {
   let v;
   try { v = await videoText(url); }
   catch (e) { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer; pega aquí la descripción o lo que dicen en el vídeo.', needText: true }); }
-  if (v.text && PROVIDER) {
+  if (v.text && PROVIDER && res.req.user.username) {
+    countAi();
     try { const r = await aiFromVideo(v.title, v.text); if (r) return res.json({ recipe: { ...r, image: v.image || '', source: url }, fromVideo: true }); } catch (e) { console.error(e); }
   }
   res.status(422).json({ needText: true, text: v.text || '', error: v.text
@@ -545,7 +562,7 @@ async function importVideo(url, res) {
     : 'Ese vídeo no trae texto que se pueda leer. Pega la descripción o lo que dicen, o sube el vídeo para que se escuche.' });
 }
 // Subir el vídeo: se transcribe lo que se dice (Groq Whisper) y se saca la receta
-api.post('/import/video-file', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+api.post('/import/video-file', needProfile, express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
   if (PROVIDER !== 'groq') return noAi(res);
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'No ha llegado el vídeo. Vuelve a intentarlo.' });
   try {
@@ -573,8 +590,8 @@ api.post('/import', async (req, res) => {
   catch (e) { return res.status(422).json({ error: 'No he podido abrir esa web. Pega el texto de la receta y la saco de ahí.', needText: true }); }
   const ld = parseJsonLd(html);
   if (ld && ld.ingredients.length) return res.json({ recipe: { ...ld, source: url } });
-  if (PROVIDER) {
-    try { const r = await aiExtract(htmlToText(html)); if (r) return res.json({ recipe: { ...r, image: ogImage(html), source: url } }); } catch (e) { console.error(e); }
+  if (PROVIDER && req.user.username) {
+    try { countAi(); const r = await aiExtract(htmlToText(html)); if (r) return res.json({ recipe: { ...r, image: ogImage(html), source: url } }); } catch (e) { console.error(e); }
   }
   res.status(422).json({ error: 'No he encontrado la receta en esa página. Pega el texto de la receta y la saco de ahí.', needText: true });
 });
@@ -664,7 +681,8 @@ api.get('/ai/check', async (req, res) => {
   }
   res.json(out);
 });
-api.post('/ai/extract', async (req, res) => {
+api.post('/ai/extract', needProfile, async (req, res) => {
+  countAi();
   if (!PROVIDER) return noAi(res);
   try { const r = await aiExtract(req.body.text || ''); if (!r) return res.status(422).json({ error: 'No he encontrado una receta en ese texto. Revisa que hayas copiado la página entera.' }); res.json({ recipe: r }); }
   catch (e) { console.error(e); res.status(502).json({ error: 'No he podido leer el texto. Vuelve a intentarlo.' }); }
@@ -676,7 +694,8 @@ Responde SIEMPRE con un único objeto JSON con esta forma: {"reply": string, "re
 - Cuando te pidan cambios, devuelve en "recipe" la receta completa ya modificada, no solo lo que cambia.
 - Si te preguntan algo que no es una receta, contesta en "reply" y pon "recipe": null.
 Usa cantidades métricas (g, ml, cucharadas), un ingrediente por elemento con su cantidad delante, pasos claros sin numerar, y en "notes" un consejo breve de cocinero. Puedes marcar con **texto** lo más importante de un paso.`;
-api.post('/ai/chat', async (req, res) => {
+api.post('/ai/chat', needProfile, async (req, res) => {
+  countAi();
   if (!PROVIDER) return noAi(res);
   const msgs = (Array.isArray(req.body.messages) ? req.body.messages : []).slice(-20)
     .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.content || '').slice(0, 12000) })).filter(m => m.text);
@@ -687,7 +706,8 @@ api.post('/ai/chat', async (req, res) => {
     res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe) });
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
-api.post('/ai/photo', async (req, res) => {
+api.post('/ai/photo', needProfile, async (req, res) => {
+  countAi();
   if (!PROVIDER) return noAi(res);
   const m = String(req.body.image || '').match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
   if (!m) return res.status(400).json({ error: 'Esa imagen no se puede leer.' });
@@ -700,6 +720,262 @@ Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido leer la foto. Vuelve a intentarlo.' }); }
 });
 
+/* ---------- Mi cuenta (como Kairos) ---------- */
+api.put('/me/profile', needProfile, async (req, res, next) => {
+  try {
+    const display = String(req.body.display || '').trim().slice(0, 40);
+    const username = String(req.body.username || '').trim().toLowerCase().replace(/^@/, '');
+    const color = String(req.body.color || req.user.color || '#B5562B').slice(0, 9);
+    if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
+    if ((await q('SELECT 1 FROM users WHERE username=$1 AND id<>$2', [username, req.user.id])).rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
+    await q('UPDATE users SET display=$1, username=$2, color=$3 WHERE id=$4', [display, username, color, req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.put('/me/email', needProfile, async (req, res, next) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
+    if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
+    if ((await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
+    await q('UPDATE users SET email=$1 WHERE id=$2', [email, req.user.id]);
+    await syncRole(req.user.id, email);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.put('/me/password', needProfile, async (req, res, next) => {
+  try {
+    if (!checkPass(String(req.body.current || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña actual no es correcta.' });
+    const pw = String(req.body.password || '');
+    if (pw.length < 6) return res.status(400).json({ error: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+    await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [hashPass(pw), req.user.id]);
+    await q('DELETE FROM sessions WHERE user_id=$1 AND token<>$2', [req.user.id, req.token]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.put('/me/avatar', needProfile, async (req, res, next) => {
+  try {
+    const img = String(req.body.image || '');
+    if (!/^data:image\/(jpeg|png|webp);base64,/.test(img) || img.length > 120000) return res.status(400).json({ error: 'Esa foto no se puede usar. Prueba con otra.' });
+    await q('UPDATE users SET avatar=$1 WHERE id=$2', [img, req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.delete('/me/avatar', needProfile, async (req, res, next) => {
+  try { await q('UPDATE users SET avatar=NULL WHERE id=$1', [req.user.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.put('/me/allergens', needProfile, async (req, res, next) => {
+  try {
+    const list = (Array.isArray(req.body.allergens) ? req.body.allergens : []).map(x => String(x).trim().slice(0, 40)).filter(Boolean).slice(0, 30);
+    await q('UPDATE users SET allergens=$1 WHERE id=$2', [JSON.stringify([...new Set(list)]), req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.get('/me/export', needProfile, async (req, res, next) => {
+  try {
+    const me = req.user.id;
+    const [f, r, rq, m] = await Promise.all([
+      q('SELECT id,name,color,created FROM folders WHERE user_id=$1', [me]),
+      q('SELECT * FROM recipes WHERE user_id=$1', [me]),
+      q('SELECT * FROM requests WHERE from_id=$1 OR to_id=$1', [me]),
+      q('SELECT chat_id, ts, data FROM messages WHERE from_id=$1 ORDER BY ts', [me])
+    ]);
+    res.json({ exportado: new Date().toISOString(), cuenta: { usuario: req.user.username, nombre: req.user.display, correo: req.user.email, color: req.user.color, alergenos: req.user.allergens || [] },
+      recetarios: f.rows, recetas: r.rows.map(recipeOut), amistades: rq.rows, mensajesEnviados: m.rows });
+  } catch (e) { next(e); }
+});
+
+/* ---------- Sugerencias de recetas famosas ---------- */
+const SEED_SUGGESTIONS = [
+  ['Arroz con leche de Dabiz Muñoz', 'https://cookpad.com/es/recetas/26663487', 'Punk Cooker'],
+  ['Patatas con salsa brava estilo Jordi Cruz', 'https://cookpad.com/es/recetas/26124437', 'Ainoa Doñas'],
+  ['Coca de San Juan de Joseba Arguiñano', 'https://cookpad.com/es/recetas/25846893', 'mami.cocinillas'],
+  ['Cheesecake viral de TikTok', 'https://cookpad.com/es/recetas/25659519', 'Quiero Cacahuetes'],
+  ['Tarta de queso estilo DiverXO', 'https://cookpad.com/es/recetas/25568424', 'Cris Castro'],
+  ['Chapata de Ibán Yarza', 'https://cookpad.com/es/recetas/25483853', 'Obrador Cutanda'],
+  ['Albóndigas de bonito en salsa de piquillo de Joseba Arguiñano', 'https://cookpad.com/es/recetas/25235730', 'Pedro Barbi Ayucar'],
+  ['Tarta de manzana y almendras de Eva Arguiñano', 'https://cookpad.com/es/recetas/25117776', 'mami.cocinillas'],
+  ['El famoso bizcocho de yogur', 'https://cookpad.com/es/recetas/24612011', 'jaramillo'],
+  ['Café dalgona', 'https://cookpad.com/es/recetas/24522309', 'Quiero Cacahuetes'],
+  ['Albóndigas estilo Arguiñano', 'https://cookpad.com/es/recetas/24415525', 'Nekane'],
+  ['Risotto de fresas al cava de Karlos Arguiñano', 'https://cookpad.com/es/recetas/24064912', 'La Mélangerie'],
+  ['Brigadeiros, las trufas brasileñas más famosas', 'https://cookpad.com/es/recetas/17269523', 'Saalinas'],
+  ['Carrot cake con granola de Jordi Cruz', 'https://cookpad.com/es/recetas/17252514', 'Cocina con Albóndiga'],
+  ['Pollo rustido al estilo Ruscalleda', 'https://cookpad.com/es/recetas/17251979', 'CocinarParaCuatro'],
+  ['Huevos fritos en queso feta, receta viral de TikTok', 'https://cookpad.com/es/recetas/17113916', 'Josemi CilantroYHierbabuena'],
+  ['Tiramisú versionado del original de Jamie Oliver', 'https://cookpad.com/es/recetas/17062654', 'Cocina con Celi'],
+];
+async function seedSuggestions() {
+  const n = (await q('SELECT count(*)::int n FROM suggestions')).rows[0].n;
+  if (n) return;
+  let i = 0;
+  for (const [title, url, author] of SEED_SUGGESTIONS) await q('INSERT INTO suggestions(id,title,url,author,image,position,created) VALUES($1,$2,$3,$4,NULL,$5,$6)', [gid(), title, url, author, i++, now()]);
+}
+async function enrichSuggestions() {
+  const rows = (await q("SELECT id,url FROM suggestions WHERE image IS NULL AND (tries IS NULL OR tries<3) LIMIT 30")).rows;
+  for (const s of rows) {
+    try {
+      const r = await safeFetch(s.url); const html = await r.text();
+      const ld = parseJsonLd(html); const img = (ld && ld.image) || metaTag(html, 'og:image');
+      if (img) await q('UPDATE suggestions SET image=$1 WHERE id=$2', [String(img).slice(0, 800), s.id]);
+      else await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]);
+    } catch { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]).catch(() => {}); }
+  }
+}
+api.get('/suggestions', async (req, res, next) => {
+  try { res.json((await q('SELECT id,title,url,author,image FROM suggestions WHERE hidden IS NOT TRUE ORDER BY position, created')).rows); } catch (e) { next(e); }
+});
+
+/* ---------- Alérgenos: la IA mira si la receta tiene algo que el usuario no puede tomar ---------- */
+api.post('/ai/allergens', needProfile, async (req, res) => {
+  if (!PROVIDER) return noAi(res);
+  const allergens = req.user.allergens || [];
+  if (!allergens.length) return res.json({ issues: [] });
+  const r = req.body.recipe || {};
+  const ings = (Array.isArray(r.ingredients) ? r.ingredients : []).map(String).slice(0, 80);
+  if (!ings.length) return res.json({ issues: [] });
+  try {
+    countAi();
+    const out = parseJson(await llm({ maxTokens: 2000, messages: [{ role: 'user', text: `Eres un cocinero experto en alergias e intolerancias alimentarias. La persona tiene estas alergias o intolerancias: ${allergens.join(', ')}.
+Revisa los ingredientes de la receta "${String(r.title || '').slice(0, 160)}" y detecta los que contienen alguna de ellas (también si la contienen de forma oculta, por ejemplo la harina de trigo tiene gluten o la mantequilla tiene lactosa).
+Devuelve SOLO un objeto JSON con esta forma:
+{"issues":[{"index": número del ingrediente empezando en 0, "ingredient": texto del ingrediente, "allergen": cuál de las alergias de la persona, "substitutes": [hasta 3 ingredientes alternativos escritos como línea de ingrediente con su cantidad, que no tengan ninguna de sus alergias], "canRemove": true si la receta sigue funcionando sin él, "note": frase breve}]}
+Si no hay ninguno, devuelve {"issues": []}. No inventes problemas.
+Ingredientes:
+${ings.map((x, i) => i + '. ' + x).join('\n')}` }] }));
+    const issues = (out && Array.isArray(out.issues) ? out.issues : []).filter(x => Number.isInteger(x.index) && x.index >= 0 && x.index < ings.length).slice(0, 20)
+      .map(x => ({ index: x.index, ingredient: ings[x.index], allergen: String(x.allergen || '').slice(0, 60), substitutes: (x.substitutes || []).map(String).slice(0, 3), canRemove: !!x.canRemove, note: String(x.note || '').slice(0, 200) }));
+    res.json({ issues });
+  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido revisar los alérgenos ahora.' }); }
+});
+
+/* ---------- Panel de administración ---------- */
+const SUPERADMIN_EMAIL = (process.env.SUPERADMIN_EMAIL || 'ainara14cs@hotmail.com').toLowerCase();
+async function syncRole(userId, email) {
+  const isSuper = String(email || '').toLowerCase() === SUPERADMIN_EMAIL;
+  if (isSuper) await q("UPDATE users SET role='superadmin' WHERE id=$1", [userId]);
+  else await q("UPDATE users SET role='user' WHERE id=$1 AND role='superadmin'", [userId]);
+}
+const isAdmin = u => u && (u.role === 'admin' || u.role === 'superadmin') && u.username;
+const needAdmin = (req, res, next) => isAdmin(req.user) ? next() : res.status(403).json({ error: 'No tienes acceso al panel de administración.' });
+const needSuper = (req, res, next) => req.user.role === 'superadmin' ? next() : res.status(403).json({ error: 'Solo la superadministradora puede hacer esto.' });
+const adm = express.Router();
+adm.use(needAdmin);
+adm.get('/stats', async (req, res, next) => {
+  try {
+    const day = 86400e3, t = now();
+    const one = async (sql, p = []) => (await q(sql, p)).rows[0];
+    const [u, r, f, m, c, ai, contact] = await Promise.all([
+      one(`SELECT count(*) FILTER (WHERE username IS NOT NULL)::int cuentas, count(*) FILTER (WHERE username IS NULL)::int anonimos,
+           count(*) FILTER (WHERE role IN ('admin','superadmin'))::int admins, count(*) FILTER (WHERE blocked)::int bloqueados,
+           count(*) FILTER (WHERE username IS NOT NULL AND accepted_at>$1)::int nuevas7, count(*) FILTER (WHERE last_seen>$2)::int activos7 FROM users`, [t - 7 * day, t - 7 * day]),
+      one('SELECT count(*)::int total, count(*) FILTER (WHERE created>$1)::int nuevas7 FROM recipes', [t - 7 * day]),
+      one('SELECT count(*)::int total FROM folders'),
+      one('SELECT count(*)::int total, count(*) FILTER (WHERE ts>$1)::int nuevos7 FROM messages', [t - 7 * day]),
+      one("SELECT count(*) FILTER (WHERE status='accepted')::int amistades FROM requests"),
+      one('SELECT coalesce(sum(n) FILTER (WHERE day=$1),0)::int hoy, coalesce(sum(n) FILTER (WHERE day>=$2),0)::int semana FROM ai_usage', [new Date(t).toISOString().slice(0, 10), new Date(t - 6 * day).toISOString().slice(0, 10)]),
+      one("SELECT count(*) FILTER (WHERE coalesce(status,'nuevo')='nuevo')::int nuevos FROM contact_messages"),
+    ]);
+    const since = t - 30 * day;
+    const series = async (sql) => { const rows = (await q(sql, [since])).rows; const m = Object.fromEntries(rows.map(x => [x.d, x.n])); return Array.from({ length: 30 }, (_, i) => { const d = new Date(since + (i + 1) * day).toISOString().slice(0, 10); return { d, n: m[d] || 0 }; }); };
+    const altas = await series("SELECT to_char(to_timestamp(accepted_at/1000) AT TIME ZONE 'UTC','YYYY-MM-DD') d, count(*)::int n FROM users WHERE accepted_at>$1 GROUP BY 1");
+    const recetas = await series("SELECT to_char(to_timestamp(created/1000) AT TIME ZONE 'UTC','YYYY-MM-DD') d, count(*)::int n FROM recipes WHERE created>$1 GROUP BY 1");
+    res.json({ usuarios: u, recetas: r, recetarios: f, mensajes: m, amistades: c.amistades, ia: ai, contacto: contact, altas, recetasDia: recetas });
+  } catch (e) { next(e); }
+});
+adm.get('/users', async (req, res, next) => {
+  try {
+    const term = String(req.query.q || '').trim().toLowerCase().replace(/^@/, '').slice(0, 60);
+    const rows = (await q(`SELECT u.id,u.username,u.display,u.email,u.color,u.avatar,u.role,u.blocked,u.accepted_at,u.last_seen,
+      (SELECT count(*)::int FROM recipes r WHERE r.user_id=u.id) recetas
+      FROM users u WHERE u.username IS NOT NULL AND ($1='' OR u.username LIKE '%'||$1||'%' OR lower(u.display) LIKE '%'||$1||'%' OR lower(u.email) LIKE '%'||$1||'%')
+      ORDER BY (u.role='superadmin') DESC, (u.role='admin') DESC, u.accepted_at DESC NULLS LAST LIMIT 200`, [term])).rows;
+    res.json(rows.map(x => ({ ...x, accepted_at: Number(x.accepted_at) || null, last_seen: Number(x.last_seen) || null })));
+  } catch (e) { next(e); }
+});
+adm.put('/users/:id/role', needSuper, async (req, res, next) => {
+  try {
+    const role = req.body.role === 'admin' ? 'admin' : 'user';
+    const t = (await q('SELECT role FROM users WHERE id=$1 AND username IS NOT NULL', [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: 'Esa cuenta no existe.' });
+    if (t.role === 'superadmin') return res.status(400).json({ error: 'La superadministradora no se puede cambiar.' });
+    await q('UPDATE users SET role=$1 WHERE id=$2', [role, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+async function canModerate(actor, targetId) {
+  const t = (await q('SELECT role FROM users WHERE id=$1', [targetId])).rows[0];
+  if (!t) return 'Esa cuenta no existe.';
+  if (targetId === actor.id) return 'No puedes hacerlo con tu propia cuenta.';
+  if (t.role === 'superadmin') return 'La superadministradora no se puede bloquear ni borrar.';
+  if (t.role === 'admin' && actor.role !== 'superadmin') return 'Solo la superadministradora puede hacerlo con otros administradores.';
+  return null;
+}
+adm.put('/users/:id/block', async (req, res, next) => {
+  try {
+    const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    const blocked = !!req.body.blocked;
+    await q('UPDATE users SET blocked=$1 WHERE id=$2', [blocked, req.params.id]);
+    if (blocked) await q('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.delete('/users/:id', async (req, res, next) => {
+  try {
+    const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);
+    await q('DELETE FROM chats WHERE a=$1 OR b=$1', [req.params.id]);
+    await q('DELETE FROM users WHERE id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.get('/recipes', async (req, res, next) => {
+  try {
+    const term = String(req.query.q || '').trim().toLowerCase().slice(0, 80);
+    const rows = (await q(`SELECT r.id, r.data->>'title' title, r.data->>'image' image, r.created, r.updated, u.username, u.display, u.id uid
+      FROM recipes r JOIN users u ON u.id=r.user_id WHERE ($1='' OR lower(r.data->>'title') LIKE '%'||$1||'%' OR u.username LIKE '%'||$1||'%')
+      ORDER BY r.created DESC LIMIT 120`, [term])).rows;
+    res.json(rows.map(x => ({ ...x, image: x.image && x.image.startsWith('http') ? x.image : (x.image ? 'data' : ''), created: Number(x.created) })));
+  } catch (e) { next(e); }
+});
+adm.delete('/recipes/:id', async (req, res, next) => {
+  try { await q('DELETE FROM recipes WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.get('/contact', async (req, res, next) => {
+  try { res.json((await q("SELECT id,email,subject,message,coalesce(status,'nuevo') status,created FROM contact_messages ORDER BY created DESC LIMIT 200")).rows.map(x => ({ ...x, created: Number(x.created) }))); } catch (e) { next(e); }
+});
+adm.put('/contact/:id', async (req, res, next) => {
+  try { await q('UPDATE contact_messages SET status=$1 WHERE id=$2', [req.body.status === 'respondido' ? 'respondido' : 'nuevo', req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.delete('/contact/:id', async (req, res, next) => {
+  try { await q('DELETE FROM contact_messages WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.get('/suggestions', async (req, res, next) => {
+  try { res.json((await q('SELECT id,title,url,author,image,hidden,position FROM suggestions ORDER BY position, created')).rows); } catch (e) { next(e); }
+});
+adm.post('/suggestions', async (req, res, next) => {
+  try {
+    const url = String(req.body.url || '').trim();
+    if (!/^https?:\/\//.test(url)) return res.status(400).json({ error: 'Pega el enlace de la receta.' });
+    let title = String(req.body.title || '').trim().slice(0, 160), image = null, author = String(req.body.author || '').trim().slice(0, 80);
+    try { const r = await safeFetch(url); const html = await r.text(); const ld = parseJsonLd(html); title = title || (ld && ld.title) || metaTag(html, 'og:title'); image = (ld && ld.image) || metaTag(html, 'og:image') || null; } catch { }
+    if (!title) return res.status(422).json({ error: 'No he podido leer esa receta. Escribe el título.' });
+    const pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
+    await q('INSERT INTO suggestions(id,title,url,author,image,position,created) VALUES($1,$2,$3,$4,$5,$6,$7)', [gid(), title.slice(0, 160), url, author || null, image, pos, now()]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.put('/suggestions/:id', async (req, res, next) => {
+  try { await q('UPDATE suggestions SET hidden=$1 WHERE id=$2', [!!req.body.hidden, req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+adm.delete('/suggestions/:id', async (req, res, next) => {
+  try { await q('DELETE FROM suggestions WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.use('/admin', adm);
+
+function countAi() { const d = new Date().toISOString().slice(0, 10); q('INSERT INTO ai_usage(day,n) VALUES($1,1) ON CONFLICT(day) DO UPDATE SET n=ai_usage.n+1', [d]).catch(() => {}); }
+
 app.use('/api', api);
 app.get('/legal/:page', (req, res, next) => {
   const html = legalHtml(req.params.page, { name: process.env.LEGAL_NAME || 'Ainara Castillón', email: process.env.LEGAL_EMAIL || '', host: req.get('host') });
@@ -709,5 +985,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(() => app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)))
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => enrichSuggestions().catch(e => console.error(e)), 5000); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });

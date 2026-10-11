@@ -36,6 +36,15 @@ const ICONS = {
   hand:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>', user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
+  down:'<path d="M6 9l6 6 6-6"/>',
+  shield:'<path d="M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z"/>',
+  doc:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
+  mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  download:'<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>',
+  lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
   users:'<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c1-3.5 3.5-5.5 6.5-5.5s5.5 2 6.5 5.5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M18 14.6c2 .8 3.2 2.6 3.5 5.4"/>',
   expand:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   play:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
@@ -51,6 +60,7 @@ function avatar(id, cls=''){
   const p = S.profiles[id]||{};
   const name = p.display||p.username||'?';
   const ini = name.trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
+  if(p.avatar) return `<span class="av ${cls} has-photo"><img src="${esc(p.avatar)}" alt=""></span>`;
   return `<span class="av ${cls}" style="background:${esc(p.color||'#7A5C4C')};color:${inkOn(p.color||'#7A5C4C')}">${esc(ini)}</span>`;
 }
 const pname = id => S.profiles[id]?.display || (S.profiles[id]?.username ? '@'+S.profiles[id].username : 'Alguien');
@@ -149,7 +159,7 @@ async function loadState(){
   refresh();
 }
 const store = {
-  async saveRecipe(r){ const {id,...body}=r; await api('PUT','/recipes/'+id, body); await loadState(); },
+  async saveRecipe(r,{check=true}={}){ if(check && !S.recipes.some(x=>x.id===r.id)) r=await allergenReview(r); const {id,...body}=r; await api('PUT','/recipes/'+id, body); await loadState(); return r; },
   async deleteRecipe(id){ await api('DELETE','/recipes/'+id); await loadState(); },
   async saveFolder(f){ const {id,...body}=f; await api('PUT','/folders/'+id, body); await loadState(); },
   async deleteFolder(id){ await api('DELETE','/folders/'+id); await loadState(); }
@@ -186,41 +196,66 @@ const pendingIn = () => S.reqIn.filter(r=>r.status==='pending');
 const canSocial = () => !!S.profile;
 
 /* ===== Render general ===== */
+const isAdminMe = () => !!S.profile && (S.me?.role==='admin' || S.me?.role==='superadmin');
 function renderTop(){
   const unread = S.booted && canSocial() ? unreadCount() : 0;
   const pend = S.booted && canSocial() ? pendingIn().length : 0;
   const cur = S.view==='book' ? 'library' : S.view;
+  const userBox = !S.booted ? '' : canSocial() ? `
+      <div class="userbox">
+        <button class="user-btn ${['account','admin'].includes(cur)?'active':''}" id="userBtn" aria-haspopup="menu" aria-expanded="false" aria-controls="userMenu" title="Tu cuenta">
+          ${avatar(S.uid)}<span class="nl uname">${esc(S.profile.display||S.profile.username)}</span>${ico('down')}
+        </button>
+        <div class="user-menu" id="userMenu" role="menu" hidden>
+          <div class="um-head"><b>${esc(S.profile.display||'')}</b><small>@${esc(S.profile.username)}${S.me.email?' · '+esc(S.me.email):''}</small></div>
+          <button role="menuitem" data-act="go" data-v="account" class="${cur==='account'?'active':''}">${ico('user')}Mi cuenta</button>
+          ${isAdminMe()?`<button role="menuitem" data-act="go" data-v="admin" class="${cur==='admin'?'active':''}">${ico('shield')}Panel de administración</button>`:''}
+          <a role="menuitem" class="um-link" href="/legal/aviso-legal" target="_blank" rel="noopener">${ico('doc')}Textos legales</a>
+          <a role="menuitem" class="um-link" href="/legal/contacto" target="_blank" rel="noopener">${ico('mail')}Contacto</a>
+          <hr>
+          <button role="menuitem" class="danger" data-act="logout">${ico('out')}Cerrar sesión</button>
+        </div>
+      </div>` : `<button class="login" data-act="login">${ico('user')}<span class="nl"><span class="long">Iniciar sesión</span><span class="short">Entrar</span></span></button>`;
   $('#topbar').innerHTML = `
-    <button class="brand" data-act="go" data-v="library" aria-label="Entre Fogones, ir a la biblioteca">${spoon(38)}<span class="w"><span class="w1" style="display:block">entre</span><span class="w2" style="display:block">fogones</span></span></button>
+    <button class="brand" data-act="go" data-v="library" aria-label="Entre Fogones, ir a la biblioteca">${spoon(38)}<span class="w"><span class="w1">entre</span><span class="w2">fogones</span></span></button>
     <nav class="nav" aria-label="Secciones">
       <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
       <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
       <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
-      ${!S.booted?'':canSocial()?`<button class="me" data-act="account" aria-label="Tu cuenta">${avatar(S.uid)}<span class="nl">@${esc(S.profile.username)}</span></button>`:`<button class="login" data-act="login">${ico('user')}<span class="nl"><span class="long">Iniciar sesión</span><span class="short">Entrar</span></span></button>`}
+      ${userBox}
     </nav>`;
+  const btn=$('#userBtn'), menu=$('#userMenu');
+  if(btn) btn.onclick=e=>{ e.stopPropagation(); const open=menu.hidden; menu.hidden=!open; btn.setAttribute('aria-expanded',String(open)); };
 }
+document.addEventListener('click',e=>{ const m=$('#userMenu'); if(m && !m.hidden && (!e.target.closest('.userbox') || e.target.closest('[role=menuitem]'))){ m.hidden=true; $('#userBtn')?.setAttribute('aria-expanded','false'); } });
+document.addEventListener('keydown',e=>{ const m=$('#userMenu'); if(e.key==='Escape' && m && !m.hidden){ m.hidden=true; $('#userBtn')?.focus(); } });
 function render(){
   document.body.classList.toggle('in-book', S.view==='book');
+  if(['account','admin'].includes(S.view) && !S.profile) S.view='library';
+  if(S.view==='admin' && !isAdminMe()) S.view='library';
   renderTop();
   const m=$('#main');
-  if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); }
+  if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); loadSuggestions(); }
   else if(S.view==='book'){ renderBook(); return; }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
+  else if(S.view==='account'){ m.innerHTML = viewAccount(); bindAccount(m); }
+  else if(S.view==='admin'){ m.innerHTML = viewAdmin(); adminLoad(); }
 }
 let refreshQueued=false;
 function refresh(){
   if(!S.booted || refreshQueued) return; refreshQueued=true;
   requestAnimationFrame(()=>{ refreshQueued=false;
-    renderTop();
-    if(S.view==='library'){ $('#main').innerHTML=viewLibrary(); fitSpines(); }
+    const menuOpen = $('#userMenu') && !$('#userMenu').hidden;
+    if(!menuOpen) renderTop();
+    if(S.view==='library'){ const keep=window.scrollY; $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); window.scrollTo(0,keep); }
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
+    /* Mi cuenta y el panel no se repintan solos para no perder lo que se está escribiendo */
   });
 }
 function go(v){
-  if(S.zoom){ S.zoom=null; document.body.style.overflow=''; if(document.fullscreenElement) document.exitFullscreen().catch(()=>{}); }
   if(S.view==='chat' && v!=='chat') stopChat();
   if(S.view!=='book') S.prevView=S.view;
   S.view=v; render(); window.scrollTo(0,0);
@@ -249,55 +284,89 @@ function fitSpines(){
 function viewLibrary(){
   const name = S.profile?.display || 'tu cocina';
   const none = S.recipes.filter(r=>!r.folderId || !S.folders.some(f=>f.id===r.folderId));
-  const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
+  const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, usar la IA, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
+  const slot = b => `<div class="slot">${b}</div>`;
   const books = [
-    `<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`,
-    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return `<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`}),
-    none.length?`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin carpeta, ${none.length}"><span class="st">Sin carpeta</span><span class="sc">${none.length}</span></button>`:'',
-    `<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nueva carpeta">${ico('plus')}<span class="st">Nueva carpeta</span></button>`
+    slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`),
+    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
+    none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
+    slot(`<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
   ].join('');
-  const recent = S.recipes.slice(0,9);
+  const recent = S.recipes.slice(0,3);
   return `${banner}
   <div class="lib-head">
     <div><p class="eyebrow">Biblioteca</p><h1>La estantería de ${esc(name)}</h1></div>
-    <div class="row">
+    <div class="row nowrap">
       <button class="btn pri" data-act="newRecipe">${ico('plus')}Nueva receta</button>
-      <button class="btn" data-act="openLink">${ico('link')}Abrir un enlace</button>
+      <button class="btn" data-act="openLink" title="Abre una receta o un recetario que alguien te ha compartido con un enlace">${ico('link')}<span class="lbl-long">Abrir enlace compartido</span><span class="lbl-short">Abrir enlace</span></button>
     </div>
   </div>
-  <div class="shelf-wrap"><div class="shelf">${books}</div><div class="shelf-board"></div></div>
+  <div class="shelf-wrap"><div class="shelves">${books}</div></div>
   <section class="recent">
     <h2>Últimas recetas</h2>
     ${recent.length?`<div class="cards">${recent.map(cardHtml).join('')}</div>`:
-      `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
+      `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina o de un vídeo, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
+  </section>
+  <section class="recent sugg">
+    <div class="sugg-h"><h2>Recetas famosas</h2><p class="muted">Ideas de Cookpad para guardar en tus recetarios.</p></div>
+    <div class="cards" id="suggList">${suggHtml()}</div>
   </section>`;
 }
 function cardHtml(r){
   const f=S.folders.find(f=>f.id===r.folderId);
   return `<button class="rcard" data-act="openRecipe" data-id="${esc(r.id)}">
     <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
-    <span style="min-width:0"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([f?.name, r.time].filter(Boolean).join(' · ')||'Sin carpeta')}</span></span>
+    <span style="min-width:0"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([f?.name, r.time].filter(Boolean).join(' · ')||'Sin recetario')}</span></span>
   </button>`;
 }
+/* Sugerencias de recetas famosas */
+function suggHtml(){
+  if(!S.sugg) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
+  if(!S.sugg.length) return `<p class="muted" style="margin:0">Ahora mismo no hay sugerencias.</p>`;
+  const saved=new Set(S.recipes.map(r=>r.source).filter(Boolean));
+  return S.sugg.map(s=>`<div class="rcard sg">
+    <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+    <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span><span class="mm">${esc(s.author?'De '+s.author:'Cookpad')}</span></span>
+    ${saved.has(s.url)?`<span class="saved" title="Ya está en tus recetarios">${ico('check')}</span>`:`<button class="btn sm tbtn" data-act="addSugg" data-id="${esc(s.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button>`}
+  </div>`).join('');
+}
+function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(); }
+let suggLoaded=0;
+async function loadSuggestions(){
+  if(S.sugg && Date.now()-suggLoaded<10*60e3){ drawSuggestions(); return; }
+  try{ S.sugg=await api('GET','/suggestions'); suggLoaded=Date.now(); }catch{ S.sugg=S.sugg||[]; }
+  drawSuggestions();
+}
+async function addSuggestion(id){
+  const s=(S.sugg||[]).find(x=>x.id===id); if(!s) return;
+  folderPicker('Guardar en…', async fid=>{
+    toast('Trayendo la receta…');
+    try{
+      const {recipe}=await api('POST','/import',{url:s.url});
+      let r={...recipe, id:gid(), folderId:fid, source:s.url, image:recipe.image||s.image||'', created:now()};
+      await store.saveRecipe(r); toast('Guardada en tu recetario');
+    }catch(err){ toast(err.error||'No se ha podido traer esa receta'); }
+  });
+}
 
-/* ===== Libro ===== */
+/* ===== Libro =====
+   El libro es decorativo: muestra la portada, el índice o la receta a doble página.
+   Debajo va lo que se lee y se usa: el listado de recetas o la receta completa. */
 const byTitle = (a,b)=>(a.title||'').localeCompare(b.title||'','es');
 function ownBook(id){
   if(id==='all') return {id:'all', name:'Todas mis recetas', color:'#6E4429', owner:S.uid, recipes:[...S.recipes].sort(byTitle)};
-  if(id==='none') return {id:'none', name:'Sin carpeta', color:'#7A6A5C', owner:S.uid, recipes:S.recipes.filter(r=>!r.folderId||!S.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
+  if(id==='none') return {id:'none', name:'Sin recetario', color:'#7A6A5C', owner:S.uid, recipes:S.recipes.filter(r=>!r.folderId||!S.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
   const f=S.folders.find(f=>f.id===id); if(!f) return null;
   return {id:f.id, name:f.name, color:f.color, owner:S.uid, folder:true, recipes:S.recipes.filter(r=>r.folderId===f.id).sort(byTitle)};
 }
 function syncOwnBook(){
   const b = ownBook(S.book.id);
-  if(!b){ S.view='library'; S.book=null; S.zoom=null; return; }
+  if(!b){ S.view='library'; S.book=null; return; }
   const curR = currentRecipe();
   S.book = b;
   const focusId = S.pendingFocus || curR?.id;
-  if(focusId){ const i=b.recipes.findIndex(r=>r.id===focusId); if(i>=0){ S.page = pageOfRecipe(i); if(S.zoom==='page') S.zoomPage=S.page; if(S.pendingFocus===focusId) S.pendingFocus=null; } }
-  const total=pages().length;
-  S.page = Math.max(0, Math.min(S.page, total-2));
-  if(S.zoomPage!=null) S.zoomPage = Math.min(S.zoomPage, total-1);
+  if(focusId){ const i=b.recipes.findIndex(r=>r.id===focusId); if(i>=0){ S.page = pageOfRecipe(i); if(S.pendingFocus===focusId) S.pendingFocus=null; } }
+  S.page = Math.max(0, Math.min(S.page, pages().length-2));
 }
 function pages(){
   const p=[{k:'title'},{k:'index'}];
@@ -306,68 +375,79 @@ function pages(){
   return p;
 }
 const pageOfRecipe = i => 2+2*i;
-function currentRecipe(){
-  if(!S.book) return null; const p=pages();
-  if(S.zoom==='page') return p[S.zoomPage]?.r || null;
-  return p[S.page]?.r || p[S.page+1]?.r || null;
-}
+function currentRecipe(){ if(!S.book) return null; const p=pages(); return p[S.page]?.r || p[S.page+1]?.r || null; }
 function openBook(id, recipeId){
   const b=ownBook(id); if(!b) return;
-  S.book=b; S.page=0; S.zoom=null;
+  S.book=b; S.page=0;
   if(recipeId){ const i=b.recipes.findIndex(r=>r.id===recipeId); if(i>=0) S.page=pageOfRecipe(i); }
   if(S.view!=='book') S.prevView=S.view;
   if(S.view==='chat') stopChat();
   S.view='book'; render(); window.scrollTo(0,0);
 }
+const tbBtn=(act,attrs,icon,label,cls='')=>`<button class="btn sm tbtn ${cls}" data-act="${act}"${attrs} aria-label="${label}" title="${label}">${ico(icon)}<span class="lbl">${label}</span></button>`;
 function bookTools(){
-  const b=S.book, cur=currentRecipe(); let t='';
+  const b=S.book, cur=currentRecipe();
   if(b.visiting){
-    t = cur ? `<button class="btn sm tbtn pri" data-act="saveCopy" aria-label="Guardar en mi libro" title="Guardar en mi libro">${ico('save')}<span class="lbl">Guardar en mi libro</span></button>` : '';
-    if(b.folder && b.recipes.length) t += `<button class="btn sm tbtn " data-act="saveFolderCopy" aria-label="Guardar la carpeta entera" title="Guardar la carpeta entera">${ico('book')}<span class="lbl">Guardar la carpeta entera</span></button>`;
-  } else if(cur) t = `<button class="btn sm tbtn " data-act="editRecipe" data-id="${esc(cur.id)}" aria-label="Editar" title="Editar">${ico('edit')}<span class="lbl">Editar</span></button><button class="btn sm tbtn " data-act="shareRecipe" data-id="${esc(cur.id)}" aria-label="Compartir" title="Compartir">${ico('share')}<span class="lbl">Compartir</span></button><button class="btn sm tbtn " data-act="moveRecipe" data-id="${esc(cur.id)}" aria-label="Mover" title="Mover">${ico('move')}<span class="lbl">Mover</span></button><button class="btn sm tbtn danger" data-act="delRecipe" data-id="${esc(cur.id)}" aria-label="Borrar" title="Borrar">${ico('trash')}<span class="lbl">Borrar</span></button>`;
-  else if(b.folder) t = `<button class="btn sm tbtn " data-act="shareFolder" aria-label="Compartir carpeta" title="Compartir carpeta">${ico('share')}<span class="lbl">Compartir carpeta</span></button><button class="btn sm tbtn " data-act="editFolder" aria-label="Renombrar o color" title="Renombrar o color">${ico('edit')}<span class="lbl">Renombrar o color</span></button><button class="btn sm tbtn danger" data-act="delFolder" aria-label="Borrar carpeta" title="Borrar carpeta">${ico('trash')}<span class="lbl">Borrar carpeta</span></button>`;
-  return t;
+    let t = cur ? tbBtn('saveCopy','','save','Guardar en mi recetario','pri') : '';
+    if(b.folder && b.recipes.length) t += tbBtn('saveFolderCopy','','book','Guardar el recetario entero');
+    return t;
+  }
+  if(cur){ const a=` data-id="${esc(cur.id)}"`; return tbBtn('editRecipe',a,'edit','Editar')+tbBtn('shareRecipe',a,'share','Compartir')+tbBtn('moveRecipe',a,'move','Mover')+tbBtn('delRecipe',a,'trash','Borrar','danger'); }
+  if(b.folder) return tbBtn('shareFolder','','share','Compartir recetario')+tbBtn('editFolder','','edit','Renombrar o color')+tbBtn('delFolder','','trash','Borrar recetario','danger');
+  return '';
 }
+function servSelect(r, cls=''){
+  const base=parseInt(r.servings)||0; if(!base) return r.servings?`<span>${esc(r.servings)}</span>`:'';
+  const shown=S.scale[r.id]||base, max=Math.max(24, base*3);
+  return `<label class="servsel ${cls}"><select data-serv="${esc(r.id)}" aria-label="Raciones">${Array.from({length:max},(_,i)=>i+1).map(n=>`<option value="${n}" ${n===shown?'selected':''}>${n}</option>`).join('')}</select><span>${shown===1?'ración':'raciones'}</span></label>`;
+}
+const scaleOf = r => { const base=parseInt(r.servings)||0; return base ? (S.scale[r.id]||base)/base : 1; };
 function viewBook(){
   const b=S.book, p=pages(), total=p.length;
   if(S.page%2) S.page--;
-  const solo = S.zoom==='page';
-  const idxs = solo ? [S.zoomPage] : [S.page, S.page+1];
-  const anim = k => S.turn==='next' ? (solo||k===1?'leaf-in-r':'') : S.turn==='prev' ? (solo||k===0?'leaf-in-l':'') : '';
-  const pagesHtml = idxs.map((i,k)=>`<article class="page ${solo?'solo':(k?'r':'l')} ${anim(k)}" data-pi="${i}" title="${solo?'Toca para volver a las dos páginas':'Toca para ver esta página más grande'}">${pageHtml(p[i],i+1)}</article>`).join('');
-  const atStart = solo ? S.zoomPage<=0 : S.page<=0;
-  const atEnd = solo ? S.zoomPage>=total-1 : S.page+2>=total;
-  const label = solo ? `Página ${S.zoomPage+1} de ${total}` : `Páginas ${S.page+1}–${S.page+2} de ${total}`;
-  const pager = `<div class="pager"><button class="btn" data-act="prevPage" aria-label="Página anterior" ${atStart?'disabled':''}>${ico('back')}</button><span class="${S.zoom?'muted':'muted'}">${label}</span><button class="btn" data-act="nextPage" aria-label="Página siguiente" ${atEnd?'disabled':''}>${ico('next')}</button></div>`;
-  const bookHtml = `<div class="book-stage" id="stage"><div class="book ${solo?'single':''}" id="book" style="--cloth:${esc(b.color||'#2F5D46')}"><div class="spread">${pagesHtml}</div></div></div>`;
-  if(S.zoom){
-    return `<div class="zoomwrap" role="dialog" aria-modal="true" aria-label="Libro ampliado">
-      <div class="zoombar"><span class="ttl">${esc(b.name)}</span><div class="row">${solo?`<button class="btn sm" data-act="zoomSpread">${ico('book')}Ver las dos páginas</button>`:''}<button class="btn sm" data-act="zoomClose">${ico('x')}Cerrar</button></div></div>
-      ${bookHtml}
-      <div class="zoombar" style="justify-content:center">${pager}</div>
-    </div>`;
-  }
+  const anim = k => S.turn==='next' ? (k===1?'leaf-in-r':'') : S.turn==='prev' ? (k===0?'leaf-in-l':'') : '';
+  const pagesHtml = [S.page,S.page+1].map((i,k)=>`<article class="page ${k?'r':'l'} ${anim(k)}" data-pi="${i}">${pageHtml(p[i],i+1)}</article>`).join('');
+  const label = `Páginas ${S.page+1}–${S.page+2} de ${total}`;
   const ownerLabel = b.visiting ? `de ${esc(b.ownerName||'')}` : '';
   return `<div class="book-head">
       <button class="btn ghost sm tbtn" data-act="closeBook" aria-label="${b.visiting?'Volver':'Estantería'}">${ico('back')}<span class="lbl">${b.visiting?'Volver':'Estantería'}</span></button>
       <h1>${esc(b.name)} <span class="muted" style="font-weight:500;font-size:15px">${ownerLabel}</span></h1>
       <span class="sp"></span>
-      <div class="row">${bookTools()}</div>
+      <div class="row nowrap">${bookTools()}</div>
     </div>
-    ${bookHtml}
+    <div class="book-stage" id="stage"><div class="book" id="book" style="--cloth:${esc(b.color||'#2F5D46')}"><div class="spread">${pagesHtml}</div></div></div>
     <div class="book-foot">
-      ${pager}
-      <span class="hint">Toca una página para verla más grande</span>
-      <div class="row nowrap">
-        <button class="btn sm tbtn " data-act="zoomFull" aria-label="Ampliar libro" title="Ampliar libro">${ico('expand')}<span class="lbl">Ampliar libro</span></button>
-        ${!b.visiting?`<button class="btn pri sm tbtn" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}" aria-label="Añadir receta aquí">${ico('plus')}<span class="lbl">Añadir receta aquí</span></button>`:''}
-      </div>
-    </div>`;
+      <div class="pager"><button class="btn" data-act="prevPage" aria-label="Página anterior" ${S.page<=0?'disabled':''}>${ico('back')}</button><span class="muted">${label}</span><button class="btn" data-act="nextPage" aria-label="Página siguiente" ${S.page+2>=total?'disabled':''}>${ico('next')}</button></div>
+      ${!b.visiting?`<button class="btn pri sm tbtn" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}" aria-label="Añadir receta aquí">${ico('plus')}<span class="lbl">Añadir receta aquí</span></button>`:''}
+    </div>
+    <section class="below" id="below">${belowHtml()}</section>`;
+}
+/* Lo que va debajo del libro */
+function belowHtml(){
+  const b=S.book, r=currentRecipe();
+  if(!r){
+    if(!b.recipes.length) return `<div class="empty">${spoon(46,'var(--muted)','var(--bg)')}<p style="margin:0">Este recetario todavía está vacío.</p>${b.visiting?'':`<button class="btn pri" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir una receta</button>`}</div>`;
+    return `<h2 class="below-h">${b.recipes.length} ${b.recipes.length===1?'receta':'recetas'}</h2>
+      <div class="rlist">${b.recipes.map((x,i)=>`<button class="rrow" data-act="goPage" data-p="${pageOfRecipe(i)}">
+        <span class="thumb sm">${x.image?`<img src="${esc(x.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(26,'var(--accent)','var(--accent-soft)')}</span>
+        <span class="rr-t">${esc(x.title||'Sin título')}</span><span class="rr-m">${esc([x.time,x.difficulty].filter(Boolean).join(' · '))}</span>${ico('next')}</button>`).join('')}</div>`;
+  }
+  const f=scaleOf(r);
+  const from = r.fromUid && r.fromUid!==S.uid && S.profiles[r.fromUid] ? `<p class="src">Compartida por ${esc(pname(r.fromUid))}</p>`:'';
+  return `<article class="recipe-read">
+    <header><h2>${esc(r.title||'Sin título')}</h2>
+      <div class="meta">${servSelect(r)}${r.time?`<span>${ico('clock')}${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div></header>
+    <div class="rr-cols">
+      <section><h3>Ingredientes</h3>${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p class="muted">Sin ingredientes apuntados.</p>'}</section>
+      <section><h3>Preparación</h3>${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${fmt(s)}</span></li>`).join('')}</ol>`:'<p class="muted">Sin pasos apuntados.</p>'}
+        ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}
+        ${r.source?`<p class="src">Fuente: <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source)}</a></p>`:''}${from}</section>
+    </div></article>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
   const pn=`<span class="pn">${num}</span>`;
-  const wrap = h => `<div class="pc">${h}</div>${pn}`;
+  const wrap = h => `<div class="pc">${h}</div><span class="more" aria-hidden="true">Sigue abajo ↓</span>${pn}`;
   if(p.k==='title'){
     const who = b.visiting ? (b.ownerName||'') : (S.profile?.display||'');
     return wrap(`<div class="title-page">${spoon(64,'var(--paper-ink)','var(--paper)')}<div class="orn"></div><h2>${esc(b.name)}</h2><div class="orn"></div>
@@ -375,99 +455,81 @@ function pageHtml(p,num){
       ${who?`<p class="by" style="margin:0">de la cocina de ${esc(who)}</p>`:''}</div>`);
   }
   if(p.k==='index'){
-    if(!b.recipes.length) return wrap(`<h2>Índice</h2><div class="pempty"><p>Este libro todavía está en blanco.</p>${b.visiting?'':`<button class="btn sm" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}">${ico('plus')}Añadir una receta</button>`}</div>`);
+    if(!b.recipes.length) return wrap(`<h2>Índice</h2><p style="color:var(--paper-muted)">Este recetario todavía está en blanco.</p>`);
     return wrap(`<h2>Índice</h2><ol class="toc">${b.recipes.map((r,i)=>`<li><button data-act="goPage" data-p="${pageOfRecipe(i)}"><span class="tn">${esc(r.title||'Sin título')}</span><span class="dots"></span><span class="tp">${pageOfRecipe(i)+1}</span></button></li>`).join('')}</ol>`);
   }
   if(p.k==='end') return wrap(`<div class="title-page"><div class="orn"></div><p class="by">Fin</p><div class="orn"></div></div>`);
-  const r=p.r;
+  const r=p.r, f=scaleOf(r);
   if(p.k==='rl'){
-    const base=parseInt(r.servings)||0, shown=S.scale[r.id]||base, f=base?shown/base:1;
-    const serv = base?`<span class="serv" aria-label="Raciones"><button data-act="serv" data-id="${esc(r.id)}" data-d="-1" aria-label="Menos raciones">−</button><span style="font-variant-numeric:tabular-nums">${shown} raciones</span><button data-act="serv" data-id="${esc(r.id)}" data-d="1" aria-label="Más raciones">+</button></span>`:(r.servings?`<span>${esc(r.servings)}</span>`:'');
     return wrap(`<h2>${esc(r.title||'Sin título')}</h2>
-      <div class="meta">${serv}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
+      <div class="meta">${servSelect(r,'onpage')}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
       ${r.image?`<img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.remove();fitPages()">`:''}
       <h3>Ingredientes</h3>
       ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}`);
   }
   if(p.k==='rr'){
-    const from = r.fromUid && r.fromUid!==S.uid && S.profiles[r.fromUid] ? `<p class="src">Compartida por ${esc(pname(r.fromUid))}</p>`:'';
     return wrap(`<h3 style="margin-top:0">Preparación</h3>
       ${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${fmt(s)}</span></li>`).join('')}</ol>`:'<p style="color:var(--paper-muted)">Sin pasos apuntados.</p>'}
-      ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}
-      ${r.source?`<p class="src">Fuente: <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source)}</a></p>`:''}${from}`);
+      ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}`);
   }
   return pn;
 }
 function renderBook(){
   document.body.classList.add('in-book');
   $('#main').innerHTML=viewBook();
-  document.body.style.overflow = S.zoom ? 'hidden' : '';
   layoutBook();
 }
-/* Tamaño del libro: las dos páginas caben enteras en la ventana */
+/* Tamaño del libro: cabe en la pantalla y deja ver lo de debajo */
 function layoutBook(){
   const stage=$('#stage'), book=$('#book'); if(!stage||!book) return;
-  const solo=S.zoom==='page';
   const W=stage.clientWidth;
-  let H;
-  if(S.zoom) H=stage.clientHeight;
-  else {
-    const top=stage.getBoundingClientRect().top + window.scrollY;
-    const foot=$('.book-foot'); const fh=foot?foot.offsetHeight+16:60;
-    H=window.innerHeight - top - fh - 14;
-  }
-  H=Math.max(H, 260);
+  const top=stage.getBoundingClientRect().top + window.scrollY;
+  const foot=$('.book-foot'); const fh=foot?foot.offsetHeight+16:60;
+  let H=Math.min(window.innerHeight - top - fh - 14, window.innerHeight*0.62);
+  H=Math.max(H, 240);
   const bp=Math.round(Math.max(6, Math.min(16, W*0.012)));
-  const AR=0.72, n=solo?1:2;
-  const ph=Math.max(150, Math.min(H-2*bp, (W-2*bp-8)/(AR*n)));
+  const AR=0.72;
+  const ph=Math.max(150, Math.min(H-2*bp, (W-2*bp-8)/(AR*2)));
   book.style.setProperty('--bp', bp+'px');
-  book.style.width=Math.round(ph*AR*n+2*bp)+'px';
+  book.style.width=Math.round(ph*AR*2+2*bp)+'px';
   book.style.height=Math.round(ph+2*bp)+'px';
   fitPages();
 }
-/* El texto de cada página se ajusta para que se vea entero sin desplazarse */
+/* El texto de cada página se ajusta para verse entero; en una receta, las dos páginas usan el mismo tamaño */
 function fitPages(){
-  document.querySelectorAll('#book .page').forEach(pg=>{
+  const pgs=[...document.querySelectorAll('#book .page')]; let sizes=[];
+  pgs.forEach(pg=>{
     const pc=pg.querySelector('.pc'); if(!pc) return;
     const fits=()=>pc.scrollHeight<=pc.clientHeight+1 && pc.scrollWidth<=pc.clientWidth+1;
-    let hi=Math.max(6, pg.clientHeight/27), lo=3.5;
-    pc.style.overflow='hidden';
+    let hi=Math.max(6, pg.clientHeight/27), lo=3;
     pg.style.fontSize=hi+'px';
-    if(fits()) return;
-    for(let k=0;k<14;k++){ const mid=(lo+hi)/2; pg.style.fontSize=mid+'px'; if(fits()) lo=mid; else hi=mid; }
-    pg.style.fontSize=lo+'px';
-    if(!fits()) pc.style.overflow='auto';
+    if(!fits()){ for(let k=0;k<14;k++){ const mid=(lo+hi)/2; pg.style.fontSize=mid+'px'; if(fits()) lo=mid; else hi=mid; } hi=lo; }
+    sizes.push(hi);
+  });
+  const isRecipe = pgs.length===2 && pgs.every(pg=>/rl|rr/.test(String(pages()[+pg.dataset.pi]?.k)));
+  pgs.forEach((pg,i)=>{
+    const pc=pg.querySelector('.pc'); if(!pc) return;
+    const fs = isRecipe ? Math.min(...sizes) : sizes[i];
+    pg.style.fontSize=fs+'px';
+    pg.classList.toggle('cut', pc.scrollHeight>pc.clientHeight+1);
   });
 }
 function turn(dir){
   const total=pages().length;
-  if(S.zoom==='page'){
-    const np=S.zoomPage+(dir==='next'?1:-1); if(np<0||np>=total) return; S.zoomPage=np;
-  } else {
-    const np=S.page+(dir==='next'?2:-2); if(np<0||np>=total) return; S.page=np;
-  }
+  const np=S.page+(dir==='next'?2:-2); if(np<0||np>=total) return; S.page=np;
   S.turn=dir; renderBook(); S.turn=null;
 }
-function zoomTo(mode){
-  if(mode==='full' && !S.zoom){ try{ const el=document.documentElement; if(el.requestFullscreen && !document.fullscreenElement) el.requestFullscreen().catch(()=>{}); }catch{} }
-  if(!mode && document.fullscreenElement){ try{ document.exitFullscreen().catch(()=>{}); }catch{} }
-  S.zoom=mode; renderBook();
-}
-document.addEventListener('click',e=>{
-  if(S.view!=='book') return;
-  const pg=e.target.closest('#book .page'); if(!pg || e.target.closest('button,a,input,select,textarea')) return;
-  if(S.zoom==='page'){ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom||null); }
-  else { S.zoomFrom=S.zoom; S.zoomPage=+pg.dataset.pi; S.zoom='page'; renderBook(); }
-});
 document.addEventListener('keydown',e=>{
   if(S.view!=='book' || $('#modal-root').children.length || /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
-  if(e.key==='ArrowRight') turn('next');
-  else if(e.key==='ArrowLeft') turn('prev');
-  else if(e.key==='Escape' && S.zoom){ if(S.zoom==='page'){ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom||null); } else zoomTo(null); }
+  if(e.key==='ArrowRight') turn('next'); else if(e.key==='ArrowLeft') turn('prev');
+});
+document.addEventListener('change',e=>{
+  const sel=e.target.closest('select[data-serv]'); if(!sel) return;
+  S.scale[sel.dataset.serv]=+sel.value;
+  if(S.view==='book') renderBook();
 });
 let resizeT=null;
 addEventListener('resize',()=>{ clearTimeout(resizeT); resizeT=setTimeout(()=>{ if(S.view==='book') layoutBook(); },80); });
-document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElement && S.zoom==='full'){ S.zoom=null; if(S.view==='book') renderBook(); } else if(S.view==='book') layoutBook(); });
 if(document.fonts?.ready) document.fonts.ready.then(()=>{ if(S.view==='book') layoutBook(); if(S.view==='library') fitSpines(); });
 
 /* ===== Modales ===== */
@@ -492,24 +554,24 @@ function confirmBox(text, ok='Borrar'){
 function folderPicker(title, cb, {allowNone=true}={}){
   const m=openModal(`${mHead(title)}<div class="pick">
     ${S.folders.map(f=>`<button class="btn" data-fid="${esc(f.id)}"><span style="width:14px;height:20px;border-radius:2px;background:${esc(f.color)};display:inline-block"></span>${esc(f.name)}</button>`).join('')}
-    ${allowNone?`<button class="btn" data-fid="">Sin carpeta</button>`:''}
+    ${allowNone?`<button class="btn" data-fid="">Sin recetario</button>`:''}
   </div>`);
   m.querySelectorAll('[data-fid]').forEach(b=>b.onclick=()=>{closeModal();cb(b.dataset.fid||null)});
 }
 
-/* ===== Carpeta ===== */
+/* ===== Recetario ===== */
 function folderModal(f){
   const isNew=!f; f=f||{id:gid(),name:'',color:CLOTHS[(S.folders.length)%CLOTHS.length][0],created:now()};
   let color=f.color;
-  const m=openModal(`${mHead(isNew?'Nueva carpeta':'Editar carpeta')}
+  const m=openModal(`${mHead(isNew?'Nuevo recetario':'Editar recetario')}
     <form id="ff" style="display:grid;gap:16px">
       <div class="field"><label for="fname">Nombre</label><input id="fname" class="inp" required maxlength="40" value="${esc(f.name)}" placeholder="Postres, Cenas rápidas, De la abuela…"></div>
       <div class="field"><label>Color de la tela</label>${colorField('fcolor', color, CLOTHS)}</div>
-      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri">${isNew?'Crear carpeta':'Guardar'}</button></div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri">${isNew?'Crear recetario':'Guardar'}</button></div>
     </form>`);
   initColorField(m,'fcolor',c=>{color=c});
   $('#ff',m).onsubmit=async e=>{e.preventDefault();const name=$('#fname',m).value.trim();if(!name)return;
-    try{ await store.saveFolder({...f,name,color}); closeModal(); toast(isNew?'Carpeta creada':'Carpeta guardada'); }catch(err){ toast(err.error||'No se pudo guardar la carpeta'); }};
+    try{ await store.saveFolder({...f,name,color}); closeModal(); toast(isNew?'Recetario creado':'Recetario guardado'); }catch(err){ toast(err.error||'No se pudo guardar el recetario'); }};
 }
 
 /* ===== Nueva receta ===== */
@@ -519,7 +581,7 @@ function newRecipeModal(folderId){
   const OPTS=[['url','link','Desde enlace','La dirección de una web de recetas'],['video','play','Desde vídeo','TikTok, Instagram, Facebook o YouTube'],
     ['photo','camera','Desde foto','De un libro, una revista o un papel'],['ai','sparkle','Con '+aiName(),'Pídela y ajústala hablando'],['hand','edit','A mano','Escríbela tú']];
   const m=openModal(`${mHead('Nueva receta')}
-    <div class="opts" id="opts">${OPTS.map(([k,i,t,d])=>`<button type="button" class="opt" data-tab="${k}">${ico(i)}<span class="ot">${esc(t)}</span><span class="od">${esc(d)}</span></button>`).join('')}</div>
+    <div class="opts" id="opts">${OPTS.map(([k,i,t,d])=>`<button type="button" class="opt" data-tab="${k}">${ico(i)}<span class="ot">${esc(t)}</span><span class="od">${esc(d)}</span>${['photo','ai'].includes(k)&&!S.profile?`<span class="lockb">${ico('lock')}Con cuenta</span>`:''}</button>`).join('')}</div>
     <div id="tabWrap" hidden><button type="button" class="btn ghost sm" id="optBack">${ico('back')}Otras formas</button><h3 class="opt-h" id="optTitle"></h3><div id="tabBody"></div></div>`,{wide:true});
   const body=$('#tabBody',m);
   const busy=(el,t)=>el.innerHTML=`<div class="status"><span class="spin"></span>${esc(t)}</div>`;
@@ -538,7 +600,7 @@ function newRecipeModal(folderId){
         const st=$('#ustatus',m), btn=$('#ugo',m); btn.disabled=true;
         try{
           if(pasted){
-            if(S.ai){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); editorModal({...recipe, source:url, folderId}); }
+            if(S.ai && S.profile){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); editorModal({...recipe, source:url, folderId}); }
             else { closeModal(); editorModal({...roughParse(pasted), source:url, folderId}); }
             return;
           }
@@ -576,14 +638,14 @@ function newRecipeModal(folderId){
         const url=$('#vurl',m).value.trim(), pasted=$('#vpaste',m).value.trim(), st=$('#vstatus',m), btn=$('#vgo',m); btn.disabled=true;
         try{
           if(pasted){
-            if(S.ai){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); aiChatModal({folderId, seed:{recipe:{...recipe, source:url}, reply:'He sacado la receta del vídeo. Revísala: apruébala o pídeme cambios.'}}); }
+            if(S.ai && S.profile){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); aiChatModal({folderId, seed:{recipe:{...recipe, source:url}, reply:'He sacado la receta del vídeo. Revísala: apruébala o pídeme cambios.'}}); }
             else { closeModal(); editorModal({...roughParse(pasted), source:url, folderId}); }
             return;
           }
           busy(st,'Mirando el vídeo…');
           const {recipe}=await api('POST','/import',{url});
           closeModal();
-          if(S.ai) aiChatModal({folderId, seed:{recipe, reply:'He sacado la receta del vídeo. Revísala: si está bien, apruébala; si falta algo, pídemelo.'}});
+          if(S.ai && S.profile) aiChatModal({folderId, seed:{recipe, reply:'He sacado la receta del vídeo. Revísala: si está bien, apruébala; si falta algo, pídemelo.'}});
           else editorModal({...recipe, folderId});
         }catch(err){
           st.innerHTML='';
@@ -593,6 +655,7 @@ function newRecipeModal(folderId){
       };
       $('#vfile',m).onchange=async e=>{
         const f=e.target.files[0]; if(!f) return; const st=$('#vfstatus',m);
+        if(!S.profile){ st.innerHTML=`<p class="err">Escuchar vídeos usa la IA, que es para quien tiene cuenta. Inicia sesión para usarlo.</p>`; return; }
         if(!S.ai){ st.innerHTML=`<p class="err">Para escuchar vídeos hace falta la IA, que todavía no está activada.</p>`; return; }
         if(f.size>25*1024*1024){ st.innerHTML=`<p class="err">El vídeo pesa más de 25 MB. Prueba con uno más corto o con el enlace.</p>`; return; }
         busy(st,'Escuchando el vídeo… puede tardar un minuto');
@@ -630,7 +693,10 @@ function newRecipeModal(folderId){
     },
     hand:()=>{ closeModal(); editorModal({folderId}); }
   };
-  const show=k=>{ if(k==='ai'&&S.ai){ tabs.ai(); return; } if(k==='hand'){ tabs.hand(); return; }
+  const show=k=>{
+    if(['photo','ai'].includes(k) && !S.profile){ $('#opts',m).hidden=true; $('#tabWrap',m).hidden=false; $('#optTitle',m).textContent=OPTS.find(o=>o[0]===k)[2];
+      $('#tabBody',m).innerHTML=`<div class="empty" style="padding:22px">${ico('lock')}<p style="margin:0;max-width:420px">Las funciones con inteligencia artificial son para quien tiene cuenta. Inicia sesión o crea una cuenta gratis para usarlas.</p><div class="row" style="justify-content:center"><button class="btn pri" data-act="login">Iniciar sesión</button><button class="btn" data-act="register">Crear cuenta</button></div></div>`; return; }
+    if(k==='ai'&&S.ai){ tabs.ai(); return; } if(k==='hand'){ tabs.hand(); return; }
     $('#opts',m).hidden=true; $('#tabWrap',m).hidden=false; $('#optTitle',m).textContent=OPTS.find(o=>o[0]===k)[2]; tabs[k](); m.querySelector('#tabBody input:not([hidden]),#tabBody textarea')?.focus(); };
   m.querySelectorAll('[data-tab]').forEach(t=>t.onclick=()=>show(t.dataset.tab));
   $('#optBack',m).onclick=()=>{ $('#tabWrap',m).hidden=true; $('#opts',m).hidden=false; $('#tabBody',m).innerHTML=''; };
@@ -673,7 +739,7 @@ function aiChatModal({folderId, seed}={}){
     if(!st.recipe){ prev.innerHTML=''; return; }
     prev.innerHTML = recipePreview(st.recipe) + `<div class="approve">
       <label for="aifold" class="muted" style="font-size:14px">Guardar en</label>
-      <select id="aifold" class="inp" style="width:auto;min-width:160px">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin carpeta</option></select>
+      <select id="aifold" class="inp" style="width:auto;min-width:160px">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin recetario</option></select>
       <span style="flex:1"></span>
       <button type="button" class="btn" id="aiedit">${ico('edit')}Retocar a mano</button>
       <button type="button" class="btn pri" id="aiok">${ico('save')}Aprobar</button>
@@ -789,7 +855,7 @@ function editorModal(d){
       <div class="field"><label for="eserv">Raciones</label><input id="eserv" class="inp" inputmode="numeric" value="${esc(r.servings)}" placeholder="4"></div>
       <div class="field"><label for="etime">Tiempo</label><input id="etime" class="inp" value="${esc(r.time)}" placeholder="45 min"></div>
       <div class="field"><label for="ediff">Dificultad</label><select id="ediff" class="inp">${['','Fácil','Media','Difícil'].map(x=>`<option ${x===r.difficulty?'selected':''} value="${x}">${x||'—'}</option>`).join('')}</select></div>
-      <div class="field"><label for="efold">Carpeta</label><select id="efold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===r.folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!r.folderId?'selected':''}>Sin carpeta</option></select></div>
+      <div class="field"><label for="efold">Recetario</label><select id="efold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===r.folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!r.folderId?'selected':''}>Sin recetario</option></select></div>
     </div>
     <div class="field"><div class="lblrow"><label for="eing">Ingredientes, uno por línea</label>${fmtBar('eing')}</div><textarea id="eing" class="inp" rows="7" placeholder="200 g de harina&#10;2 huevos&#10;1 pizca de sal">${esc((r.ingredients||[]).join('\n'))}</textarea></div>
     <div class="field"><div class="lblrow"><label for="esteps">Preparación, un paso por línea</label>${fmtBar('esteps')}</div><textarea id="esteps" class="inp" rows="7">${esc((r.steps||[]).join('\n'))}</textarea></div>
@@ -797,7 +863,7 @@ function editorModal(d){
     <div class="field"><label for="esrc">Enlace de origen (opcional)</label><input id="esrc" class="inp" type="url" value="${esc(r.source)}"></div>
     <p class="muted" style="margin:0;font-size:13px">Para poner algo en negrita o cursiva, selecciónalo y pulsa N o C. Al pegar texto de una web se conservan.</p>
     <div id="estatus"></div>
-    <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar en mi libro</button></div>
+    <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar en mi recetario</button></div>
   </form>`,{wide:true});
   ['eing','esteps','enotes'].forEach(id=>enableRichPaste($('#'+id,m)));
   $('#eimg',m).onchange=async e=>{const f=e.target.files[0];if(!f)return;$('#eimgPrev',m).innerHTML='<span class="spin"></span>';
@@ -827,7 +893,7 @@ function shareModal(kind, item){
     ? `<div class="banner" style="margin:0">${ico('user')}<span style="flex:1;min-width:180px">Inicia sesión para enviarlo a tus amigos por el chat.</span><button class="btn sm" data-act="login">Iniciar sesión</button></div>`
     : fr.length ? `<div class="pick">${fr.map(id=>`<div class="person">${avatar(id)}<div class="pb"><div class="pn">${esc(pname(id))}</div><div class="pu">${esc(puser(id))}</div></div><button class="btn sm" data-send="${esc(id)}">${ico('send')}Enviar</button></div>`).join('')}</div>`
     : `<p class="muted" style="margin:0">Aún no tienes amigos en la app. Añádelos desde la pestaña Amigos.</p>`;
-  const m=openModal(`${mHead(kind==='recipe'?'Compartir receta':'Compartir carpeta')}
+  const m=openModal(`${mHead(kind==='recipe'?'Compartir receta':'Compartir recetario')}
     <p style="margin:0;font-family:var(--f-book);font-size:20px">${esc(item.title||item.name)}</p>
     <div class="field"><label>Enviar a un amigo</label>${friendsHtml}</div>
     <div class="field"><label for="shlink">Enlace</label><div class="linkbox"><input id="shlink" class="inp" readonly value="${esc(link)}"><button class="btn" id="shcopy">${ico('copy')}Copiar</button></div>
@@ -865,14 +931,13 @@ async function openShared(c){
   }catch(err){ toast(err.error||'No se pudo abrir'); }
 }
 function showVisiting(book, page){
-  S.zoom=null;
   if(S.view==='chat'){ S.returnChat=S.chatWith; stopChat(); }
   if(S.view!=='book') S.prevView=S.view;
   S.book=book; S.page=page; S.view='book'; render(); window.scrollTo(0,0);
 }
-function copyToMine(r, folderId){
+function copyToMine(r, folderId, check=true){
   const {id, folderId:_f, ...rest} = r;
-  return api('PUT','/recipes/'+gid(), {...rest, folderId, fromUid:r.fromUid||null, created:now()});
+  return store.saveRecipe({...rest, id:gid(), folderId, fromUid:r.fromUid||null, created:now()}, {check});
 }
 
 /* ===== Cuenta: iniciar sesión, crear cuenta, recuperar contraseña ===== */
@@ -956,42 +1021,157 @@ function resetModal(token){
     catch(err){ $('#ngo',m).disabled=false; $('#nstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
-function accountModal(){
-  const p=S.profile; let color=p.color||AVCOLORS[0];
-  const m=openModal(`${mHead('Tu cuenta')}
-    <form id="fa" style="display:grid;gap:14px">
-      <div class="row">${avatar(S.uid,'lg')}<div><div style="font-weight:700">${esc(p.display)}</div><div class="muted">@${esc(p.username)}</div></div></div>
-      <div class="field"><label for="aname">Tu nombre</label><input id="aname" class="inp" required maxlength="40" value="${esc(p.display||'')}"></div>
-      <div class="field"><label for="amail">Correo electrónico</label><input id="amail" class="inp" type="email" required value="${esc(S.me.email||'')}">
-        ${S.me.email?'':'<span class="err" style="font-size:13px">Añade un correo para poder recuperar la contraseña.</span>'}</div>
-      <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
-      <div id="astatus"></div>
-      <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="aout">${ico('out')}Cerrar sesión</button><button class="btn pri" id="ago">Guardar</button></div>
-      <div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding-top:12px">
-        <span class="muted" style="font-size:13px"><a href="/legal/privacidad" target="_blank">Privacidad</a> · <a href="/legal/aviso-legal" target="_blank">Términos de uso</a></span>
-        <button type="button" class="btn ghost sm danger" id="adel">${ico('trash')}Borrar mi cuenta</button></div>
-    </form>`);
-  initColorField(m,'pcolor',c=>{color=c});
-  $('#aout',m).onclick=async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); };
-  $('#adel',m).onclick=()=>deleteAccountModal();
-  $('#fa',m).onsubmit=async e=>{e.preventDefault();
-    try{ await api('PUT','/me',{display:$('#aname',m).value.trim(), email:$('#amail',m).value.trim(), color}); await loadState(); closeModal(); toast('Cuenta guardada'); }
-    catch(err){ $('#astatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
-  };
+/* ===== Mi cuenta (igual que en Kairos, adaptada a Entre Fogones) ===== */
+const ALLERGENS = ['Gluten','Lactosa','Leche','Huevo','Frutos de cáscara','Cacahuete','Soja','Pescado','Marisco (crustáceos)','Moluscos','Sésamo','Mostaza','Apio','Sulfitos','Altramuces','Fructosa'];
+function viewAccount(){
+  const p=S.profile, me=S.me, mine=new Set(me.allergens||[]);
+  const custom=(me.allergens||[]).filter(a=>!ALLERGENS.includes(a));
+  return `<div class="settings">
+    <section class="card account-head">
+      <div class="photo-pick">${avatar(S.uid,'big')}
+        <label class="photo-edit" title="Cambiar foto" aria-label="Cambiar foto de perfil">${ico('edit')}<input type="file" id="avFile" accept="image/*" hidden></label></div>
+      <div class="head-info"><h2>${esc(p.display||'')}</h2><p class="muted" style="margin:2px 0 8px">@${esc(p.username)}${me.email?' · '+esc(me.email):''}</p>
+        <div class="row"><label class="btn sm" for="avFile">${p.avatar?'Cambiar foto':'Añadir foto'}</label>${p.avatar?'<button class="btn sm ghost" id="avDel">Quitar</button>':''}</div></div>
+    </section>
+
+    <section class="card">
+      <h2>Perfil</h2>
+      <p class="muted">Tu nombre y tu usuario son lo que ven tus amigos. Te buscan por el usuario.</p>
+      <form id="fProfile" class="form-grid">
+        <div class="grid2">
+          <div class="field"><label for="acName">Nombre</label><input id="acName" class="inp" required maxlength="40" value="${esc(p.display||'')}"></div>
+          <div class="field"><label for="acUser">Nombre de usuario</label><input id="acUser" class="inp" required maxlength="20" value="${esc(p.username||'')}" autocomplete="username"></div>
+        </div>
+        <div class="field"><label>Tu color</label>${colorField('pcolor', p.color||AVCOLORS[0], AVCOLORS.map(c=>[c,'Color '+c]))}</div>
+        <div><button class="btn">Guardar perfil</button></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <h2>Alérgenos e intolerancias</h2>
+      <p class="muted">Marca lo que no puedes tomar. Cuando añadas una receta, la IA te avisará si lo lleva y te propondrá sustituirlo o quitarlo.</p>
+      <div class="chips" id="algChips">${ALLERGENS.map(a=>`<button type="button" class="chip" aria-pressed="${mine.has(a)}" data-alg="${esc(a)}">${esc(a)}</button>`).join('')}${custom.map(a=>`<button type="button" class="chip" aria-pressed="true" data-alg="${esc(a)}">${esc(a)}</button>`).join('')}</div>
+      <form id="fAlgAdd" class="inline-form"><div class="field" style="flex:1"><label for="algOther">Otra alergia o intolerancia</label><input id="algOther" class="inp" maxlength="40" placeholder="Por ejemplo: melocotón"></div><button class="btn">${ico('plus')}Añadir</button></form>
+      <div><button class="btn pri" id="algSave">Guardar alérgenos</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Correo electrónico</h2>
+      <p class="muted">Es con el que puedes entrar y donde te llega el enlace si olvidas la contraseña. Para cambiarlo, confirma tu contraseña.</p>
+      <form id="fEmail" class="form-grid"><div class="grid2">
+        <div class="field"><label for="emNew">Correo</label><input id="emNew" class="inp" type="email" required autocomplete="email" value="${esc(me.email||'')}"></div>
+        <div class="field"><label for="emPass">Contraseña</label><input id="emPass" class="inp" type="password" required autocomplete="current-password"></div>
+      </div><div><button class="btn">Cambiar correo</button></div></form>
+    </section>
+
+    <section class="card">
+      <h2>Contraseña</h2>
+      <form id="fPass" class="form-grid"><div class="grid2">
+        <div class="field"><label for="pwCur">Contraseña actual</label><input id="pwCur" class="inp" type="password" required autocomplete="current-password"></div>
+        <div class="field"><label for="pwNew">Nueva contraseña</label><input id="pwNew" class="inp" type="password" required minlength="6" autocomplete="new-password"></div>
+      </div><div><button class="btn">Cambiar contraseña</button></div></form>
+    </section>
+
+    <section class="card">
+      <h2>Tus datos</h2>
+      <p class="muted">Descarga una copia de todo lo que Entre Fogones guarda de ti: cuenta, recetarios, recetas, amistades y mensajes que has enviado.</p>
+      <button class="btn" id="expData">${ico('download')}Descargar mis datos</button>
+    </section>
+
+    <section class="card">
+      <h2>Ayuda y textos legales</h2>
+      <ul class="legal-list">
+        <li><a href="/legal/aviso-legal" target="_blank" rel="noopener">${ico('doc')}Aviso legal y términos de uso</a></li>
+        <li><a href="/legal/privacidad" target="_blank" rel="noopener">${ico('shield')}Política de privacidad</a></li>
+        <li><a href="/legal/cookies" target="_blank" rel="noopener">${ico('doc')}Política de cookies</a></li>
+        <li><a href="/legal/contacto" target="_blank" rel="noopener">${ico('mail')}Contacto</a></li>
+      </ul>
+    </section>
+
+    <section class="card danger-zone">
+      <h2>Eliminar cuenta</h2>
+      <p class="muted">Se borrarán para siempre tu cuenta, tus recetarios, tus recetas, tus amistades y los mensajes que has enviado. No se puede deshacer.</p>
+      <button class="btn danger" id="accDel">${ico('trash')}Eliminar mi cuenta</button>
+    </section>
+
+    <button class="btn ghost logout-line" data-act="logout">${ico('out')}Cerrar sesión</button>
+  </div>`;
 }
+function bindAccount(root){
+  let color=S.profile.color||AVCOLORS[0];
+  initColorField(root,'pcolor',c=>{color=c});
+  const ok = async (fn, msg) => { try{ await fn(); await loadState(); toast(msg); return true; }catch(err){ toast(err.error||'No se ha podido guardar'); return false; } };
+  $('#acUser',root).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
+  $('#fProfile',root).onsubmit=async e=>{ e.preventDefault(); if(await ok(()=>api('PUT','/me/profile',{display:$('#acName',root).value.trim(), username:$('#acUser',root).value.trim(), color}),'Perfil guardado')) render(); };
+  $('#fEmail',root).onsubmit=async e=>{ e.preventDefault(); if(await ok(()=>api('PUT','/me/email',{email:$('#emNew',root).value.trim(), password:$('#emPass',root).value}),'Correo cambiado')) render(); };
+  $('#fPass',root).onsubmit=async e=>{ e.preventDefault(); if(await ok(()=>api('PUT','/me/password',{current:$('#pwCur',root).value, password:$('#pwNew',root).value}),'Contraseña cambiada')) e.target.reset(); };
+  $('#algChips',root).onclick=e=>{ const c=e.target.closest('.chip'); if(c) c.setAttribute('aria-pressed', c.getAttribute('aria-pressed')!=='true'); };
+  $('#fAlgAdd',root).onsubmit=e=>{ e.preventDefault(); const v=$('#algOther',root).value.trim(); if(!v) return;
+    const b=document.createElement('button'); b.type='button'; b.className='chip'; b.dataset.alg=v; b.textContent=v; b.setAttribute('aria-pressed','true'); $('#algChips',root).append(b); $('#algOther',root).value=''; };
+  $('#algSave',root).onclick=()=>ok(()=>api('PUT','/me/allergens',{allergens:[...root.querySelectorAll('.chip[aria-pressed=true]')].map(c=>c.dataset.alg)}),'Alérgenos guardados');
+  $('#avFile',root).onchange=async e=>{ const f=e.target.files[0]; e.target.value=''; if(!f) return;
+    try{ const img=await squarePhoto(f); if(await ok(()=>api('PUT','/me/avatar',{image:img}),'Foto de perfil actualizada')) render(); }catch{ toast('No se ha podido leer esa foto. Prueba con otra.'); } };
+  const del=$('#avDel',root); if(del) del.onclick=async()=>{ if(await ok(()=>api('DELETE','/me/avatar'),'Foto quitada')) render(); };
+  $('#expData',root).onclick=async e=>{ const b=e.currentTarget; b.disabled=true;
+    try{ const data=await api('GET','/me/export'); const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`entre-fogones-mis-datos-${new Date().toISOString().slice(0,10)}.json`; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Datos descargados'); }
+    catch(err){ toast(err.error||'No se han podido descargar'); } b.disabled=false; };
+  $('#accDel',root).onclick=()=>deleteAccountModal();
+}
+/* Recorta la foto en cuadrado y la reduce a 320 px */
+async function squarePhoto(file){
+  const img=await loadImg(file); const side=Math.min(img.width,img.height), size=Math.min(320,side);
+  const c=document.createElement('canvas'); c.width=c.height=size; const ctx=c.getContext('2d');
+  ctx.fillStyle='#fff'; ctx.fillRect(0,0,size,size);
+  ctx.drawImage(img,(img.width-side)/2,(img.height-side)/2,side,side,0,0,size,size);
+  let q=.85, out=c.toDataURL('image/jpeg',q); while(out.length>110000 && q>.4){ q-=.1; out=c.toDataURL('image/jpeg',q); }
+  return out;
+}
+function accountModal(){ go('account'); }
 function deleteAccountModal(){
-  const m=openModal(`${mHead('Borrar mi cuenta')}
+  const m=openModal(`${mHead('Eliminar tu cuenta')}
     <form id="fd" style="display:grid;gap:14px">
-      <p style="margin:0">Se borrarán para siempre tu cuenta, tus recetas, tus carpetas, tus amistades y los mensajes que has enviado. No se puede deshacer.</p>
+      <p style="margin:0">Se borrarán para siempre tu cuenta, tus recetarios, tus recetas, tus amistades y los mensajes que has enviado. Si quieres conservarlos, descárgalos antes desde «Tus datos».</p>
       <div class="field"><label for="dpass">Escribe tu contraseña para confirmarlo</label><input id="dpass" class="inp" type="password" required autocomplete="current-password"></div>
       <div id="dstatus"></div>
-      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="dgo">Borrar para siempre</button></div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="dgo">${ico('trash')}Eliminar definitivamente</button></div>
     </form>`);
   $('#fd',m).onsubmit=async e=>{e.preventDefault(); $('#dgo',m).disabled=true;
-    try{ await api('DELETE','/me',{password:$('#dpass',m).value}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Cuenta borrada'); }
+    try{ await api('DELETE','/me',{password:$('#dpass',m).value}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Tu cuenta se ha eliminado'); }
     catch(err){ $('#dgo',m).disabled=false; $('#dstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
+
+/* ===== Alérgenos: al añadir una receta, la IA avisa y tú eliges qué hacer ===== */
+const wantsAllergenCheck = () => S.profile && S.ai && (S.me.allergens||[]).length;
+async function allergenReview(r){
+  if(!wantsAllergenCheck() || !(r.ingredients||[]).length) return r;
+  let issues=[];
+  try{ toast('Revisando tus alérgenos…'); issues=(await api('POST','/ai/allergens',{recipe:{title:r.title, ingredients:r.ingredients}})).issues||[]; }catch{ return r; }
+  if(!issues.length) return r;
+  return await new Promise(res=>{
+    const m=openModal(`${mHead('Atención a tus alérgenos')}
+      <p style="margin:0">«${esc(r.title)}» lleva ${issues.length===1?'un ingrediente':'ingredientes'} con ${esc([...new Set(issues.map(i=>i.allergen))].join(', '))}. Elige qué hacer con cada uno:</p>
+      <div class="alg-list">${issues.map((it,k)=>`<fieldset class="alg-item"><legend><strong>${fmt(it.ingredient)}</strong> <span class="alg-tag">${esc(it.allergen)}</span></legend>
+        ${it.note?`<p class="muted" style="margin:0 0 6px;font-size:14px">${esc(it.note)}</p>`:''}
+        ${it.substitutes.map((s,j)=>`<label class="opt-line"><input type="radio" name="a${k}" value="s${j}" ${j===0?'checked':''}> Sustituir por <strong>${fmt(s)}</strong></label>`).join('')}
+        ${it.canRemove?`<label class="opt-line"><input type="radio" name="a${k}" value="del" ${it.substitutes.length?'':'checked'}> Quitarlo de la receta</label>`:''}
+        <label class="opt-line"><input type="radio" name="a${k}" value="keep" ${!it.substitutes.length&&!it.canRemove?'checked':''}> Dejarlo como está</label>
+      </fieldset>`).join('')}</div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" id="algKeep">Guardar sin cambios</button><button type="button" class="btn pri" id="algApply">${ico('save')}Aplicar y guardar</button></div>`,{wide:true, onClose:()=>res(r)});
+    $('#algKeep',m).onclick=()=>{ $('#modal-root')._onClose=null; closeModal(); res(r); };
+    $('#algApply',m).onclick=()=>{
+      const ing=[...r.ingredients], changes=[], drop=new Set();
+      issues.forEach((it,k)=>{ const v=m.querySelector(`input[name=a${k}]:checked`)?.value||'keep';
+        if(v==='del'){ drop.add(it.index); changes.push(`sin ${it.ingredient.replace(/\*/g,'')}`); }
+        else if(v[0]==='s'){ const sub=it.substitutes[+v.slice(1)]; ing[it.index]=sub; changes.push(`${it.ingredient.replace(/\*/g,'')} → ${sub.replace(/\*/g,'')}`); } });
+      const out={...r, ingredients:ing.filter((_,i)=>!drop.has(i))};
+      if(changes.length) out.notes=[r.notes, `Adaptada a tus alérgenos: ${changes.join('; ')}.`].filter(Boolean).join('\n');
+      $('#modal-root')._onClose=null; closeModal(); res(out);
+    };
+  });
+}
+
 function needProfileView(what){
   return `<div class="empty" style="margin-top:20px">${spoon(54,'var(--muted)','var(--bg)')}<h2 style="font-size:22px;color:var(--ink)">${what}</h2><p style="margin:0;max-width:440px">Inicia sesión o crea una cuenta para encontrar a tus amigos, mandaros recetas y pediros ideas. Tus recetas siguen funcionando sin cuenta.</p><div class="row" style="justify-content:center"><button class="btn pri" data-act="login">${ico('user')}Iniciar sesión</button><button class="btn" data-act="register">Crear cuenta</button></div></div>`;
 }
@@ -1070,7 +1250,7 @@ function viewChat(){
       <div class="composer">
         <div class="tools">
           <button class="btn sm tbtn " data-act="chatShareRecipe" aria-label="Compartir receta" title="Compartir receta">${ico('book')}<span class="lbl">Compartir receta</span></button>
-          <button class="btn sm tbtn " data-act="chatShareFolder" aria-label="Compartir carpeta" title="Compartir carpeta">${ico('move')}<span class="lbl">Compartir carpeta</span></button>
+          <button class="btn sm tbtn " data-act="chatShareFolder" aria-label="Compartir recetario" title="Compartir recetario">${ico('move')}<span class="lbl">Compartir recetario</span></button>
           <button class="btn sm tbtn " data-act="chatAsk" aria-label="Pedir receta" title="Pedir receta">${ico('hand')}<span class="lbl">Pedir receta</span></button>
           <button class="btn sm tbtn " data-act="chatSuggest" aria-label="Sugerir receta" title="Sugerir receta">${ico('sparkle')}<span class="lbl">Sugerir receta</span></button>
         </div>
@@ -1124,12 +1304,12 @@ function renderMsgs(forceBottom){
     const mine=m.from===S.uid;
     let inner='';
     if(m.type==='recipe'||m.type==='folder'){
-      const sn=m.snap||{}; const tag = m.purpose==='suggest'?'Te sugiero':(m.purpose==='answer'?'Aquí tienes':(m.type==='recipe'?'Receta':'Carpeta'));
+      const sn=m.snap||{}; const tag = m.purpose==='suggest'?'Te sugiero':(m.purpose==='answer'?'Aquí tienes':(m.type==='recipe'?'Receta':'Recetario'));
       const meta = m.type==='recipe' ? [sn.time, sn.servings?sn.servings+' raciones':'', sn.n?sn.n+' ingredientes':''].filter(Boolean).join(' · ') : `${sn.n||0} recetas`;
       const k=m.type==='recipe'?'r':'f';
       inner=`<span class="tag">${esc(tag)}</span>${m.text?esc(m.text):''}<div class="mcard"><div class="mt">${esc(sn.title||'')}</div><div style="font-size:13px;color:var(--paper-muted)">${esc(meta)}</div>
         <div class="row"><button class="btn sm" data-act="openRef" data-k="${k}" data-i="${esc(m.ref?.id)}">${ico('book')}Abrir</button>
-        ${mine?'':`<button class="btn sm" data-act="saveRef" data-k="${k}" data-i="${esc(m.ref?.id)}">${ico('save')}Guardar en mi libro</button>`}</div></div>`;
+        ${mine?'':`<button class="btn sm" data-act="saveRef" data-k="${k}" data-i="${esc(m.ref?.id)}">${ico('save')}Guardar en mi recetario</button>`}</div></div>`;
     } else if(m.type==='ask'){
       inner=`<span class="tag">Pide una receta</span>${esc(m.text)}${mine?'':`<div class="row" style="margin-top:8px"><button class="btn sm" data-act="answerAsk">${ico('send')}Enviarle una receta</button></div>`}`;
     } else inner=fmt(m.text);
@@ -1151,37 +1331,137 @@ function recipePicker(title, cb){
   $('#rpq',m).oninput=e=>draw(e.target.value); draw('');
 }
 
+/* ===== Panel de administración ===== */
+const ADM_TABS=[['resumen','chart','Resumen'],['usuarios','users','Usuarios'],['recetas','book','Recetas'],['mensajes','mail','Mensajes'],['sugerencias','sparkle','Sugerencias']];
+const isSuper = () => S.me?.role==='superadmin';
+function viewAdmin(){
+  S.admTab=S.admTab||'resumen';
+  return `<div class="admin">
+    <div class="lib-head"><div><p class="eyebrow">${isSuper()?'Superadministradora':'Administración'}</p><h1>Panel de administración</h1></div></div>
+    <div class="adm-tabs" role="tablist">${ADM_TABS.map(([k,i,t])=>`<button role="tab" data-adm="${k}" aria-selected="${S.admTab===k}">${ico(i)}<span>${t}</span></button>`).join('')}</div>
+    <div id="admBody" class="adm-body"><div class="status"><span class="spin"></span>Cargando…</div></div>
+  </div>`;
+}
+document.addEventListener('click',e=>{ const t=e.target.closest('[data-adm]'); if(!t||S.view!=='admin') return; S.admTab=t.dataset.adm; document.querySelectorAll('[data-adm]').forEach(x=>x.setAttribute('aria-selected',x===t)); adminLoad(); });
+const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('es-ES',{day:'numeric',month:'short',year:'numeric'}) : '—';
+const fmtAgo = ts => { if(!ts) return 'nunca'; const d=(Date.now()-ts)/864e5; return d<1?'hoy':d<2?'ayer':`hace ${Math.floor(d)} días`; };
+async function adminLoad(){
+  const box=$('#admBody'); if(!box) return; const tab=S.admTab;
+  box.innerHTML='<div class="status"><span class="spin"></span>Cargando…</div>';
+  try{
+    if(tab==='resumen') box.innerHTML=admResumen(await api('GET','/admin/stats'));
+    else if(tab==='usuarios'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"></div><div id="admList"></div>`; bindAdmSearch('usuarios'); await admUsers(); }
+    else if(tab==='recetas'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); await admRecipes(); }
+    else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
+    else if(tab==='sugerencias'){ box.innerHTML=admSugg(await api('GET','/admin/suggestions')); bindAdmSugg(); }
+  }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido cargar.')}</p>`; }
+}
+let admT=null;
+function bindAdmSearch(kind){ const i=$('#admQ'); i.oninput=()=>{ S.admQ=i.value; clearTimeout(admT); admT=setTimeout(()=>kind==='usuarios'?admUsers():admRecipes(),250); }; }
+function admResumen(d){
+  const kpi=(n,l,sub='')=>`<div class="kpi"><b>${n.toLocaleString('es-ES')}</b><span>${l}</span>${sub?`<small>${sub}</small>`:''}</div>`;
+  const bars=(rows,label)=>{ const max=Math.max(1,...rows.map(r=>r.n)); return `<figure class="bars" aria-label="${label}"><figcaption>${label}</figcaption><div class="bw">${rows.map(r=>`<span title="${new Date(r.d).toLocaleDateString('es-ES',{day:'numeric',month:'short'})}: ${r.n}" style="height:${Math.max(2,r.n/max*100)}%"></span>`).join('')}</div><div class="bx"><span>hace 30 días</span><span>hoy</span></div></figure>`; };
+  return `<div class="kpis">
+      ${kpi(d.usuarios.cuentas,'cuentas',`+${d.usuarios.nuevas7} esta semana`)}
+      ${kpi(d.usuarios.activos7,'activas en 7 días')}
+      ${kpi(d.recetas.total,'recetas',`+${d.recetas.nuevas7} esta semana`)}
+      ${kpi(d.recetarios.total,'recetarios')}
+      ${kpi(d.amistades,'amistades')}
+      ${kpi(d.mensajes.total,'mensajes de chat',`+${d.mensajes.nuevos7} esta semana`)}
+      ${kpi(d.ia.hoy,'usos de IA hoy',`${d.ia.semana} en 7 días`)}
+      ${kpi(d.usuarios.anonimos,'estanterías sin cuenta')}
+    </div>
+    ${d.contacto.nuevos?`<div class="banner">${ico('mail')}<span style="flex:1">Tienes ${d.contacto.nuevos} ${d.contacto.nuevos===1?'mensaje nuevo':'mensajes nuevos'} de contacto.</span><button class="btn sm" data-adm="mensajes">Ver mensajes</button></div>`:''}
+    <div class="charts">${bars(d.altas,'Cuentas nuevas por día')}${bars(d.recetasDia,'Recetas nuevas por día')}</div>
+    <p class="muted" style="font-size:13px">${d.usuarios.admins} ${d.usuarios.admins===1?'persona administra':'personas administran'} la app${d.usuarios.bloqueados?` · ${d.usuarios.bloqueados} ${d.usuarios.bloqueados===1?'cuenta bloqueada':'cuentas bloqueadas'}`:''}.</p>`;
+}
+async function admUsers(){
+  const list=await api('GET','/admin/users?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
+  if(!list.length){ box.innerHTML='<p class="muted">No hay cuentas con esa búsqueda.</p>'; return; }
+  const roleLbl={superadmin:'Superadministradora',admin:'Administrador',user:'Usuario'};
+  box.innerHTML=`<div class="adm-rows">${list.map(u=>{
+    S.profiles[u.id]=S.profiles[u.id]||{id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
+    const me=u.id===S.uid, target=u.role;
+    const canMod = !me && target!=='superadmin' && (target!=='admin' || isSuper());
+    return `<div class="adm-row ${u.blocked?'blocked':''}">
+      ${avatar(u.id)}
+      <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-${target}">${roleLbl[target]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Bloqueada</span>':''}</div>
+        <div class="ar-s">${esc(u.email||'sin correo')} · ${u.recetas} recetas · alta ${fmtDate(u.accepted_at)} · última vez ${fmtAgo(u.last_seen)}</div></div>
+      <div class="ar-act">
+        ${isSuper() && target!=='superadmin' ? `<button class="btn sm" data-act="admRole" data-id="${esc(u.id)}" data-role="${target==='admin'?'user':'admin'}">${target==='admin'?'Quitar administrador':'Hacer administrador'}</button>`:''}
+        ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Desbloquear':'Bloquear'}</button><button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`:''}
+      </div></div>`; }).join('')}</div>`;
+}
+async function admRecipes(){
+  const list=await api('GET','/admin/recipes?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
+  if(!list.length){ box.innerHTML='<p class="muted">No hay recetas con esa búsqueda.</p>'; return; }
+  box.innerHTML=`<div class="adm-rows">${list.map(r=>`<div class="adm-row">
+      <span class="thumb sm">${r.image&&r.image!=='data'?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
+      <div class="ar-main"><div class="ar-t">${esc(r.title||'Sin título')}</div><div class="ar-s">@${esc(r.username)} · ${fmtDate(r.created)}</div></div>
+      <div class="ar-act"><button class="btn sm" data-act="openRef" data-k="r" data-i="${esc(r.id)}">Ver</button><button class="btn sm danger" data-act="admDelRecipe" data-id="${esc(r.id)}" data-n="${esc(r.title||'')}">Borrar</button></div></div>`).join('')}</div>`;
+}
+function admContact(list){
+  if(!list.length) return '<p class="muted">No hay mensajes de contacto.</p>';
+  return `<div class="adm-rows">${list.map(c=>`<div class="adm-row msg-row ${c.status==='nuevo'?'is-new':''}">
+      <div class="ar-main"><div class="ar-t">${esc(c.subject||'Contacto')} ${c.status==='nuevo'?'<span class="role r-admin">Nuevo</span>':'<span class="role">Respondido</span>'}</div>
+        <div class="ar-s">${esc(c.email)} · ${fmtDate(c.created)}</div>
+        <p class="ar-msg">${esc(c.message)}</p></div>
+      <div class="ar-act"><button class="btn sm" data-act="admCopy" data-v="${esc(c.email)}">${ico('copy')}Copiar correo</button>
+        <button class="btn sm" data-act="admMsg" data-id="${esc(c.id)}" data-s="${c.status==='nuevo'?'respondido':'nuevo'}">${c.status==='nuevo'?'Marcar respondido':'Marcar como nuevo'}</button>
+        <button class="btn sm danger" data-act="admDelMsg" data-id="${esc(c.id)}">Borrar</button></div></div>`).join('')}</div>`;
+}
+function admSugg(list){
+  return `<p class="muted" style="margin-top:0">Las recetas que aparecen en «Recetas famosas» en la biblioteca de todo el mundo.</p>
+    <form id="admSuggForm" class="inline-form"><div class="field" style="flex:1"><label for="sgUrl">Enlace de la receta</label><input id="sgUrl" class="inp" type="url" required placeholder="https://cookpad.com/es/recetas/…"></div><button class="btn pri">${ico('plus')}Añadir sugerencia</button></form>
+    <div class="adm-rows">${list.map(s=>`<div class="adm-row ${s.hidden?'blocked':''}">
+      <span class="thumb sm">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
+      <div class="ar-main"><div class="ar-t">${esc(s.title)} ${s.hidden?'<span class="role">Oculta</span>':''}</div><div class="ar-s"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.author||s.url)}</a></div></div>
+      <div class="ar-act"><button class="btn sm" data-act="admSuggHide" data-id="${esc(s.id)}" data-h="${s.hidden?0:1}">${s.hidden?'Mostrar':'Ocultar'}</button><button class="btn sm danger" data-act="admSuggDel" data-id="${esc(s.id)}">Borrar</button></div></div>`).join('')}</div>`;
+}
+function bindAdmSugg(){ const f=$('#admSuggForm'); if(!f) return; f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector('button'); b.disabled=true;
+  try{ await api('POST','/admin/suggestions',{url:$('#sgUrl').value.trim()}); S.sugg=null; toast('Sugerencia añadida'); adminLoad(); }catch(err){ toast(err.error); b.disabled=false; } }; }
+const admDo = async (fn,msg) => { try{ await fn(); toast(msg); adminLoad(); }catch(err){ toast(err.error||'No se ha podido hacer'); } };
+const ADM_ACT = {
+  admRole:el=>admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/role`,{role:el.dataset.role}), el.dataset.role==='admin'?'Ahora es administrador':'Ya no es administrador'),
+  admBlock:el=>admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:el.dataset.b==='1'}), el.dataset.b==='1'?'Cuenta bloqueada':'Cuenta desbloqueada'),
+  admDelUser:async el=>{ if(await confirmBox(`Se borrará la cuenta @${el.dataset.n} con todas sus recetas y mensajes. No se puede deshacer.`)) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
+  admDelRecipe:async el=>{ if(await confirmBox(`Se borrará la receta «${el.dataset.n}» de su recetario.`)) admDo(()=>api('DELETE','/admin/recipes/'+el.dataset.id),'Receta borrada'); },
+  admMsg:el=>admDo(()=>api('PUT','/admin/contact/'+el.dataset.id,{status:el.dataset.s}),'Mensaje actualizado'),
+  admDelMsg:async el=>{ if(await confirmBox('Se borrará este mensaje de contacto.')) admDo(()=>api('DELETE','/admin/contact/'+el.dataset.id),'Mensaje borrado'); },
+  admCopy:el=>copyText(el.dataset.v),
+  admSuggHide:el=>admDo(()=>api('PUT','/admin/suggestions/'+el.dataset.id,{hidden:el.dataset.h==='1'}),el.dataset.h==='1'?'Sugerencia oculta':'Sugerencia visible').then(()=>{S.sugg=null}),
+  admSuggDel:async el=>{ if(await confirmBox('Se quitará esta sugerencia.')) admDo(()=>api('DELETE','/admin/suggestions/'+el.dataset.id),'Sugerencia borrada').then(()=>{S.sugg=null}); },
+};
+
 /* ===== Acciones ===== */
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
+  addSugg:el=>addSuggestion(el.dataset.id),
+  logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   go:el=>go(el.dataset.v),
   closeModal:()=>closeModal(),
   register:()=>{ closeModal(); authModal('signup'); },
   login:()=>{ closeModal(); authModal('login'); },
-  account:()=>accountModal(),
+  account:()=>go('account'),
   newRecipe:el=>{ closeModal(); newRecipeModal(el.dataset.folder||undefined); },
   newFolder:()=>folderModal(),
   openBook:el=>openBook(el.dataset.id),
   openRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); },
-  closeBook:()=>{ S.zoom=null; document.body.style.overflow=''; const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
+  closeBook:()=>{ const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
   prevPage:()=>turn('prev'), nextPage:()=>turn('next'),
-  goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn='next'; S.page=p; renderBook(); S.turn=null; },
-  zoomFull:()=>zoomTo('full'),
-  zoomClose:()=>zoomTo(null),
-  zoomSpread:()=>{ S.page=S.zoomPage-(S.zoomPage%2); zoomTo(S.zoomFrom==='full'?'full':null); },
-  serv:el=>{ const r=S.book.recipes.find(x=>x.id===el.dataset.id); const base=parseInt(r.servings)||0; if(!base) return; const cur=S.scale[r.id]||base; S.scale[r.id]=Math.max(1,Math.min(99,cur+ +el.dataset.d)); renderBook(); },
+  goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn=p>S.page?'next':'prev'; S.page=p; renderBook(); S.turn=null; window.scrollTo({top:0,behavior:'smooth'}); },
   editRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) editorModal({...r}); },
   shareRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) shareModal('recipe',r); },
   moveRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Mover a…', async fid=>{ try{ await store.saveRecipe({...r,folderId:fid}); toast('Receta movida'); }catch(e){fail(e)} }); },
   delRecipe:async el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; if(await confirmBox(`Se borrará «${r.title}» de tu libro.`)){ try{ await store.deleteRecipe(r.id); toast('Receta borrada'); }catch(e){fail(e)} } },
   shareFolder:()=>{ const f=S.folders.find(x=>x.id===S.book.id); if(f) shareModal('folder',f); },
   editFolder:()=>{ const f=S.folders.find(x=>x.id===S.book.id); if(f) folderModal({...f}); },
-  delFolder:async()=>{ const f=S.folders.find(x=>x.id===S.book.id); if(!f) return; if(await confirmBox(`Se borrará la carpeta «${f.name}». Sus recetas no se pierden: pasan a «Sin carpeta».`)){ try{ await store.deleteFolder(f.id); go('library'); toast('Carpeta borrada'); }catch(e){fail(e)} } },
+  delFolder:async()=>{ const f=S.folders.find(x=>x.id===S.book.id); if(!f) return; if(await confirmBox(`Se borrará el recetario «${f.name}». Sus recetas no se pierden: pasan a «Sin recetario».`)){ try{ await store.deleteFolder(f.id); go('library'); toast('Recetario borrado'); }catch(e){fail(e)} } },
   saveCopy:()=>{ const r=currentRecipe(); if(!r) return; folderPicker('Guardar en…', async fid=>{ try{ await copyToMine({...r, fromUid:S.book.owner}, fid); await loadState(); toast('Guardada en tu libro'); }catch(e){ fail(e); } }); },
-  saveFolderCopy:async()=>{ const b=S.book; try{ const fid=gid(); await api('PUT','/folders/'+fid,{name:b.name,color:b.color||CLOTHS[0][0],created:now()}); for(const r of b.recipes) await copyToMine({...r, fromUid:b.owner}, fid); await loadState(); toast(`«${b.name}» guardada en tu estantería`); }catch(e){ fail(e); } },
+  saveFolderCopy:async()=>{ const b=S.book; try{ const fid=gid(); await api('PUT','/folders/'+fid,{name:b.name,color:b.color||CLOTHS[0][0],created:now()}); for(const r of b.recipes) await copyToMine({...r, fromUid:b.owner}, fid, false); await loadState(); toast(`«${b.name}» guardado en tu estantería`); }catch(e){ fail(e); } },
   openLink:()=>{ const m=openModal(`${mHead('Abrir un enlace')}<form id="fl" style="display:grid;gap:12px"><div class="field"><label for="lk">Pega el enlace que te han pasado</label><input id="lk" class="inp" required></div><div id="lkst"></div><div class="row" style="justify-content:flex-end"><button class="btn pri">Abrir</button></div></form>`);
-    $('#fl',m).onsubmit=e=>{e.preventDefault();const c=parseCode($('#lk',m).value);if(!c){$('#lkst',m).innerHTML='<p class="err">Ese enlace no es de una receta o carpeta de Entre Fogones.</p>';return}closeModal();openShared(c)}; },
+    $('#fl',m).onsubmit=e=>{e.preventDefault();const c=parseCode($('#lk',m).value);if(!c){$('#lkst',m).innerHTML='<p class="err">Ese enlace no es de una receta o un recetario de Entre Fogones.</p>';return}closeModal();openShared(c)}; },
   addFriend:async el=>{ try{ const r=await api('POST','/friends/'+el.dataset.id); await loadState(); drawSearch(); toast(r.status==='accepted'?`Ahora ${pname(el.dataset.id)} y tú sois amigos`:'Solicitud enviada'); }catch(e){ fail(e); } },
   dropFriend:async el=>{ try{ await api('DELETE','/friends/'+el.dataset.id); await loadState(); drawSearch(); }catch(e){ fail(e); } },
   unfriend:el=>unfriend(el.dataset.id).catch(fail),
@@ -1190,7 +1470,7 @@ const ACT = {
   chatShareRecipe:()=>recipePicker('Compartir una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'share',t).catch(fail)),
   chatSuggest:()=>recipePicker('Sugerir una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'suggest',t).catch(fail)),
   answerAsk:()=>recipePicker('Enviarle una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'answer',t).catch(fail)),
-  chatShareFolder:()=>{ if(!S.folders.length) return; folderPicker('Compartir una carpeta', fid=>{ const f=S.folders.find(x=>x.id===fid); if(f) sendShare(S.chatWith,'folder',f,'share').catch(fail); },{allowNone:false}); },
+  chatShareFolder:()=>{ if(!S.folders.length) return; folderPicker('Compartir un recetario', fid=>{ const f=S.folders.find(x=>x.id===fid); if(f) sendShare(S.chatWith,'folder',f,'share').catch(fail); },{allowNone:false}); },
   chatAsk:()=>{ S.askMode=true; const ta=$('#ctext'); ta.placeholder='¿Qué receta le pides? Ej.: ¿me pasas la de tu tarta de queso?'; ta.focus(); toast('Escribe qué receta le pides'); },
   openRef:el=>openShared({kind:el.dataset.k, id:el.dataset.i}),
   saveRef:async el=>{
@@ -1200,11 +1480,17 @@ const ACT = {
         folderPicker('Guardar en…', async fid=>{ try{ await copyToMine({...d.recipe, fromUid:d.owner.id}, fid); await loadState(); toast('Guardada en tu libro'); }catch(e){fail(e)} }); }
       else { const d=await api('GET','/public/folder/'+i); const fid=gid();
         await api('PUT','/folders/'+fid,{name:d.folder.name,color:d.folder.color||CLOTHS[0][0],created:now()});
-        for(const r of d.recipes) await copyToMine({...r,fromUid:d.owner.id}, fid);
-        await loadState(); toast(`«${d.folder.name}» guardada en tu estantería`); }
+        for(const r of d.recipes) await copyToMine({...r,fromUid:d.owner.id}, fid, false);
+        await loadState(); toast(`«${d.folder.name}» guardado en tu estantería`); }
     }catch(e){ fail(e); }
   }
 };
-document.addEventListener('click',e=>{ const el=e.target.closest('[data-act]'); if(!el) return; const f=ACT[el.dataset.act]; if(f){ e.preventDefault(); f(el,e); } });
+document.addEventListener('click',e=>{ const el=e.target.closest('[data-act]'); if(!el) return; const f=ACT[el.dataset.act]||ADM_ACT[el.dataset.act]; if(f){ e.preventDefault(); f(el,e); } });
 
 boot();
+
+/* Sin zoom: la app no se amplía con gestos de pellizco, doble toque ni Ctrl + rueda */
+['gesturestart','gesturechange','gestureend'].forEach(t=>document.addEventListener(t,e=>e.preventDefault(),{passive:false}));
+document.addEventListener('touchmove',e=>{ if(e.touches && e.touches.length>1) e.preventDefault(); },{passive:false});
+document.addEventListener('wheel',e=>{ if(e.ctrlKey) e.preventDefault(); },{passive:false});
+document.addEventListener('keydown',e=>{ if((e.ctrlKey||e.metaKey) && ['+','-','=','0'].includes(e.key)) e.preventDefault(); });
