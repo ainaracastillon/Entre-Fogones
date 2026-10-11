@@ -75,6 +75,8 @@ async function migrate() {
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at BIGINT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_suggested JSONB;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+  CREATE TABLE IF NOT EXISTS push_subs(endpoint TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, keys JSONB NOT NULL, created BIGINT);
+  CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value JSONB NOT NULL);
   CREATE TABLE IF NOT EXISTS recipe_imgs(recipe_id TEXT PRIMARY KEY, img BYTEA NOT NULL, type TEXT, created BIGINT);
   CREATE TABLE IF NOT EXISTS menus(user_id TEXT NOT NULL, week TEXT NOT NULL, data JSONB NOT NULL, created BIGINT, PRIMARY KEY(user_id, week));
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS credit TEXT;
@@ -571,14 +573,55 @@ api.post('/friends/:id', needProfile, async (req, res, next) => {
     const o = (await q('SELECT username FROM users WHERE id=$1', [other])).rows[0];
     if (!o || !o.username || other === me) return res.status(404).json({ error: 'Esa persona no existe.' });
     const rev = (await q('SELECT * FROM requests WHERE from_id=$1 AND to_id=$2', [other, me])).rows[0];
-    if (rev) { await q("UPDATE requests SET status='accepted', ts=$3 WHERE from_id=$1 AND to_id=$2", [other, me, now()]); return res.json({ status: 'accepted' }); }
+    const who = req.user.display || '@' + req.user.username;
+    if (rev) { await q("UPDATE requests SET status='accepted', ts=$3 WHERE from_id=$1 AND to_id=$2", [other, me, now()]); sendPush(other, 'friends', { title: `${who} ha aceptado tu solicitud`, body: 'Ya sois amigos en Entre Fogones. ¡Mandaos recetas!', url: '/?v=friends' }); return res.json({ status: 'accepted' }); }
     await q("INSERT INTO requests(from_id,to_id,status,ts) VALUES($1,$2,'pending',$3) ON CONFLICT DO NOTHING", [me, other, now()]);
+    sendPush(other, 'friends', { title: 'Nueva solicitud de amistad', body: `${who} quiere ser tu amigo en Entre Fogones.`, url: '/?v=friends' });
     res.json({ status: 'pending' });
   } catch (e) { next(e); }
 });
 api.delete('/friends/:id', needProfile, async (req, res, next) => {
   try { await q('DELETE FROM requests WHERE (from_id=$1 AND to_id=$2) OR (from_id=$2 AND to_id=$1)', [req.user.id, req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
 });
+
+/* ---------- Notificaciones en el móvil (Web Push) ---------- */
+let webpush = null, vapid = null;
+async function pushReady() {
+  if (webpush && vapid) return true;
+  try { webpush = require('web-push'); } catch { return false; }
+  let row = (await q("SELECT value FROM app_settings WHERE key='vapid'")).rows[0];
+  if (!row) { const k = webpush.generateVAPIDKeys(); await q("INSERT INTO app_settings(key,value) VALUES('vapid',$1) ON CONFLICT(key) DO NOTHING", [k]); row = (await q("SELECT value FROM app_settings WHERE key='vapid'")).rows[0]; }
+  vapid = row.value;
+  webpush.setVapidDetails('mailto:' + (process.env.LEGAL_EMAIL || SUPERADMIN_EMAIL), vapid.publicKey, vapid.privateKey);
+  return true;
+}
+const NOTIFY_DEFAULT = { messages: true, friends: true, notices: true, shares: true };
+// kind: messages | friends | notices | shares
+async function sendPush(userIds, kind, payload) {
+  try {
+    const ids = [...new Set([].concat(userIds).filter(Boolean))]; if (!ids.length || !(await pushReady())) return;
+    const rows = (await q('SELECT s.endpoint, s.keys, s.user_id, u.prefs FROM push_subs s JOIN users u ON u.id=s.user_id WHERE s.user_id = ANY($1) AND NOT u.blocked', [ids])).rows;
+    const body = JSON.stringify({ title: 'Entre Fogones', icon: '/icon-192.png', badge: '/favicon-32.png', ...payload });
+    await Promise.all(rows.filter(r => ({ ...NOTIFY_DEFAULT, ...((r.prefs || {}).notify || {}) })[kind] !== false).map(r =>
+      webpush.sendNotification({ endpoint: r.endpoint, keys: r.keys }, body, { TTL: 86400 }).catch(async e => {
+        if (e.statusCode === 404 || e.statusCode === 410) await q('DELETE FROM push_subs WHERE endpoint=$1', [r.endpoint]).catch(() => {});
+        else console.error('push', e.statusCode, String(e.body || e.message).slice(0, 120));
+      })));
+  } catch (e) { console.error('push', e.message); }
+}
+api.get('/push/key', async (req, res) => { if (!(await pushReady())) return res.status(503).json({ error: 'Las notificaciones se están instalando. Prueba en unos minutos.' }); res.json({ key: vapid.publicKey }); });
+api.post('/push/subscribe', needProfile, async (req, res, next) => {
+  try {
+    const sub = req.body.subscription || {};
+    if (!/^https:\/\//.test(sub.endpoint || '') || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) return res.status(400).json({ error: 'Suscripción no válida.' });
+    await q('INSERT INTO push_subs(endpoint,user_id,keys,created) VALUES($1,$2,$3,$4) ON CONFLICT(endpoint) DO UPDATE SET user_id=$2, keys=$3', [sub.endpoint.slice(0, 1000), req.user.id, { p256dh: String(sub.keys.p256dh).slice(0, 200), auth: String(sub.keys.auth).slice(0, 100) }, now()]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.post('/push/unsubscribe', needProfile, async (req, res, next) => {
+  try { await q('DELETE FROM push_subs WHERE endpoint=$1 AND user_id=$2', [String(req.body.endpoint || ''), req.user.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.post('/push/test', needProfile, async (req, res) => { await sendPush(req.user.id, 'notices', { title: 'Entre Fogones', body: '¡Listo! Así te llegarán los avisos al móvil.', url: '/' }); res.json({ ok: true }); });
 
 /* Chat */
 api.get('/chats/:other/messages', needProfile, async (req, res, next) => {
@@ -610,6 +653,9 @@ async function saveMessage(me, other, b, file) {
   await q('INSERT INTO messages(id,chat_id,from_id,ts,data) VALUES($1,$2,$3,$4,$5)', [id, key, me, ts, data]);
   const [a, bb] = [me, other].sort();
   await q(`INSERT INTO chats(id,a,b,ts,last) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET ts=$4, last=$5`, [key, a, bb, ts, { from: me, text: msgPreview(data).slice(0, 140) }]);
+  q('SELECT display, username FROM users WHERE id=$1', [me]).then(r => { const u = r.rows[0] || {};
+    const shared = ['recipe', 'folder'].includes(type);
+    sendPush(other, shared ? 'shares' : 'messages', { title: (u.display || '@' + u.username) + (shared ? ' te ha mandado una receta' : ''), body: msgPreview(data).slice(0, 140), url: `/?v=chat&c=${me}`, tag: 'chat-' + me }); }).catch(() => {});
   return { id, ts };
 }
 function msgPreview(d) {
@@ -1151,6 +1197,7 @@ api.put('/me/prefs', needProfile, async (req, res, next) => {
     if ('fontScale' in b) p.fontScale = Math.max(0.8, Math.min(1.6, Number(b.fontScale) || 1));
     if ('diabetes' in b) p.diabetes = ['', 'tipo1', 'tipo2', 'gestacional', 'prediabetes'].includes(b.diabetes) ? b.diabetes : '';
     if ('diet' in b) p.diet = String(b.diet || '').slice(0, 300);
+    if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'notices', 'shares'].map(k => [k, b.notify[k] !== false]));
     await q('UPDATE users SET prefs=$1 WHERE id=$2', [p, req.user.id]);
     res.json({ ok: true, prefs: p });
   } catch (e) { next(e); }
@@ -2027,6 +2074,8 @@ adm.post('/notices', async (req, res, next) => {
     const n = cleanNotice(req.body);
     if (!n.title && !n.body && !n.image) return res.status(400).json({ error: 'Pon al menos un título, un texto o una imagen.' });
     if (n.audience === 'users' && !n.recipients.length) return res.status(400).json({ error: 'Elige al menos una persona.' });
+    const targets = n.audience === 'users' ? n.recipients : (await q(n.audience === 'admins' ? "SELECT id FROM users WHERE role IN ('admin','superadmin') AND username IS NOT NULL" : 'SELECT DISTINCT user_id id FROM push_subs')).rows.map(r => r.id);
+    sendPush(targets, 'notices', { title: n.title || 'Nuevo aviso', body: String(n.body || '').replace(/\*+/g, '').slice(0, 160) || 'Tienes un aviso nuevo en Entre Fogones.', url: '/', tag: 'aviso' });
     await q(`INSERT INTO notices(id,title,body,image,url,url_label,dismissible,popup,active,created,created_by,audience,recipients) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10,$11,$12)`,
       [gid(), n.title || null, n.body || null, n.image, n.url, n.url_label, n.dismissible, n.popup, now(), req.user.id, n.audience, JSON.stringify(n.audience === 'users' ? n.recipients : [])]);
     res.json({ ok: true });

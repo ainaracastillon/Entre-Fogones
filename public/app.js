@@ -1503,6 +1503,13 @@ function viewAccount(){
       <div><button class="btn pri" id="diaSave">Guardar</button></div>
     </section>
 
+    <section class="card" id="pushCard">
+      <h2>Notificaciones en el móvil</h2>
+      <p class="muted">Si quieres, te avisamos en el móvil (o en el ordenador) aunque tengas la app cerrada.</p>
+      <div id="pushState"></div>
+      <div class="chips" id="notifyChips">${[['messages','Mensajes del chat'],['shares','Recetas que te mandan'],['friends','Solicitudes de amistad'],['notices','Avisos de Entre Fogones']].map(([k,l])=>`<button type="button" class="chip" data-nt="${k}" aria-pressed="${(me.prefs?.notify||{})[k]!==false}">${l}</button>`).join('')}</div>
+    </section>
+
     <section class="card">
       <h2>Tamaño de la letra de las recetas</h2>
       <p class="muted">Cambia el tamaño del texto de los ingredientes y la preparación cuando abres una receta.</p>
@@ -1581,9 +1588,52 @@ function bindAccount(root){
       const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`entre-fogones-mis-datos-${new Date().toISOString().slice(0,10)}.json`; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Datos descargados'); }
     catch(err){ toast(err.error||'No se han podido descargar'); } b.disabled=false; };
   const ad=$('#accDel',root); if(ad) ad.onclick=()=>deleteAccountModal();
+  drawPushState();
+  $('#notifyChips',root).onclick=async e=>{ const c=e.target.closest('[data-nt]'); if(!c) return; c.setAttribute('aria-pressed', c.getAttribute('aria-pressed')!=='true');
+    const notify=Object.fromEntries([...root.querySelectorAll('[data-nt]')].map(x=>[x.dataset.nt, x.getAttribute('aria-pressed')==='true']));
+    try{ await api('PUT','/me/prefs',{notify}); S.me.prefs={...(S.me.prefs||{}),notify}; toast('Guardado'); }catch(err){ toast(err.error||'No se ha podido guardar'); } };
   $('#diaSave',root).onclick=()=>ok(()=>api('PUT','/me/prefs',{diabetes:$('#diaType',root).value, diet:$('#diaNote',root).value.trim()}),'Guardado. La IA lo tendrá en cuenta');
   $('#fsChips',root).onclick=async e=>{ const c=e.target.closest('[data-fs]'); if(!c) return; root.querySelectorAll('[data-fs]').forEach(x=>x.setAttribute('aria-pressed',String(x===c)));
     document.documentElement.style.setProperty('--rfs', c.dataset.fs); await ok(()=>api('PUT','/me/prefs',{fontScale:+c.dataset.fs}),'Tamaño de letra guardado'); };
+}
+/* ===== Notificaciones en el móvil ===== */
+const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+const isIOS = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform==='MacIntel' && navigator.maxTouchPoints>1);
+const isStandalone = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone===true;
+async function pushSub(){ try{ const reg=await navigator.serviceWorker.getRegistration('/'); return reg ? await reg.pushManager.getSubscription() : null; }catch{ return null; } }
+const b64ToU8 = b => { const p='='.repeat((4-b.length%4)%4); const s=atob((b+p).replace(/-/g,'+').replace(/_/g,'/')); return Uint8Array.from([...s].map(c=>c.charCodeAt(0))); };
+async function drawPushState(){
+  const box=$('#pushState'); if(!box) return;
+  if(!pushSupported()){
+    box.innerHTML = isIOS() && !isStandalone()
+      ? `<div class="banner" style="margin:0">${ico('bell')}<span style="flex:1;min-width:200px">En iPhone y iPad las notificaciones solo funcionan con la app instalada: en Safari pulsa <b>Compartir</b> › <b>Añadir a pantalla de inicio</b>, abre Entre Fogones desde el icono y vuelve aquí.</span></div>`
+      : `<p class="muted" style="margin:0">Este navegador no permite notificaciones. Prueba con Chrome, Edge, Firefox o Safari actualizados.</p>`;
+    return;
+  }
+  const sub=await pushSub(), perm=Notification.permission;
+  if(perm==='denied'){ box.innerHTML=`<p class="err" style="margin:0">Tienes las notificaciones bloqueadas para Entre Fogones. Actívalas en los ajustes del navegador o del móvil y vuelve aquí.</p>`; return; }
+  box.innerHTML = sub
+    ? `<div class="row"><span class="push-on">${ico('check')}Activadas en este dispositivo</span><button class="btn sm" id="pushTest">Probar</button><button class="btn sm ghost" id="pushOff">Desactivar</button></div>`
+    : `<div class="row"><button class="btn pri" id="pushOn">${ico('bell')}Activar notificaciones</button></div>`;
+  $('#pushOn')?.addEventListener('click',enablePush);
+  $('#pushOff')?.addEventListener('click',disablePush);
+  $('#pushTest')?.addEventListener('click',async()=>{ try{ await api('POST','/push/test'); toast('Enviada. Te llegará en unos segundos'); }catch(err){ toast(err.error||'No se ha podido enviar'); } });
+}
+async function enablePush(){
+  try{
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){ toast('No has dado permiso para las notificaciones'); drawPushState(); return; }
+    const reg=await navigator.serviceWorker.register('/sw.js',{scope:'/'}); await navigator.serviceWorker.ready;
+    const {key}=await api('GET','/push/key');
+    let sub=await reg.pushManager.getSubscription();
+    if(!sub) sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:b64ToU8(key)});
+    await api('POST','/push/subscribe',{subscription:sub.toJSON()});
+    toast('Notificaciones activadas'); drawPushState();
+  }catch(err){ toast(err.error||'No se han podido activar las notificaciones'); drawPushState(); }
+}
+async function disablePush(){
+  try{ const sub=await pushSub(); if(sub){ await api('POST','/push/unsubscribe',{endpoint:sub.endpoint}).catch(()=>{}); await sub.unsubscribe(); } toast('Notificaciones desactivadas'); }catch{}
+  drawPushState();
 }
 /* Recorta la foto en cuadrado y la reduce a 320 px */
 async function squarePhoto(file){
@@ -2391,7 +2441,7 @@ function viewHelp(){
     ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas preferidas por los usuarios, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
     ${sec('Raciones, letra y alérgenos','user',`<ul><li>Cambia las raciones con el desplegable y las cantidades se recalculan.</li><li>En <b>Mi cuenta</b> eliges el tamaño de la letra de las recetas.</li><li>Apunta tus <b>alérgenos</b> y si tienes <b>diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li></ul>`)}
     ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
-    ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li></ul>`)}
+    ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li><li>En <b>Mi cuenta › Notificaciones en el móvil</b> puedes activar que te lleguen avisos de mensajes, recetas que te mandan, solicitudes de amistad y avisos de la app. En iPhone, primero añade la app a la pantalla de inicio.</li></ul>`)}
     ${sec('Moverte por la app','next',`<p>Desliza desde el borde izquierdo de la pantalla hacia el centro para volver a la página anterior, y desde el borde derecho para ir a la siguiente. El botón de atrás del móvil también funciona.</p>`)}
     ${sec('¿Más dudas?','mail',`<p>Escríbenos desde <a href="/legal/contacto">Contacto</a>.</p>`)}
   </div>`;
