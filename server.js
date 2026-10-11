@@ -452,6 +452,24 @@ ${String(text).slice(0, 45000)}
 TEXTO>>>` }] })));
 }
 const noAi = res => res.status(503).json({ error: 'La IA no está activada en este servidor todavía.' });
+// Comprobación de la IA: responde un texto mínimo y mira si los modelos existen
+let lastAiCheck = 0;
+api.get('/ai/check', async (req, res) => {
+  if (!PROVIDER) return res.json({ provider: null });
+  if (Date.now() - lastAiCheck < 20000) return res.status(429).json({ error: 'Espera unos segundos.' });
+  lastAiCheck = Date.now();
+  const out = { provider: PROVIDER };
+  try { const t = await llm({ messages: [{ role: 'user', text: 'Devuelve solo este JSON: {"ok":true,"saludo":"hola"}' }], maxTokens: 60 }); out.text = parseJson(t) ? 'ok' : 'respuesta rara'; }
+  catch (e) { out.text = 'error ' + (e.status || '') + ' ' + String(e.message).slice(0, 160); }
+  if (PROVIDER === 'groq') {
+    try { const r = await fetch('https://api.groq.com/openai/v1/models', { headers: { authorization: `Bearer ${GROQ_KEY}` }, signal: AbortSignal.timeout(15000) });
+      const ids = ((await r.json()).data || []).map(m => m.id);
+      out.models = { chat: ids.includes(GROQ_MODEL), fallback: ids.includes(GROQ_FALLBACK), vision: ids.includes(GROQ_VISION_MODEL) };
+      out.visionCandidates = ids.filter(i => /vision|scout|maverick|qwen|vl|llava/i.test(i));
+    } catch (e) { out.models = 'error'; }
+  }
+  res.json(out);
+});
 api.post('/ai/extract', async (req, res) => {
   if (!PROVIDER) return noAi(res);
   try { const r = await aiExtract(req.body.text || ''); if (!r) return res.status(422).json({ error: 'No he encontrado una receta en ese texto. Revisa que hayas copiado la página entera.' }); res.json({ recipe: r }); }
