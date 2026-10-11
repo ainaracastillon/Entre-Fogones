@@ -523,6 +523,75 @@ function youtubeId(u) {
   if (url.searchParams.get('v')) return url.searchParams.get('v');
   const m = url.pathname.match(/\/(shorts|embed|live)\/([\w-]{6,})/); return m ? m[2] : null;
 }
+/* TikTok: se lee la página como un navegador (con sus cookies) para sacar la descripción completa,
+   los subtítulos automáticos y, si no hay, el propio vídeo para escucharlo */
+const BROWSER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36';
+async function jarFetch(url, jar, headers = {}, timeout = 20000) {
+  let u = url;
+  for (let hop = 0; hop < 6; hop++) {
+    const x = new URL(u);
+    if (!/^https?:$/.test(x.protocol)) throw new Error('bad_url');
+    const addrs = await dns.lookup(x.hostname, { all: true });
+    if (addrs.some(a => privateIp(a.address))) throw new Error('bad_url');
+    const cookie = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
+    const r = await fetch(x, { redirect: 'manual', signal: AbortSignal.timeout(timeout), headers: {
+      'User-Agent': BROWSER_UA, 'Accept-Language': 'es-ES,es;q=0.9,en;q=0.6', ...(cookie ? { cookie } : {}), ...headers } });
+    for (const c of (r.headers.getSetCookie ? r.headers.getSetCookie() : [])) { const [kv] = c.split(';'); const i = kv.indexOf('='); if (i > 0) jar[kv.slice(0, i).trim()] = kv.slice(i + 1).trim(); }
+    if (r.status >= 300 && r.status < 400 && r.headers.get('location')) { u = new URL(r.headers.get('location'), x).toString(); continue; }
+    r.finalUrl = u; return r;
+  }
+  throw new Error('too_many_redirects');
+}
+function vttToText(v) {
+  const out = [];
+  for (const line of String(v).split(/\r?\n/)) {
+    const l = line.trim();
+    if (!l || /^WEBVTT/.test(l) || /-->/.test(l) || /^\d+$/.test(l) || /^(NOTE|STYLE|Kind:|Language:)/.test(l)) continue;
+    const t = l.replace(/<[^>]+>/g, '').trim();
+    if (t && out[out.length - 1] !== t) out.push(t);
+  }
+  return out.join(' ');
+}
+async function tiktokData(url) {
+  const jar = {}, out = { title: '', desc: '', speech: '', image: '', how: [] };
+  const r = await jarFetch(url, jar, { Accept: 'text/html,application/xhtml+xml' });
+  const html = await r.text();
+  let item = null;
+  const m = html.match(/<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+  if (m) { try { const j = JSON.parse(m[1]); item = j.__DEFAULT_SCOPE__?.['webapp.video-detail']?.itemInfo?.itemStruct || null; } catch { } }
+  if (!item) { const s2 = html.match(/<script[^>]+id="SIGI_STATE"[^>]*>([\s\S]*?)<\/script>/); if (s2) { try { const j = JSON.parse(s2[1]); item = Object.values(j.ItemModule || {})[0] || null; } catch { } } }
+  if (!item) {
+    out.desc = metaTag(html, 'og:description') || metaTag(html, 'description'); out.title = metaTag(html, 'og:title'); out.image = metaTag(html, 'og:image');
+    if (out.desc) out.how.push('meta');
+    return out;
+  }
+  out.how.push('pagina');
+  out.desc = [item.desc, ...(item.contents || []).map(c => c.desc)].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join('\n');
+  if (item.imagePost?.title) out.desc = item.imagePost.title + '\n' + out.desc;
+  out.title = item.desc ? item.desc.split('\n')[0].slice(0, 120) : '';
+  const v = item.video || {};
+  out.image = v.cover || v.originCover || v.dynamicCover || '';
+  const hdr = { Referer: 'https://www.tiktok.com/', Accept: '*/*' };
+  // subtítulos (los automáticos de TikTok): mejor en español, si no en inglés
+  const subs = (v.subtitleInfos || []).filter(x => x.Url);
+  const pick = subs.find(x => /^spa|^es/i.test(x.LanguageCodeName || x.LanguageID || '') && x.Source !== 'MT') || subs.find(x => /^spa|^es/i.test(x.LanguageCodeName || ''))
+    || subs.find(x => /^eng|^en/i.test(x.LanguageCodeName || '')) || subs[0];
+  if (pick) { try { const s3 = await jarFetch(pick.Url, jar, hdr); if (s3.ok) { out.speech = vttToText(await s3.text()); if (out.speech) out.how.push('subtitulos'); } } catch (e) { console.error('tiktok subs', e.message); } }
+  // sin subtítulos: se descarga el vídeo y se escucha
+  if (!out.speech && CAN_HEAR) {
+    const cands = [v.playAddr, v.downloadAddr, ...((v.bitrateInfo || []).flatMap(b => b.PlayAddr?.UrlList || []))].filter(Boolean);
+    for (const addr of cands.slice(0, 4)) {
+      try {
+        const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
+        if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
+        const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
+        const buf = Buffer.from(await vr.arrayBuffer()); if (buf.length < 20000 || buf.length > 24e6) continue;
+        out.speech = await transcribe(buf, 'video/mp4'); if (out.speech) { out.how.push('audio'); break; }
+      } catch (e) { console.error('tiktok video', e.message); }
+    }
+  }
+  return out;
+}
 async function videoText(url) {
   const host = new URL(url).hostname.toLowerCase();
   const out = { title: '', text: '', image: '' };
@@ -543,9 +612,14 @@ async function videoText(url) {
     }
     out.text = [desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
   } else if (/tiktok/.test(host)) {
-    try { const j = JSON.parse(await getText('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url)));
-      out.title = j.title || ''; out.text = j.title || ''; out.image = j.thumbnail_url || ''; } catch { }
-    if (!out.text) { const html = await getText(url, { 'User-Agent': BOT_UA }); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.title = metaTag(html, 'og:title'); out.image = metaTag(html, 'og:image'); }
+    let t = null;
+    try { t = await tiktokData(url); } catch (e) { console.error('tiktok', e.message); }
+    if (!t || !t.desc) {
+      try { const j = JSON.parse(await getText('https://www.tiktok.com/oembed?url=' + encodeURIComponent(t?.finalUrl || url)));
+        t = t || { how: [] }; t.desc = t.desc || j.title || ''; t.title = t.title || (j.title || '').slice(0, 120); t.image = t.image || j.thumbnail_url || ''; t.how.push('oembed'); } catch { }
+    }
+    if (t) { out.title = t.title || ''; out.image = t.image || ''; out.how = t.how;
+      out.text = [t.desc && 'Descripción del vídeo: ' + t.desc, t.speech && 'Lo que se dice en el vídeo: ' + t.speech].filter(Boolean).join('\n\n'); }
   } else if (/instagram/.test(host)) {
     const m = new URL(url).pathname.match(/\/(p|reel|reels|tv)\/([\w-]+)/);
     if (m) {
@@ -572,6 +646,17 @@ Título: ${String(title).slice(0, 300)}
 ${String(text).slice(0, 40000)}
 VIDEO>>>` }] })));
 }
+api.get('/_vdbg/k7Q2xw9Lm4', async (req, res) => {
+  try {
+    if (!req.query.url) {
+      const r = await jarFetch('https://www.tiktok.com/discover/' + (req.query.d || 'receta-facil'), {}, { Accept: 'text/html' });
+      const h = await r.text();
+      return res.json({ status: r.status, links: [...new Set([...h.matchAll(/https?:\/\/www\.tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => m[0]))].slice(0, 15), len: h.length });
+    }
+    const v = await videoText(String(req.query.url));
+    res.json({ how: v.how, title: v.title, image: !!v.image, text: v.text.slice(0, 3000) });
+  } catch (e) { res.json({ error: e.message }); }
+});
 async function importVideo(url, res) {
   let v;
   try { v = await videoText(url); }
