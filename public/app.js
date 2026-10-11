@@ -244,7 +244,10 @@ async function boot(){
   }
   S.booted = true;
   window.addEventListener('hashchange', routeHash);
-  render(); routeHash(); loadNotices();
+  const later=restoreFromUrl();
+  // tras recargar se conserva la posición en el historial (para atrás y adelante)
+  const hs=history.state&&history.state.ef; if(typeof hs==='number'){ NAV.i=NAV.top=hs; }
+  render(); later?.(); routeHash(); loadNotices();
   setInterval(()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); }, 8000);
   setInterval(()=>{ if(document.visibilityState==='visible') loadNotices(); }, 60000);
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); });
@@ -344,13 +347,41 @@ function refresh(){
 const NAV={i:0, top:0, snaps:[], restoring:false, lastPop:0};
 const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'');
 const navSnap=()=>({view:S.view, book:S.book, page:S.page, chatWith:S.chatWith, key:navKey(S)});
+/* La página actual va en la dirección (?v=…) para que al recargar se abra la misma */
+function navUrl(){
+  const p=new URLSearchParams();
+  if(S.view && S.view!=='library') p.set('v',S.view);
+  if(S.view==='book' && S.book){ p.set('b',S.book.id); if(S.page) p.set('p',S.page); }
+  if(S.view==='chat' && S.chatWith) p.set('c',S.chatWith);
+  if(S.view==='admin' && S.admTab && S.admTab!=='resumen') p.set('t',S.admTab);
+  const q=p.toString(); return location.pathname+(q?'?'+q:'');
+}
 function navTrack(){
   if(NAV.restoring || !S.booted) return;
   const cur=NAV.snaps[NAV.i], s=navSnap();
-  if(!cur){ NAV.snaps[NAV.i]=s; try{ history.replaceState({ef:NAV.i},''); }catch{} return; }
-  if(cur.key===s.key){ NAV.snaps[NAV.i]=s; return; }
+  if(!cur){ NAV.snaps[NAV.i]=s; try{ history.replaceState({ef:NAV.i},'',navUrl()); }catch{} return; }
+  if(cur.key===s.key){ NAV.snaps[NAV.i]=s; try{ history.replaceState({ef:NAV.i},'',navUrl()); }catch{} return; }
   NAV.i++; NAV.top=NAV.i; NAV.snaps.length=NAV.i; NAV.snaps[NAV.i]=s;
-  try{ history.pushState({ef:NAV.i},''); }catch{}
+  try{ history.pushState({ef:NAV.i},'',navUrl()); }catch{}
+}
+/* Al recargar: se vuelve a abrir la página en la que estabas */
+function restoreFromUrl(){
+  const p=new URLSearchParams(location.search), v=p.get('v');
+  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv'];
+  if(!v || !ok.includes(v)) return null;
+  if(v==='admin' && p.get('t')) S.admTab=p.get('t');
+  if(v==='chat'){ S.chatWith=p.get('c')||null; S.view='chat'; return null; }
+  if(v==='book'){
+    const id=p.get('b')||'', page=Math.max(0,parseInt(p.get('p'))||0);
+    const own=ownBook(id);
+    if(own){ S.book=own; S.page=Math.min(page, Math.max(0,pages().length-2)); S.view='book'; return null; }
+    // libros que no son tuyos: se vuelven a pedir al servidor
+    if(id.startsWith('sg-')) return ()=>openSuggestion(id.slice(3));
+    if(id.startsWith('v-')||id.startsWith('c-')) return ()=>openShared({kind:'r', id:id.slice(2)});
+    if(id) return ()=>openShared({kind:'f', id});
+    return null;
+  }
+  S.view=v; return null;
 }
 function navRestore(s){
   closeModal();
@@ -368,7 +399,17 @@ function navRestore(s){
   window.scrollTo(0,0);
 }
 addEventListener('popstate',e=>{
-  const i=e.state && e.state.ef; if(typeof i!=='number' || !NAV.snaps[i]) return;
+  const i=e.state && e.state.ef;
+  if(typeof i!=='number' || !NAV.snaps[i]){
+    // páginas de antes de recargar: se abren según la dirección
+    if(location.hash) return;
+    NAV.lastPop=Date.now(); closeModal(); if(S.view==='chat') stopChat();
+    S.view='library'; S.book=null;
+    const later=restoreFromUrl();
+    NAV.restoring=true; try{ render(); } finally { NAV.restoring=false; }
+    if(typeof i==='number'){ NAV.i=i; NAV.top=Math.max(NAV.top,i); }
+    NAV.snaps[NAV.i]=navSnap(); later?.(); window.scrollTo(0,0); return;
+  }
   NAV.lastPop=Date.now();
   const cur=NAV.snaps[NAV.i]; if(cur && cur.key===navKey(S)) NAV.snaps[NAV.i]=navSnap();
   NAV.i=i; navRestore(NAV.snaps[i]);
@@ -1287,7 +1328,7 @@ async function sendShare(to, kind, item, purpose, text=''){
 
 /* ===== Recetas y carpetas compartidas ===== */
 function parseCode(s){ const m=String(s||'').match(/([rf])~([A-Za-z0-9]{6,40})/); return m?{kind:m[1],id:m[2]}:null; }
-function routeHash(){ const pg=location.hash.match(/^#(ayuda|equivalencias|menu)$/); if(pg){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} go({ayuda:'help',equivalencias:'equiv',menu:'menu'}[pg[1]]); return; } const rm=location.hash.match(/^#reset~([a-f0-9]{64})$/); if(rm){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} resetModal(rm[1]); return; } const c=parseCode(location.hash); if(c){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} openShared(c); } }
+function routeHash(){ const pg=location.hash.match(/^#(ayuda|equivalencias|menu)$/); if(pg){ try{history.replaceState(history.state,'',location.pathname+location.search)}catch{} go({ayuda:'help',equivalencias:'equiv',menu:'menu'}[pg[1]]); return; } const rm=location.hash.match(/^#reset~([a-f0-9]{64})$/); if(rm){ try{history.replaceState(history.state,'',location.pathname+location.search)}catch{} resetModal(rm[1]); return; } const c=parseCode(location.hash); if(c){ try{history.replaceState(history.state,'',location.pathname+location.search)}catch{} openShared(c); } }
 async function openShared(c){
   if(c.kind==='r'){ const mine=S.recipes.find(x=>x.id===c.id); if(mine){ openBook(mine.folderId&&S.folders.some(f=>f.id===mine.folderId)?mine.folderId:'none', mine.id); return; } }
   else if(S.folders.some(f=>f.id===c.id)){ openBook(c.id); return; }
@@ -1855,6 +1896,7 @@ const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('es-ES',{day:'numeric
 const fmtAgo = ts => { if(!ts) return 'nunca'; const d=(Date.now()-ts)/864e5; return d<1?'hoy':d<2?'ayer':`hace ${Math.floor(d)} días`; };
 async function adminLoad(){
   const box=$('#admBody'); if(!box) return; const tab=S.admTab;
+  try{ history.replaceState(history.state,'',navUrl()); }catch{}
   box.innerHTML='<div class="status"><span class="spin"></span>Cargando…</div>';
   try{
     if(tab==='resumen') box.innerHTML=admResumen(await api('GET','/admin/stats'));
