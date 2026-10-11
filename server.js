@@ -1273,10 +1273,10 @@ async function aiImage(title, extra = '') {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST', signal: AbortSignal.timeout(90000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
       body: JSON.stringify({ prompt, steps: 6 }) });
-    if (r.status === 429 || r.status === 402) { const e = new Error('cuota ' + r.status); e.quota = true; throw e; }
     const j = await r.json().catch(() => ({}));
-    if (!r.ok || !j.result?.image) throw new Error('cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200));
-    return { buf: Buffer.from(j.result.image, 'base64'), type: 'image/jpeg' };
+    if (r.ok && j.result?.image) return { buf: Buffer.from(j.result.image, 'base64'), type: 'image/jpeg' };
+    // sin cuota en Cloudflare: se prueba con Pollinations
+    if (r.status !== 429 && r.status !== 402) throw new Error('cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200));
   }
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=640&height=480&nologo=true&seed=${Math.floor(Math.random() * 1e6)}`;
   const r = await fetch(url, { signal: AbortSignal.timeout(90000), headers: POLL_TOKEN ? { authorization: `Bearer ${POLL_TOKEN}` } : {} });
