@@ -8,6 +8,8 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 - **Nueva receta** desde un enlace de cualquier web de cocina (el servidor lee la página y saca los datos), desde una foto (se lee entera), en un chat con IA (Groq, gratis) donde pides la receta, pides cambios y la apruebas, o escribiéndola a mano.
 - **Raciones ajustables**: las cantidades de los ingredientes se recalculan.
 - **Compartir** recetas y carpetas con un enlace público o por el chat. Quien la recibe puede guardarse una copia.
+- **Recetas desde vídeos** de TikTok, Instagram, Facebook y YouTube (título, descripción y subtítulos), o subiendo el vídeo para que se transcriba.
+- **Textos legales** en `/legal/aviso-legal`, `/legal/privacidad`, `/legal/cookies` y formulario en `/legal/contacto` (los mensajes se guardan en la tabla `contact_messages`).
 - **Sin registro** para usarla: tus recetas se guardan ligadas a tu dispositivo. El perfil (usuario y contraseña) solo hace falta para tener amigos, chat y tus recetas en varios dispositivos.
 
 ## Tecnología
@@ -28,6 +30,10 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 | `OPENAI_MODEL` | No | Modelo de ChatGPT (por defecto `gpt-4o-mini`) |
 | `ANTHROPIC_API_KEY` | No | Alternativa: la misma IA con Claude (se usa si no hay clave de OpenAI) |
 | `ANTHROPIC_MODEL` | No | Modelo de Claude (por defecto `claude-sonnet-5-5`) |
+| `BREVO_API_KEY` o `RESEND_API_KEY` | No | Envío de correos para recuperar la contraseña |
+| `MAIL_FROM` | Con correo | Remitente, p. ej. `Entre Fogones <tu-correo@gmail.com>` (en Brevo, un remitente verificado) |
+| `LEGAL_NAME` | No | Titular que aparece en los textos legales (por defecto `Ainara Castillón`) |
+| `LEGAL_EMAIL` | No | Correo de contacto público en los textos legales y aviso de mensajes del formulario |
 | `NODE_ENV` | No | `production` para cookies seguras |
 
 ## Ejecutar en local

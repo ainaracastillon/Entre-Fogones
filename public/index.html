@@ -49,6 +49,8 @@ h1,h2,h3{margin:0;line-height:1.15;text-wrap:balance}
 .brand .w2{font-weight:800;font-size:22px;letter-spacing:-.5px}
 .nav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
 .nav button{background:none;border:1px solid transparent;border-radius:999px;padding:7px 14px;font-weight:500;color:var(--muted);position:relative}
+.nav .login{display:inline-flex;align-items:center;gap:6px;color:var(--ink);border-color:var(--line);background:var(--surface)}
+.nav .me{margin-left:4px}
 .nav button[aria-current="page"]{background:var(--surface);border-color:var(--line);color:var(--ink)}
 .badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:999px;background:var(--accent);color:var(--accent-ink);font-size:11px;font-weight:700;margin-left:6px;font-variant-numeric:tabular-nums}
 .me{display:flex;align-items:center;gap:8px;background:none;border:1px solid var(--line);border-radius:999px;padding:4px 12px 4px 4px;font-size:13px}
@@ -81,7 +83,8 @@ main{padding-block:24px 64px}
 .spine::before,.spine::after{content:"";position:absolute;left:0;right:0;height:3px;background:rgba(255,235,190,.55)}
 .spine::before{top:22px}.spine::after{bottom:30px}
 .spine:hover{transform:translateY(-8px)}
-.spine .st{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;max-height:calc(100% - 50px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:18px}
+.spine .st{writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;line-height:1.08;text-align:center;white-space:normal;overflow-wrap:anywhere;flex:1;min-height:0;width:100%;max-width:52px;overflow:hidden;margin:30px 0 8px;padding:0 5px;box-sizing:border-box}
+.spine.add .st{flex:none;max-height:150px}
 .spine .sc{font-size:11px;font-weight:700;background:rgba(0,0,0,.22);border-radius:999px;padding:1px 7px;font-variant-numeric:tabular-nums}
 .spine.all{background:repeating-linear-gradient(90deg,var(--cloth) 0 14px,color-mix(in srgb,var(--cloth) 82%,#000) 14px 16px)}
 .spine.add{background:none;border:2px dashed var(--muted);color:var(--muted);box-shadow:none;justify-content:center;gap:8px}
@@ -189,6 +192,11 @@ main{padding-block:24px 64px}
 .rprev .rp-img{width:100%;max-height:160px;object-fit:cover;border-radius:6px;margin-top:6px}
 .rprev .note{font-size:20px}
 .approve{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.modal a{color:var(--accent)}
+.tabs button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+.legal-foot{display:flex;gap:16px;flex-wrap:wrap;justify-content:center;padding:4px 16px 28px;font-size:13px}
+.legal-foot a{color:var(--muted)}
+.in-book .legal-foot{display:none}
 /* formato en el editor */
 .fmtbar{display:flex;gap:4px;align-items:center}
 .fmtbar button{width:32px;height:28px;border-radius:6px;border:1px solid var(--line);background:var(--surface);font-family:var(--f-book);font-size:15px;line-height:1}
@@ -269,6 +277,7 @@ textarea.inp{resize:vertical;line-height:1.5}
 <header class="top"><div class="wrap" id="topbar"></div></header>
 <main><div class="wrap" id="main"><div class="splash"><div><div id="splashLogo"></div><p class="muted">Encendiendo los fogones…</p></div></div></div></main>
 <div id="modal-root"></div>
+<footer class="legal-foot"><a href="/legal/aviso-legal">Aviso legal</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/app.js"></script>

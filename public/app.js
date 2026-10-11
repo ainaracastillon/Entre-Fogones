@@ -36,7 +36,9 @@ const ICONS = {
   hand:'<path d="M12 20s-7-4.5-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.5-7 10-7 10z"/>', user:'<circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/>',
   copy:'<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"/>',
   out:'<path d="M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10"/>',
-  expand:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'
+  expand:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+  play:'<rect x="3" y="5" width="18" height="14" rx="3"/><path d="M10 9.5v5l4.5-2.5z"/>',
+  upload:'<path d="M12 16V4M7 9l5-5 5 5M4 16v4h16v-4"/>'
 };
 const ico = n => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n]||''}</svg>`;
 function spoon(h=40, fill='var(--accent)', hole='var(--bg)'){
@@ -193,14 +195,14 @@ function renderTop(){
       <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>Biblioteca</button>
       <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>Chat${unread?`<span class="badge">${unread}</span>`:''}</button>
       <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>Amigos${pend?`<span class="badge">${pend}</span>`:''}</button>
-    </nav>
-    ${!S.booted?'':canSocial()?`<button class="me" data-act="account">${avatar(S.uid)}<span>@${esc(S.profile.username)}</span></button>`:`<button class="btn sm" data-act="register">${ico('user')}Crear perfil</button>`}`;
+      ${!S.booted?'':canSocial()?`<button class="me" data-act="account">${avatar(S.uid)}<span>@${esc(S.profile.username)}</span></button>`:`<button class="login" data-act="login">${ico('user')}Iniciar sesión</button>`}
+    </nav>`;
 }
 function render(){
   document.body.classList.toggle('in-book', S.view==='book');
   renderTop();
   const m=$('#main');
-  if(S.view==='library') m.innerHTML = viewLibrary();
+  if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); }
   else if(S.view==='book'){ renderBook(); return; }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
@@ -210,7 +212,7 @@ function refresh(){
   if(!S.booted || refreshQueued) return; refreshQueued=true;
   requestAnimationFrame(()=>{ refreshQueued=false;
     renderTop();
-    if(S.view==='library') $('#main').innerHTML=viewLibrary();
+    if(S.view==='library'){ $('#main').innerHTML=viewLibrary(); fitSpines(); }
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
@@ -224,14 +226,21 @@ function go(v){
 }
 
 /* ===== Biblioteca ===== */
-function spineH(id){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return 178+(h%46)}
+function spineH(id,name=''){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return Math.min(268,178+(h%34)+Math.max(0,String(name).length-12)*5)}
+/* Ajusta el título de cada lomo para que se vea entero */
+function fitSpines(){
+  document.querySelectorAll('.spine .st').forEach(st=>{
+    let fs=16; st.style.fontSize=fs+'px';
+    while(fs>9 && (st.scrollHeight>st.clientHeight+1 || st.scrollWidth>st.clientWidth+1)){ fs-=.5; st.style.fontSize=fs+'px'; }
+  });
+}
 function viewLibrary(){
   const name = S.profile?.display || 'tu cocina';
   const none = S.recipes.filter(r=>!r.folderId || !S.folders.some(f=>f.id===r.folderId));
-  const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin perfil: tus recetas se guardan en este dispositivo. Crea un perfil para tenerlas en todos tus dispositivos, añadir amigos y chatear.</span><button class="btn sm" data-act="register">Crear perfil</button><button class="btn sm ghost" data-act="login">Ya tengo cuenta</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
+  const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const books = [
     `<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`,
-    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return `<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`}),
+    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return `<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`}),
     none.length?`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin carpeta, ${none.length}"><span class="st">Sin carpeta</span><span class="sc">${none.length}</span></button>`:'',
     `<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nueva carpeta">${ico('plus')}<span class="st">Nueva carpeta</span></button>`
   ].join('');
@@ -452,7 +461,7 @@ document.addEventListener('keydown',e=>{
 let resizeT=null;
 addEventListener('resize',()=>{ clearTimeout(resizeT); resizeT=setTimeout(()=>{ if(S.view==='book') layoutBook(); },80); });
 document.addEventListener('fullscreenchange',()=>{ if(!document.fullscreenElement && S.zoom==='full'){ S.zoom=null; if(S.view==='book') renderBook(); } else if(S.view==='book') layoutBook(); });
-if(document.fonts?.ready) document.fonts.ready.then(()=>{ if(S.view==='book') layoutBook(); });
+if(document.fonts?.ready) document.fonts.ready.then(()=>{ if(S.view==='book') layoutBook(); if(S.view==='library') fitSpines(); });
 
 /* ===== Modales ===== */
 function openModal(html,{wide=false,onClose}={}){
@@ -503,6 +512,7 @@ function newRecipeModal(folderId){
   const m=openModal(`${mHead('Nueva receta')}
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected="true" data-tab="url">${ico('link')}Desde enlace</button>
+      <button role="tab" aria-selected="false" data-tab="video">${ico('play')}Desde vídeo</button>
       <button role="tab" aria-selected="false" data-tab="photo">${ico('camera')}Desde foto</button>
       <button role="tab" aria-selected="false" data-tab="ai">${ico('sparkle')}Con ${esc(aiName())}</button>
       <button role="tab" aria-selected="false" data-tab="hand">${ico('edit')}A mano</button>
@@ -537,9 +547,57 @@ function newRecipeModal(folderId){
           if(err.needText){
             $('#pasteWrap',m).hidden=false;
             $('#pasteMsg',m).textContent = err.error + (S.ai?'':' Después podrás repasarla antes de guardarla.');
+            if(err.text) $('#upaste',m).value=err.text;
             $('#upaste',m).focus(); btn.textContent='Sacar la receta del texto';
           } else st.innerHTML=`<p class="err">${esc(err.error)}</p>`;
         } finally{ btn.disabled=false; }
+      };
+    },
+    video:()=>{
+      body.innerHTML=`<div style="display:grid;gap:16px">
+        <form id="fv" style="display:grid;gap:12px">
+          <div class="field"><label for="vurl">Enlace del vídeo</label><input id="vurl" class="inp" type="url" required placeholder="Enlace de TikTok, Instagram, Facebook o YouTube"></div>
+          <p class="muted" style="margin:0;font-size:14px">Se lee el título, la descripción y, en YouTube, los subtítulos. Si la receta solo se dice en voz, sube el vídeo.</p>
+          <div id="vpasteWrap" hidden class="field"><label for="vpaste">Texto del vídeo</label><p class="muted" style="margin:0;font-size:14px" id="vpasteMsg"></p><textarea id="vpaste" class="inp" rows="6"></textarea></div>
+          <div id="vstatus"></div>
+          <div class="row" style="justify-content:flex-end"><button class="btn pri" id="vgo">${ico('play')}Sacar la receta</button></div>
+        </form>
+        <div style="border-top:1px solid var(--line);padding-top:14px;display:grid;gap:10px">
+          <p style="margin:0"><strong>¿Lo tienes guardado en el móvil?</strong> Súbelo y se escucha lo que dicen para sacar la receta (máximo 25 MB).</p>
+          <div class="row"><label class="btn" for="vfile">${ico('upload')}Subir vídeo</label><input id="vfile" type="file" accept="video/*,audio/*" hidden></div>
+          <div id="vfstatus"></div>
+        </div>
+      </div>`;
+      enableRichPaste($('#vpaste',m));
+      $('#fv',m).onsubmit=async e=>{e.preventDefault();
+        const url=$('#vurl',m).value.trim(), pasted=$('#vpaste',m).value.trim(), st=$('#vstatus',m), btn=$('#vgo',m); btn.disabled=true;
+        try{
+          if(pasted){
+            if(S.ai){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); aiChatModal({folderId, seed:{recipe:{...recipe, source:url}, reply:'He sacado la receta del vídeo. Revísala: apruébala o pídeme cambios.'}}); }
+            else { closeModal(); editorModal({...roughParse(pasted), source:url, folderId}); }
+            return;
+          }
+          busy(st,'Mirando el vídeo…');
+          const {recipe}=await api('POST','/import',{url});
+          closeModal();
+          if(S.ai) aiChatModal({folderId, seed:{recipe, reply:'He sacado la receta del vídeo. Revísala: si está bien, apruébala; si falta algo, pídemelo.'}});
+          else editorModal({...recipe, folderId});
+        }catch(err){
+          st.innerHTML='';
+          if(err.needText){ $('#vpasteWrap',m).hidden=false; $('#vpasteMsg',m).textContent=err.error; if(err.text) $('#vpaste',m).value=err.text; $('#vpaste',m).focus(); btn.innerHTML=`${ico('play')}Sacar la receta del texto`; }
+          else st.innerHTML=`<p class="err">${esc(err.error)}</p>`;
+        } finally{ btn.disabled=false; }
+      };
+      $('#vfile',m).onchange=async e=>{
+        const f=e.target.files[0]; if(!f) return; const st=$('#vfstatus',m);
+        if(!S.ai){ st.innerHTML=`<p class="err">Para escuchar vídeos hace falta la IA, que todavía no está activada.</p>`; return; }
+        if(f.size>25*1024*1024){ st.innerHTML=`<p class="err">El vídeo pesa más de 25 MB. Prueba con uno más corto o con el enlace.</p>`; return; }
+        busy(st,'Escuchando el vídeo… puede tardar un minuto');
+        try{
+          const r=await fetch('/api/import/video-file',{method:'POST',credentials:'same-origin',headers:{'content-type':f.type||'video/mp4'},body:f});
+          const j=await r.json().catch(()=>({})); if(!r.ok) throw {error:j.error||'No he podido procesar el vídeo.'};
+          closeModal(); aiChatModal({folderId, seed:{recipe:j.recipe, reply:'He escuchado el vídeo y he sacado la receta. Revísala: apruébala o pídeme cambios.'}});
+        }catch(err){ st.innerHTML=`<p class="err">${esc(err.error)}</p>`; }
       };
     },
     photo:()=>{
@@ -761,14 +819,14 @@ function shareModal(kind, item){
   const link=linkFor(kind==='recipe'?'r':'f', item.id);
   const fr=friends();
   const friendsHtml = !S.profile
-    ? `<div class="banner" style="margin:0">${ico('user')}<span style="flex:1;min-width:180px">Crea tu perfil para enviarlo a tus amigos por el chat.</span><button class="btn sm" data-act="register">Crear perfil</button></div>`
+    ? `<div class="banner" style="margin:0">${ico('user')}<span style="flex:1;min-width:180px">Inicia sesión para enviarlo a tus amigos por el chat.</span><button class="btn sm" data-act="login">Iniciar sesión</button></div>`
     : fr.length ? `<div class="pick">${fr.map(id=>`<div class="person">${avatar(id)}<div class="pb"><div class="pn">${esc(pname(id))}</div><div class="pu">${esc(puser(id))}</div></div><button class="btn sm" data-send="${esc(id)}">${ico('send')}Enviar</button></div>`).join('')}</div>`
     : `<p class="muted" style="margin:0">Aún no tienes amigos en la app. Añádelos desde la pestaña Amigos.</p>`;
   const m=openModal(`${mHead(kind==='recipe'?'Compartir receta':'Compartir carpeta')}
     <p style="margin:0;font-family:var(--f-book);font-size:20px">${esc(item.title||item.name)}</p>
     <div class="field"><label>Enviar a un amigo</label>${friendsHtml}</div>
     <div class="field"><label for="shlink">Enlace</label><div class="linkbox"><input id="shlink" class="inp" readonly value="${esc(link)}"><button class="btn" id="shcopy">${ico('copy')}Copiar</button></div>
-    <p class="muted" style="margin:0;font-size:13px">Cualquiera con el enlace puede verla y guardarse una copia, aunque no tenga perfil.</p></div>`);
+    <p class="muted" style="margin:0;font-size:13px">Cualquiera con el enlace puede verla y guardarse una copia, aunque no tenga cuenta.</p></div>`);
   $('#shcopy',m).onclick=()=>copyText(link,$('#shlink',m));
   m.querySelectorAll('[data-send]').forEach(b=>b.onclick=async()=>{
     b.disabled=true;
@@ -785,7 +843,7 @@ async function sendShare(to, kind, item, purpose, text=''){
 
 /* ===== Recetas y carpetas compartidas ===== */
 function parseCode(s){ const m=String(s||'').match(/([rf])~([A-Za-z0-9]{6,40})/); return m?{kind:m[1],id:m[2]}:null; }
-function routeHash(){ const c=parseCode(location.hash); if(c){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} openShared(c); } }
+function routeHash(){ const rm=location.hash.match(/^#reset~([a-f0-9]{64})$/); if(rm){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} resetModal(rm[1]); return; } const c=parseCode(location.hash); if(c){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} openShared(c); } }
 async function openShared(c){
   if(c.kind==='r'){ const mine=S.recipes.find(x=>x.id===c.id); if(mine){ openBook(mine.folderId&&S.folders.some(f=>f.id===mine.folderId)?mine.folderId:'none', mine.id); return; } }
   else if(S.folders.some(f=>f.id===c.id)){ openBook(c.id); return; }
@@ -812,62 +870,125 @@ function copyToMine(r, folderId){
   return api('PUT','/recipes/'+gid(), {...rest, folderId, fromUid:r.fromUid||null, created:now()});
 }
 
-/* ===== Cuenta ===== */
-function registerModal(){
-  let color=AVCOLORS[Math.floor(Math.random()*AVCOLORS.length)];
-  const m=openModal(`${mHead('Crea tu perfil')}
-    <p class="muted" style="margin:0">Con un perfil tienes tus recetas en todos tus dispositivos, y tus amigos pueden encontrarte, mandarte recetas y chatear contigo. Las recetas que ya tienes se quedan.</p>
-    <form id="fr" style="display:grid;gap:14px">
-      <div class="field"><label for="rname">Tu nombre</label><input id="rname" class="inp" required maxlength="40" placeholder="Ainara" autocomplete="name"></div>
-      <div class="field"><label for="ruser">Nombre de usuario</label><input id="ruser" class="inp" required maxlength="20" placeholder="ainara_cocina" autocomplete="username">
-        <span class="muted" style="font-size:13px">De 3 a 20 letras minúsculas, números o _. Tus amigos te buscan por este nombre.</span></div>
-      <div class="field"><label for="rpass">Contraseña</label><input id="rpass" class="inp" type="password" required minlength="6" autocomplete="new-password">
-        <span class="muted" style="font-size:13px">Al menos 6 caracteres. La necesitarás para entrar desde otro dispositivo.</span></div>
-      <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
-      <div id="rstatus"></div>
-      <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" data-act="login">Ya tengo cuenta</button><button class="btn pri" id="rgo">Crear perfil</button></div>
-    </form>`);
-  $('#ruser',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
-  initColorField(m,'pcolor',c=>{color=c});
-  $('#fr',m).onsubmit=async e=>{e.preventDefault(); const st=$('#rstatus',m); $('#rgo',m).disabled=true;
-    try{ await api('POST','/register',{display:$('#rname',m).value.trim(), username:$('#ruser',m).value.trim(), password:$('#rpass',m).value, color});
-      await loadState(); closeModal(); toast('Perfil creado. Ya puedes añadir amigos'); }
-    catch(err){ $('#rgo',m).disabled=false; st.innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+/* ===== Cuenta: iniciar sesión, crear cuenta, recuperar contraseña ===== */
+function authModal(mode='login'){
+  const m=openModal(`${mHead('Tu cuenta')}
+    <div class="tabs" role="tablist">
+      <button role="tab" data-mode="login" aria-selected="${mode==='login'}">Iniciar sesión</button>
+      <button role="tab" data-mode="signup" aria-selected="${mode==='signup'}">Crear cuenta</button>
+    </div>
+    <div id="authBody"></div>`);
+  const body=$('#authBody',m);
+  const views={
+    login:()=>{
+      body.innerHTML=`<form id="fl" style="display:grid;gap:14px">
+        <div class="field"><label for="luser">Usuario o correo</label><input id="luser" class="inp" required autocomplete="username"></div>
+        <div class="field"><label for="lpass">Contraseña</label><input id="lpass" class="inp" type="password" required autocomplete="current-password"></div>
+        <p class="muted" style="margin:0;font-size:13px">Las recetas que hayas guardado sin cuenta en este dispositivo pasarán a tu cuenta.</p>
+        <div id="lstatus"></div>
+        <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="lforgot">He olvidado la contraseña</button><button class="btn pri" id="lgo">Entrar</button></div>
+      </form>`;
+      $('#lforgot',m).onclick=()=>views.forgot();
+      $('#fl',m).onsubmit=async e=>{e.preventDefault(); $('#lgo',m).disabled=true;
+        try{ await api('POST','/login',{username:$('#luser',m).value.trim(), password:$('#lpass',m).value}); await afterAuth('Hola de nuevo'); }
+        catch(err){ $('#lgo',m).disabled=false; $('#lstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+      };
+    },
+    signup:()=>{
+      let color=AVCOLORS[Math.floor(Math.random()*AVCOLORS.length)];
+      body.innerHTML=`<form id="fr" style="display:grid;gap:14px">
+        <p class="muted" style="margin:0">Con una cuenta tienes tus recetas en todos tus dispositivos, y tus amigos pueden encontrarte, mandarte recetas y chatear contigo. Las recetas que ya tienes se quedan.</p>
+        <div class="field"><label for="rname">Tu nombre</label><input id="rname" class="inp" required maxlength="40" autocomplete="name"></div>
+        <div class="field"><label for="ruser">Nombre de usuario</label><input id="ruser" class="inp" required maxlength="20" placeholder="ainara_cocina" autocomplete="username">
+          <span class="muted" style="font-size:13px">De 3 a 20 letras minúsculas, números o _. Tus amigos te buscan por este nombre.</span></div>
+        <div class="field"><label for="rmail">Correo electrónico</label><input id="rmail" class="inp" type="email" required maxlength="254" autocomplete="email">
+          <span class="muted" style="font-size:13px">Solo para recuperar la contraseña si la olvidas. Nadie más lo ve.</span></div>
+        <div class="field"><label for="rpass">Contraseña</label><input id="rpass" class="inp" type="password" required minlength="6" autocomplete="new-password">
+          <span class="muted" style="font-size:13px">Al menos 6 caracteres.</span></div>
+        <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
+        <label class="row" style="font-size:14px;align-items:flex-start;flex-wrap:nowrap"><input type="checkbox" id="racc" required style="margin-top:4px">
+          <span>He leído y acepto el <a href="/legal/aviso-legal" target="_blank">aviso legal y condiciones de uso</a> y la <a href="/legal/privacidad" target="_blank">política de privacidad</a>. Tengo al menos 14 años.</span></label>
+        <div id="rstatus"></div>
+        <div class="row" style="justify-content:flex-end"><button class="btn pri" id="rgo">Crear cuenta</button></div>
+      </form>`;
+      $('#ruser',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
+      initColorField(m,'pcolor',c=>{color=c});
+      $('#fr',m).onsubmit=async e=>{e.preventDefault(); $('#rgo',m).disabled=true;
+        try{ await api('POST','/register',{display:$('#rname',m).value.trim(), username:$('#ruser',m).value.trim(), email:$('#rmail',m).value.trim(), password:$('#rpass',m).value, color, accept:$('#racc',m).checked});
+          await afterAuth('Cuenta creada. Ya puedes añadir amigos'); }
+        catch(err){ $('#rgo',m).disabled=false; $('#rstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+      };
+    },
+    forgot:()=>{
+      m.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-selected','false'));
+      body.innerHTML=`<form id="ffg" style="display:grid;gap:14px">
+        <p style="margin:0">Escribe el correo de tu cuenta y te enviaremos un enlace para elegir una contraseña nueva.</p>
+        <div class="field"><label for="fmail">Correo electrónico</label><input id="fmail" class="inp" type="email" required autocomplete="email"></div>
+        <div id="fstatus"></div>
+        <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="fback">${ico('back')}Volver</button><button class="btn pri" id="fgo">Enviar enlace</button></div>
+      </form>`;
+      $('#fback',m).onclick=()=>{ m.querySelector('[data-mode=login]').setAttribute('aria-selected','true'); views.login(); };
+      $('#ffg',m).onsubmit=async e=>{e.preventDefault(); const b=$('#fgo',m); b.disabled=true;
+        try{ await api('POST','/password/forgot',{email:$('#fmail',m).value.trim()});
+          $('#fstatus',m).innerHTML=`<p style="margin:0">Si hay una cuenta con ese correo, te acabamos de enviar el enlace. Mira también en la carpeta de spam.</p>`; }
+        catch(err){ b.disabled=false; $('#fstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+      };
+    }
   };
+  m.querySelectorAll('[data-mode]').forEach(t=>t.onclick=()=>{ m.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-selected',x===t)); views[t.dataset.mode](); });
+  views[mode]();
 }
-function loginModal(){
-  const m=openModal(`${mHead('Entrar')}
-    <form id="fl" style="display:grid;gap:14px">
-      <div class="field"><label for="luser">Nombre de usuario</label><input id="luser" class="inp" required autocomplete="username"></div>
-      <div class="field"><label for="lpass">Contraseña</label><input id="lpass" class="inp" type="password" required autocomplete="current-password"></div>
-      <p class="muted" style="margin:0;font-size:13px">Las recetas que hayas guardado sin perfil en este dispositivo pasarán a tu cuenta.</p>
-      <div id="lstatus"></div>
-      <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" data-act="register">Crear un perfil nuevo</button><button class="btn pri" id="lgo">Entrar</button></div>
+async function afterAuth(msg){ stopChat(); S.view='library'; await loadState(); closeModal(); render(); toast(msg); }
+function resetModal(token){
+  const m=openModal(`${mHead('Elige una contraseña nueva')}
+    <form id="frs" style="display:grid;gap:14px">
+      <div class="field"><label for="npass">Contraseña nueva</label><input id="npass" class="inp" type="password" required minlength="6" autocomplete="new-password"></div>
+      <div id="nstatus"></div>
+      <div class="row" style="justify-content:flex-end"><button class="btn pri" id="ngo">Guardar y entrar</button></div>
     </form>`);
-  $('#fl',m).onsubmit=async e=>{e.preventDefault(); $('#lgo',m).disabled=true;
-    try{ await api('POST','/login',{username:$('#luser',m).value.trim(), password:$('#lpass',m).value}); stopChat(); S.view='library'; await loadState(); closeModal(); render(); toast('Hola de nuevo'); }
-    catch(err){ $('#lgo',m).disabled=false; $('#lstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+  $('#frs',m).onsubmit=async e=>{e.preventDefault(); $('#ngo',m).disabled=true;
+    try{ await api('POST','/password/reset',{token, password:$('#npass',m).value}); await afterAuth('Contraseña cambiada'); }
+    catch(err){ $('#ngo',m).disabled=false; $('#nstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
 function accountModal(){
   const p=S.profile; let color=p.color||AVCOLORS[0];
-  const m=openModal(`${mHead('Tu perfil')}
+  const m=openModal(`${mHead('Tu cuenta')}
     <form id="fa" style="display:grid;gap:14px">
       <div class="row">${avatar(S.uid,'lg')}<div><div style="font-weight:700">${esc(p.display)}</div><div class="muted">@${esc(p.username)}</div></div></div>
       <div class="field"><label for="aname">Tu nombre</label><input id="aname" class="inp" required maxlength="40" value="${esc(p.display||'')}"></div>
+      <div class="field"><label for="amail">Correo electrónico</label><input id="amail" class="inp" type="email" required value="${esc(S.me.email||'')}">
+        ${S.me.email?'':'<span class="err" style="font-size:13px">Añade un correo para poder recuperar la contraseña.</span>'}</div>
       <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
       <div id="astatus"></div>
       <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="aout">${ico('out')}Cerrar sesión</button><button class="btn pri" id="ago">Guardar</button></div>
+      <div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding-top:12px">
+        <span class="muted" style="font-size:13px"><a href="/legal/privacidad" target="_blank">Privacidad</a> · <a href="/legal/aviso-legal" target="_blank">Condiciones</a></span>
+        <button type="button" class="btn ghost sm danger" id="adel">${ico('trash')}Borrar mi cuenta</button></div>
     </form>`);
   initColorField(m,'pcolor',c=>{color=c});
   $('#aout',m).onclick=async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); };
+  $('#adel',m).onclick=()=>deleteAccountModal();
   $('#fa',m).onsubmit=async e=>{e.preventDefault();
-    try{ await api('PUT','/me',{display:$('#aname',m).value.trim(), color}); await loadState(); closeModal(); toast('Perfil guardado'); }
+    try{ await api('PUT','/me',{display:$('#aname',m).value.trim(), email:$('#amail',m).value.trim(), color}); await loadState(); closeModal(); toast('Cuenta guardada'); }
     catch(err){ $('#astatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
+function deleteAccountModal(){
+  const m=openModal(`${mHead('Borrar mi cuenta')}
+    <form id="fd" style="display:grid;gap:14px">
+      <p style="margin:0">Se borrarán para siempre tu cuenta, tus recetas, tus carpetas, tus amistades y los mensajes que has enviado. No se puede deshacer.</p>
+      <div class="field"><label for="dpass">Escribe tu contraseña para confirmarlo</label><input id="dpass" class="inp" type="password" required autocomplete="current-password"></div>
+      <div id="dstatus"></div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="dgo">Borrar para siempre</button></div>
+    </form>`);
+  $('#fd',m).onsubmit=async e=>{e.preventDefault(); $('#dgo',m).disabled=true;
+    try{ await api('DELETE','/me',{password:$('#dpass',m).value}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Cuenta borrada'); }
+    catch(err){ $('#dgo',m).disabled=false; $('#dstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+  };
+}
 function needProfileView(what){
-  return `<div class="empty" style="margin-top:20px">${spoon(54,'var(--muted)','var(--bg)')}<h2 style="font-size:22px;color:var(--ink)">${what}</h2><p style="margin:0;max-width:440px">Crea tu perfil para encontrar a tus amigos, mandaros recetas y pediros ideas. Tus recetas siguen funcionando sin él.</p><div class="row" style="justify-content:center"><button class="btn pri" data-act="register">${ico('user')}Crear perfil</button><button class="btn" data-act="login">Ya tengo cuenta</button></div></div>`;
+  return `<div class="empty" style="margin-top:20px">${spoon(54,'var(--muted)','var(--bg)')}<h2 style="font-size:22px;color:var(--ink)">${what}</h2><p style="margin:0;max-width:440px">Inicia sesión o crea una cuenta para encontrar a tus amigos, mandaros recetas y pediros ideas. Tus recetas siguen funcionando sin cuenta.</p><div class="row" style="justify-content:center"><button class="btn pri" data-act="login">${ico('user')}Iniciar sesión</button><button class="btn" data-act="register">Crear cuenta</button></div></div>`;
 }
 
 /* ===== Amigos ===== */
@@ -903,7 +1024,7 @@ function friendsSide(){
 function drawSearch(){
   const box=$('#fres'); if(!box) return;
   box.innerHTML = S.searchRes.length ? S.searchRes.map(p=>personRow(p.id, friendState(p.id))).join('')
-    : `<p class="muted" style="margin:0">${S.search?'Nadie con ese nombre todavía.':'Todavía no hay más personas en Entre Fogones. Pásales el enlace de la app a tus amigos para que se creen su perfil.'}</p>`;
+    : `<p class="muted" style="margin:0">${S.search?'Nadie con ese nombre todavía.':'Todavía no hay más personas en Entre Fogones. Pásales el enlace de la app a tus amigos para que se creen su cuenta.'}</p>`;
 }
 let searchT=null;
 async function runSearch(){
@@ -1031,8 +1152,8 @@ const ACT = {
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   go:el=>go(el.dataset.v),
   closeModal:()=>closeModal(),
-  register:()=>{ closeModal(); registerModal(); },
-  login:()=>{ closeModal(); loginModal(); },
+  register:()=>{ closeModal(); authModal('signup'); },
+  login:()=>{ closeModal(); authModal('login'); },
   account:()=>accountModal(),
   newRecipe:el=>{ closeModal(); newRecipeModal(el.dataset.folder||undefined); },
   newFolder:()=>folderModal(),

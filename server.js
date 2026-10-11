@@ -5,6 +5,7 @@ const crypto = require('crypto');
 const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
+const { legalHtml } = require('./legal');
 
 const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
@@ -54,6 +55,13 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS messages(
     id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, from_id TEXT NOT NULL, ts BIGINT NOT NULL, data JSONB NOT NULL);
   CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, ts);
+  CREATE TABLE IF NOT EXISTS contact_messages(
+    id TEXT PRIMARY KEY, email TEXT NOT NULL, subject TEXT, message TEXT NOT NULL, user_id TEXT, created BIGINT NOT NULL);
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_at BIGINT;
+  CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(lower(email)) WHERE email IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS password_resets(
+    token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, created BIGINT NOT NULL, expires BIGINT NOT NULL);
   `);
 }
 
@@ -123,7 +131,7 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', index: 'i
 const api = express.Router();
 api.use(auth);
 
-api.get('/config', (req, res) => res.json({ ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA' }));
+api.get('/config', (req, res) => res.json({ mail: mailReady(), ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA' }));
 
 api.get('/state', async (req, res, next) => {
   try {
@@ -142,7 +150,7 @@ api.get('/state', async (req, res, next) => {
     const people = ids.size ? (await q('SELECT id,username,display,color FROM users WHERE id = ANY($1)', [[...ids]])).rows : [];
     const profiles = {}; people.forEach(p => profiles[p.id] = pub(p));
     res.json({
-      me: { ...pub(req.user), lastRead: req.user.last_read || {} }, profiles,
+      me: { ...pub(req.user), email: req.user.email || null, lastRead: req.user.last_read || {} }, profiles,
       folders: folders.rows.map(f => ({ id: f.id, name: f.name, color: f.color, created: Number(f.created) })),
       recipes: recipes.rows.map(recipeOut),
       requests: reqs.rows.map(r => ({ from: r.from_id, to: r.to_id, status: r.status, ts: Number(r.ts) })),
@@ -151,51 +159,136 @@ api.get('/state', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
-/* Perfil */
+/* Cuenta */
+const emailOk = e => /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i.test(e);
 api.post('/register', async (req, res, next) => {
   try {
-    if (req.user.username) return res.status(400).json({ error: 'Ya tienes perfil.' });
+    if (req.user.username) return res.status(400).json({ error: 'Ya tienes una cuenta abierta.' });
     const username = String(req.body.username || '').toLowerCase();
     const display = String(req.body.display || '').trim().slice(0, 40);
+    const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
     const password = String(req.body.password || '');
-    if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido. Lo necesitarás si olvidas la contraseña.' });
     if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
-    const taken = await q('SELECT 1 FROM users WHERE username=$1', [username]);
-    if (taken.rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
-    await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4 WHERE id=$5', [username, display, String(req.body.color || '#B5562B').slice(0, 9), hashPass(password), req.user.id]);
+    if (!req.body.accept) return res.status(400).json({ error: 'Para crear la cuenta tienes que aceptar las condiciones y la política de privacidad.' });
+    if ((await q('SELECT 1 FROM users WHERE username=$1', [username])).rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
+    if ((await q('SELECT 1 FROM users WHERE lower(email)=$1', [email])).rows[0]) return res.status(409).json({ error: 'Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.' });
+    await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',
+      [username, display, String(req.body.color || '#B5562B').slice(0, 9), hashPass(password), email, now(), req.user.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 api.put('/me', needProfile, async (req, res, next) => {
   try {
     const display = String(req.body.display || '').trim().slice(0, 40);
+    const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
-    await q('UPDATE users SET display=$1, color=$2 WHERE id=$3', [display, String(req.body.color || '#B5562B').slice(0, 9), req.user.id]);
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
+    if ((await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
+    await q('UPDATE users SET display=$1, color=$2, email=$3 WHERE id=$4', [display, String(req.body.color || '#B5562B').slice(0, 9), email, req.user.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 api.post('/login', async (req, res, next) => {
   try {
-    const username = String(req.body.username || '').toLowerCase().replace(/^@/, '');
-    const r = await q('SELECT * FROM users WHERE username=$1', [username]);
+    const who = String(req.body.username || '').trim().toLowerCase().replace(/^@/, '');
+    const r = await q('SELECT * FROM users WHERE username=$1 OR (email IS NOT NULL AND lower(email)=$1) LIMIT 1', [who]);
     const u = r.rows[0];
-    if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
-    const cur = req.user;
-    if (!cur.username && cur.id !== u.id) {
-      // Las recetas hechas sin perfil pasan a la cuenta
-      await q('UPDATE folders SET user_id=$1 WHERE user_id=$2 AND id IN (SELECT DISTINCT folder_id FROM recipes WHERE user_id=$2 AND folder_id IS NOT NULL)', [u.id, cur.id]);
-      await q('UPDATE recipes SET user_id=$1 WHERE user_id=$2', [u.id, cur.id]);
-      await q('DELETE FROM users WHERE id=$1', [cur.id]);
-    } else {
-      await q('DELETE FROM sessions WHERE token=$1', [req.token]);
-    }
+    if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
+    await adoptAnon(req, u.id);
     await newSession(res, u.id);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+// Las recetas hechas sin cuenta en este dispositivo pasan a la cuenta
+async function adoptAnon(req, userId) {
+  const cur = req.user;
+  if (!cur.username && cur.id !== userId) {
+    await q('UPDATE folders SET user_id=$1 WHERE user_id=$2 AND id IN (SELECT DISTINCT folder_id FROM recipes WHERE user_id=$2 AND folder_id IS NOT NULL)', [userId, cur.id]);
+    await q('UPDATE recipes SET user_id=$1 WHERE user_id=$2', [userId, cur.id]);
+    await q('DELETE FROM users WHERE id=$1', [cur.id]);
+  } else await q('DELETE FROM sessions WHERE token=$1', [req.token]);
+}
 api.post('/logout', async (req, res, next) => {
   try { await q('DELETE FROM sessions WHERE token=$1', [req.token]); res.setHeader('Set-Cookie', 'ef=; Path=/; Max-Age=0'); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.delete('/me', needProfile, async (req, res, next) => {
+  try {
+    if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
+    const me = req.user.id;
+    await q('DELETE FROM messages WHERE from_id=$1', [me]);
+    await q('DELETE FROM chats WHERE a=$1 OR b=$1', [me]);
+    await q('DELETE FROM users WHERE id=$1', [me]);
+    res.setHeader('Set-Cookie', 'ef=; Path=/; Max-Age=0');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+/* Contacto (también para ejercer los derechos de privacidad) */
+let contactCount = 0, contactWindow = 0;
+api.post('/contact', async (req, res, next) => {
+  try {
+    const email = String(req.body.email || '').trim().slice(0, 254), message = String(req.body.message || '').trim().slice(0, 4000);
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido para poder responderte.' });
+    if (message.length < 5) return res.status(400).json({ error: 'Escribe tu mensaje.' });
+    if (Date.now() - contactWindow > 3600e3) { contactWindow = Date.now(); contactCount = 0; }
+    if (++contactCount > 30) return res.status(429).json({ error: 'Se han enviado muchos mensajes. Prueba más tarde.' });
+    await q('INSERT INTO contact_messages(id,email,subject,message,user_id,created) VALUES($1,$2,$3,$4,$5,$6)', [gid(), email, String(req.body.subject || '').slice(0, 80), message, req.user.id, now()]);
+    if (mailReady() && process.env.LEGAL_EMAIL) sendMail(process.env.LEGAL_EMAIL, 'Entre Fogones · ' + String(req.body.subject || 'Contacto').slice(0, 80), `<p>De: ${email.replace(/[<>&]/g, '')}</p><pre style="white-space:pre-wrap;font:inherit">${message.replace(/[<>&]/g, '')}</pre>`, `De: ${email}\n\n${message}`).catch(e => console.error(e));
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
+/* Recuperar la contraseña por correo */
+const MAIL_FROM = process.env.MAIL_FROM || '';
+const mailReady = () => !!((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM);
+async function sendMail(to, subject, html, text) {
+  const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : MAIL_FROM;
+  let r;
+  if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
+    body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
+  else r = await fetch('https://api.resend.com/emails', { method: 'POST', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+    body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, html, text }) });
+  if (!r.ok) throw new Error('mail ' + r.status + ' ' + (await r.text()).slice(0, 200));
+}
+const sha = t => crypto.createHash('sha256').update(t).digest('hex');
+api.post('/password/forgot', async (req, res, next) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe el correo de tu cuenta.' });
+    if (!mailReady()) return res.status(503).json({ error: 'Ahora mismo no se pueden enviar correos. Inténtalo más tarde.' });
+    const u = (await q('SELECT id, display FROM users WHERE lower(email)=$1 AND username IS NOT NULL', [email])).rows[0];
+    if (u) {
+      const recent = (await q('SELECT count(*)::int n FROM password_resets WHERE user_id=$1 AND created>$2', [u.id, now() - 3600e3])).rows[0].n;
+      if (recent < 4) {
+        const token = crypto.randomBytes(32).toString('hex');
+        await q('INSERT INTO password_resets(token_hash,user_id,created,expires) VALUES($1,$2,$3,$4)', [sha(token), u.id, now(), now() + 3600e3]);
+        const link = `${req.protocol}://${req.get('host')}/#reset~${token}`;
+        await sendMail(email, 'Cambia tu contraseña de Entre Fogones',
+          `<div style="font-family:system-ui,sans-serif;font-size:16px;color:#3B2116;max-width:520px"><p>Hola ${String(u.display || '').replace(/[<>&]/g, '')},</p><p>Has pedido cambiar la contraseña de tu cuenta de Entre Fogones. Pulsa el botón para elegir una nueva. El enlace caduca en una hora.</p><p><a href="${link}" style="display:inline-block;background:#B5562B;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none">Elegir una contraseña nueva</a></p><p style="color:#7A5C4C;font-size:14px">Si no lo has pedido tú, ignora este correo: tu contraseña no cambia.</p></div>`,
+          `Has pedido cambiar la contraseña de Entre Fogones. Abre este enlace en la próxima hora para elegir una nueva: ${link}\nSi no lo has pedido tú, ignora este correo.`);
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.post('/password/reset', async (req, res, next) => {
+  try {
+    const token = String(req.body.token || ''), password = String(req.body.password || '');
+    if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+    const r = (await q('SELECT * FROM password_resets WHERE token_hash=$1', [sha(token)])).rows[0];
+    if (!r || Number(r.expires) < now()) return res.status(400).json({ error: 'El enlace ha caducado o ya se usó. Pide uno nuevo.' });
+    await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [hashPass(password), r.user_id]);
+    await q('DELETE FROM password_resets WHERE user_id=$1', [r.user_id]);
+    await q('DELETE FROM sessions WHERE user_id=$1', [r.user_id]);
+    await adoptAnon(req, r.user_id);
+    await newSession(res, r.user_id);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 /* Carpetas */
@@ -372,7 +465,101 @@ function htmlToText(html) {
 }
 function ogImage(html) { const m = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i); return m ? decodeEnt(m[1]) : ''; }
 
+/* ---------- Recetas desde vídeos (YouTube, TikTok, Instagram, Facebook) ---------- */
+const VIDEO_RE = /(^|\.)(youtube\.com|youtu\.be|tiktok\.com|instagram\.com|facebook\.com|fb\.watch|fb\.com)$/i;
+const isVideoUrl = u => { try { return VIDEO_RE.test(new URL(u).hostname); } catch { return false; } };
+const metaTag = (html, prop) => { const re = new RegExp(`<meta[^>]+(?:property|name)=["']${prop}["'][^>]*content=["']([^"']*)["']|<meta[^>]+content=["']([^"']*)["'][^>]*(?:property|name)=["']${prop}["']`, 'i'); const m = html.match(re); return m ? decodeEnt(m[1] || m[2]) : ''; };
+const BOT_UA = 'facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)';
+async function getText(url, headers = {}) { const r = await safeFetch(url, { headers }); if (!r.ok) throw new Error('status ' + r.status); return await r.text(); }
+function youtubeId(u) {
+  const url = new URL(u);
+  if (/youtu\.be$/i.test(url.hostname)) return url.pathname.slice(1).split('/')[0];
+  if (url.searchParams.get('v')) return url.searchParams.get('v');
+  const m = url.pathname.match(/\/(shorts|embed|live)\/([\w-]{6,})/); return m ? m[2] : null;
+}
+async function videoText(url) {
+  const host = new URL(url).hostname.toLowerCase();
+  const out = { title: '', text: '', image: '' };
+  if (/youtu/.test(host)) {
+    const id = youtubeId(url); if (!id) throw new Error('bad_url');
+    out.image = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+    const html = await getText(`https://www.youtube.com/watch?v=${id}&hl=es`, { cookie: 'CONSENT=YES+1; SOCS=CAI' });
+    let pr = null; const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;\s*(?:var\s|<\/script>)/);
+    if (m) { try { pr = JSON.parse(m[1]); } catch { } }
+    out.title = pr?.videoDetails?.title || metaTag(html, 'og:title');
+    const desc = pr?.videoDetails?.shortDescription || metaTag(html, 'og:description');
+    let transcript = '';
+    const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+    const tr = tracks.find(t => /^es/.test(t.languageCode)) || tracks.find(t => /^en/.test(t.languageCode)) || tracks[0];
+    if (tr?.baseUrl) {
+      try { const j = JSON.parse(await getText(tr.baseUrl + '&fmt=json3'));
+        transcript = (j.events || []).map(e => (e.segs || []).map(s => s.utf8).join('')).join(' ').replace(/\s+/g, ' ').trim(); } catch { }
+    }
+    out.text = [desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
+  } else if (/tiktok/.test(host)) {
+    try { const j = JSON.parse(await getText('https://www.tiktok.com/oembed?url=' + encodeURIComponent(url)));
+      out.title = j.title || ''; out.text = j.title || ''; out.image = j.thumbnail_url || ''; } catch { }
+    if (!out.text) { const html = await getText(url, { 'User-Agent': BOT_UA }); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.title = metaTag(html, 'og:title'); out.image = metaTag(html, 'og:image'); }
+  } else if (/instagram/.test(host)) {
+    const m = new URL(url).pathname.match(/\/(p|reel|reels|tv)\/([\w-]+)/);
+    if (m) {
+      try { const html = await getText(`https://www.instagram.com/p/${m[2]}/embed/captioned/`);
+        const c = html.match(/class="Caption"[^>]*>([\s\S]*?)<div class="CaptionComments/i);
+        if (c) out.text = htmlToText(c[1].replace(/<a[^>]*class="CaptionUsername"[\s\S]*?<\/a>/i, ''));
+        const im = html.match(/class="EmbeddedMediaImage"[^>]*src="([^"]+)"/i); if (im) out.image = decodeEnt(im[1]);
+      } catch { }
+    }
+    if (!out.text) { const html = await getText(url, { 'User-Agent': BOT_UA }); out.text = metaTag(html, 'og:description'); out.title = metaTag(html, 'og:title'); out.image = out.image || metaTag(html, 'og:image'); }
+  } else {
+    const html = await getText(url, { 'User-Agent': BOT_UA });
+    out.title = metaTag(html, 'og:title'); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.image = metaTag(html, 'og:image');
+  }
+  out.text = String(out.text || '').trim();
+  return out;
+}
+async function aiFromVideo(title, text) {
+  return cleanAi(parseJson(await llm({ messages: [{ role: 'user', text: `Este es el texto de un vídeo de cocina de redes sociales: su título, su descripción y, a veces, lo que se dice en el vídeo. Saca la receta y devuelve SOLO un objeto JSON con esta forma:
+${SCHEMA}
+Reglas: usa solo lo que aparece en el texto, sin inventar. Si no se dice una cantidad, pon el ingrediente sin cantidad. Escribe en español (traduce si hace falta), con un ingrediente por elemento y un paso por elemento sin numerar. Ignora hashtags, menciones, promociones y frases tipo "sígueme". Si no hay receta, devuelve {"error":"no_recipe"}.
+<<<VIDEO
+Título: ${String(title).slice(0, 300)}
+${String(text).slice(0, 40000)}
+VIDEO>>>` }] })));
+}
+async function importVideo(url, res) {
+  let v;
+  try { v = await videoText(url); }
+  catch (e) { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer; pega aquí la descripción o lo que dicen en el vídeo.', needText: true }); }
+  if (v.text && PROVIDER) {
+    try { const r = await aiFromVideo(v.title, v.text); if (r) return res.json({ recipe: { ...r, image: v.image || '', source: url }, fromVideo: true }); } catch (e) { console.error(e); }
+  }
+  res.status(422).json({ needText: true, text: v.text || '', error: v.text
+    ? 'El vídeo no trae la receta completa por escrito. Te dejo lo que he encontrado: completa lo que falte o sube el vídeo para que se escuche.'
+    : 'Ese vídeo no trae texto que se pueda leer. Pega la descripción o lo que dicen, o sube el vídeo para que se escuche.' });
+}
+// Subir el vídeo: se transcribe lo que se dice (Groq Whisper) y se saca la receta
+api.post('/import/video-file', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+  if (PROVIDER !== 'groq') return noAi(res);
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No ha llegado el vídeo. Vuelve a intentarlo.' });
+  try {
+    const type = String(req.headers['content-type'] || 'video/mp4').split(';')[0];
+    const ext = (type.split('/')[1] || 'mp4').replace('quicktime', 'mov').replace(/[^a-z0-9]/g, '');
+    const fd = new FormData();
+    fd.append('file', new Blob([req.body], { type }), 'video.' + ext);
+    fd.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
+    fd.append('response_format', 'json');
+    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', body: fd, signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${GROQ_KEY}` } });
+    if (!r.ok) { const t = await r.text(); console.error('whisper', r.status, t.slice(0, 300)); return res.status(502).json({ error: r.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido escuchar el vídeo. Prueba con otro formato o un vídeo más corto.' }); }
+    const text = String((await r.json()).text || '').trim();
+    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir.' });
+    const rec = await aiFromVideo(String(req.query.title || ''), 'Lo que se dice en el vídeo: ' + text);
+    if (!rec) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado una receta.', needText: true, text });
+    res.json({ recipe: rec });
+  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido procesar el vídeo. Vuelve a intentarlo.' }); }
+});
+
 api.post('/import', async (req, res) => {
+  if (isVideoUrl(String(req.body.url || '').trim())) return importVideo(String(req.body.url).trim(), res);
   const url = String(req.body.url || '').trim();
   let html;
   try { const r = await safeFetch(url); if (!r.ok) throw new Error('status ' + r.status); html = await r.text(); }
@@ -507,6 +694,11 @@ Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un
 });
 
 app.use('/api', api);
+app.get('/legal/:page', (req, res, next) => {
+  const html = legalHtml(req.params.page, { name: process.env.LEGAL_NAME || 'Ainara Castillón', email: process.env.LEGAL_EMAIL || '', host: req.get('host') });
+  if (!html) return next();
+  res.type('html').send(html);
+});
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
