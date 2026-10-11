@@ -14,8 +14,8 @@ const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const GROQ_KEY = process.env.GROQ_API_KEY || '';
-const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
-const GROQ_FALLBACK = process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-120b';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
+const GROQ_FALLBACK = process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-20b';
 const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b';
 const PROVIDER = GROQ_KEY ? 'groq' : OPENAI_KEY ? 'openai' : (AI_KEY ? 'claude' : null);
 const PROD = process.env.NODE_ENV === 'production';
@@ -620,7 +620,7 @@ async function openaiCompat({ url, key, model, system, messages, maxTokens }) {
   const r = await fetch(url, {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens, temperature: 0.6 })
+    body: JSON.stringify({ model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
   });
   if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
   const j = await r.json();
@@ -889,7 +889,7 @@ const SUGG_CATS = ['Postres', 'Pasta', 'Carne', 'Pescado y marisco', 'Arroces', 
 async function categorize(rows) {
   if (!PROVIDER || !rows.length) return {};
   countAi();
-  const out = parseJson(await llm({ maxTokens: 1500, messages: [{ role: 'user', text: `Clasifica cada receta en UNO de estos tipos: ${SUGG_CATS.join(', ')}.
+  const out = parseJson(await llm({ maxTokens: 1200, messages: [{ role: 'user', text: `Clasifica cada receta en UNO de estos tipos: ${SUGG_CATS.join(', ')}.
 Devuelve SOLO un objeto JSON {"tipos": {"<id>": "<tipo>"}}.
 ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
   const m = (out && out.tipos) || {}; const res = {};
@@ -913,12 +913,15 @@ async function processSuggestionArt() {
   if (artBusy) return; artBusy = true;
   try {
     // tipos que falten, de 20 en 20
-    for (let k = 0; k < 10; k++) {
-      const rows = (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND category IS NULL LIMIT 20")).rows;
+    for (let k = 0; k < 20; k++) {
+      const rows = (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND category IS NULL LIMIT 10")).rows;
       if (!rows.length || !PROVIDER) break;
-      const cats = await categorize(rows.map(r => ({ id: r.id, title: r.data.title, ingredients: r.data.ingredients })));
-      for (const r of rows) await q('UPDATE suggestions SET category=$1 WHERE id=$2', [cats[r.id] || 'Otros', r.id]);
-      await sleep(2500);
+      try {
+        const cats = await categorize(rows.map(r => ({ id: r.id, title: r.data.title, ingredients: r.data.ingredients })));
+        for (const r of rows) if (cats[r.id]) await q('UPDATE suggestions SET category=$1 WHERE id=$2', [cats[r.id], r.id]);
+        if (!Object.keys(cats).length) break;
+      } catch (e) { console.error('tipos', e.message); break; }
+      await sleep(3000);
     }
     // fotos generadas que falten
     const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;

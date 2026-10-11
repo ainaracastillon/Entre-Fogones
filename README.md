@@ -24,7 +24,7 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 | --- | --- | --- |
 | `DATABASE_URL` | Sí | Conexión a PostgreSQL (la de Neon, con `?sslmode=require`) |
 | `GROQ_API_KEY` | No | Activa la IA gratis con [Groq](https://console.groq.com/keys): el chat de recetas, «Desde foto» y la lectura de webs sin datos de receta |
-| `GROQ_MODEL` | No | Modelo para el chat (por defecto `llama-3.3-70b-versatile`; si falla se prueba `openai/gpt-oss-120b`) |
+| `GROQ_MODEL` | No | Modelo para el chat (por defecto `openai/gpt-oss-120b`; si falla se prueba `openai/gpt-oss-20b`) |
 | `GROQ_VISION_MODEL` | No | Modelo que lee fotos (por defecto `qwen/qwen3.8-27b`) |
 | `OPENAI_API_KEY` | No | Alternativa de pago: la misma IA con ChatGPT |
 | `OPENAI_MODEL` | No | Modelo de ChatGPT (por defecto `gpt-4o-mini`) |
