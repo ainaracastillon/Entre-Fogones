@@ -478,6 +478,55 @@ input[type=radio],input[type=checkbox]{accent-color:var(--accent)}
 .composer form{display:flex;gap:8px}
 .composer textarea{flex:1;resize:none;border:1px solid var(--line);border-radius:12px;padding:9px 12px;background:var(--bg);min-height:42px;max-height:120px}
 .chat-empty{flex:1;display:grid;place-items:center;text-align:center;color:var(--muted);padding:24px}
+.msg{position:relative;transition:transform .15s}
+.msg[style*="translateX"]{transition:none}
+.msg .mreply{position:absolute;top:50%;transform:translateY(-50%);right:-38px;width:30px;height:30px;border-radius:50%;border:1px solid var(--line);background:var(--surface);color:var(--ink);display:none;align-items:center;justify-content:center;padding:0}
+.msg.mine .mreply{right:auto;left:-38px}
+.msg .mreply svg{width:16px;height:16px}
+@media (hover:hover){.msg:hover .mreply{display:flex}}
+.msg.sel .mreply{display:flex}
+.msg.swiping::before{content:"";position:absolute;left:-34px;top:50%;width:24px;height:24px;margin-top:-12px;border-radius:50%;background:var(--accent-soft)}
+.msg.flash{animation:flash 1.2s}
+@keyframes flash{0%,40%{box-shadow:0 0 0 4px var(--accent-soft)}100%{box-shadow:none}}
+.msg.emo{background:none;border-color:transparent;font-size:40px;line-height:1.15;padding:2px 4px}
+.msg.emo .when{font-size:11px;color:var(--muted)}
+.msg.mine.emo{color:var(--ink)}
+.msg.pic{padding:4px 4px 6px}
+.msg.pic>div,.msg.pic .when{padding:0 8px}
+.mimg{display:block;border:0;padding:0;background:none;cursor:zoom-in;border-radius:12px;overflow:hidden;max-width:280px}
+.mimg img{display:block;width:100%;max-height:340px;object-fit:cover;background:var(--accent-soft)}
+.mfile{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:10px;background:var(--paper);color:var(--paper-ink);border:1px solid var(--paper-line);text-decoration:none;white-space:normal;min-width:200px}
+.mfile svg{width:22px;height:22px;flex:none}
+.mf-b{display:grid;min-width:0;flex:1}
+.mf-n{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mf-s{font-size:12px;color:var(--paper-muted)}
+.mquote{display:grid;text-align:left;width:100%;border:0;border-left:3px solid currentColor;background:rgba(0,0,0,.07);color:inherit;border-radius:8px;padding:5px 9px;margin:0 0 6px;font:inherit;font-size:13px;white-space:normal;cursor:pointer}
+.mquote span{opacity:.85;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg.mine .mquote{background:rgba(255,255,255,.18)}
+.replybar{display:flex;align-items:center;gap:8px;background:var(--bg);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;padding:6px 6px 6px 10px}
+.replybar .rq{display:grid;flex:1;min-width:0;font-size:13px}
+.replybar .rq span{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.composer{grid-template-columns:minmax(0,1fr)}
+.composer form{align-items:flex-end;min-width:0}
+.composer textarea{min-width:0}
+.sopt .pb{display:grid;min-width:0}
+.cbtns{display:flex;gap:2px;align-self:center}
+.ibtn{width:38px;height:38px;border-radius:50%;border:0;background:none;color:var(--muted);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
+.ibtn:hover,.ibtn[aria-expanded="true"]{background:var(--accent-soft);color:var(--accent)}
+.ibtn svg{width:22px;height:22px}
+.emoji-panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(40px,1fr));gap:2px;max-height:190px;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px}
+.emoji-panel[hidden]{display:none}
+.emoji-panel button{border:0;background:none;font-size:24px;line-height:1;padding:6px 0;border-radius:8px;cursor:pointer}
+.emoji-panel button:hover{background:var(--accent-soft)}
+.conv-pane.drop{outline:3px dashed var(--accent);outline-offset:-6px}
+.imgview{display:grid;gap:12px}
+.imgview img{max-width:100%;max-height:72vh;margin:0 auto;border-radius:10px;display:block}
+.to-wrap{position:relative}
+.to-sug{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:5;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.14);padding:4px;display:grid;gap:2px;max-height:260px;overflow:auto}
+.to-sug[hidden]{display:none}
+.sopt{width:100%;border:0;background:none;text-align:left;border-radius:8px;padding:6px 8px;cursor:pointer;font:inherit;color:inherit}
+.sopt[aria-selected="true"],.sopt:hover{background:var(--accent-soft)}
+@media (max-width:560px){.cbtns .ibtn{width:34px}.composer form{gap:4px}}
 .daysep{align-self:center;font-size:12px;color:var(--muted)}
 @media (max-width:760px){.chat{grid-template-columns:1fr;height:auto}.chat.open .list-pane{display:none}.chat:not(.open) .conv-pane{display:none}.conv-pane{height:76vh}}
 
@@ -531,6 +580,6 @@ textarea.inp{resize:vertical;line-height:1.5}
 <footer class="legal-foot"><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=13"></script>
+<script src="/app.js?v=14"></script>
 </body>
 </html>

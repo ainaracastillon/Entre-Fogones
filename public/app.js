@@ -43,6 +43,10 @@ const ICONS = {
   doc:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  clip:'<path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/>',
+  smile:'<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>',
+  reply:'<path d="M10 8L5 12l5 4"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/>',
+  image:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
   clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
   chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   download:'<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>',
@@ -399,7 +403,16 @@ function suggHtml(max){
   if(!list) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
   if(!list.length) return `<p class="muted" style="margin:0">${S.suggView?'No hay recetas con esa búsqueda.':'Estamos preparando las recetas. Vuelve en un rato.'}</p>`;
   const saved=new Set(S.recipes.map(r=>r.fromSugg).filter(Boolean));
-  return (max?list.slice(0,max):list).map(s=>`<div class="rcard sg">
+  let shown=list;
+  if(max){
+    // en la biblioteca: 5 distintas cada día, sin las que ya tienes guardadas
+    const day=new Date().toLocaleDateString('sv-SE');
+    const h=t=>{ let x=2166136261; for(const c of t){ x^=c.charCodeAt(0); x=Math.imul(x,16777619)>>>0; } return x; };
+    const pool=list.filter(s=>!saved.has(s.id));
+    shown=pool.map(s=>({s,k:(s.image?0:2**32)+h(day+s.id)})).sort((a,b)=>a.k-b.k).slice(0,max).map(x=>x.s);
+    if(!shown.length) return `<p class="muted" style="margin:0">Ya tienes guardadas todas las recetas famosas. ¡Qué cocinillas!</p>`;
+  }
+  return shown.map(s=>`<div class="rcard sg">
     <button class="sg-open" data-act="openSugg" data-id="${esc(s.id)}">
       <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
       <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span><span class="mm">${esc([s.category,s.time].filter(Boolean).join(' · '))}</span></span></button>
@@ -996,21 +1009,66 @@ async function copyText(t, input){
 }
 function shareModal(kind, item){
   const link=linkFor(kind==='recipe'?'r':'f', item.id);
-  const fr=friends();
-  const friendsHtml = !S.profile
-    ? `<div class="banner" style="margin:0">${ico('user')}<span style="flex:1;min-width:180px">Inicia sesión para enviarlo a tus amigos por el chat.</span><button class="btn sm" data-act="login">Iniciar sesión</button></div>`
-    : fr.length ? `<div class="pick">${fr.map(id=>`<div class="person">${avatar(id)}<div class="pb"><div class="pn">${esc(pname(id))}</div><div class="pu">${esc(puser(id))}</div></div><button class="btn sm" data-send="${esc(id)}">${ico('send')}Enviar</button></div>`).join('')}</div>`
-    : `<p class="muted" style="margin:0">Aún no tienes amigos en la app. Añádelos desde la pestaña Amigos.</p>`;
+  const toHtml = !S.profile
+    ? `<div class="banner" style="margin:0">${ico('user')}<span style="flex:1;min-width:180px">Inicia sesión para enviarlo por el chat.</span><button class="btn sm" data-act="login">Iniciar sesión</button></div>`
+    : `<div class="to-wrap"><input id="shto" class="inp" placeholder="Escribe un nombre; varias personas separadas con comas" autocomplete="off" aria-label="Para" aria-autocomplete="list" aria-controls="shsug">
+        <div id="shsug" class="to-sug" role="listbox" hidden></div></div>
+       <input id="shmsg" class="inp" maxlength="300" placeholder="Mensaje (opcional)" aria-label="Mensaje">
+       <div class="row" style="justify-content:space-between;align-items:center"><span id="shst" class="muted" style="font-size:13px"></span><button class="btn pri" id="shsend">${ico('send')}Enviar por el chat</button></div>`;
   const m=openModal(`${mHead(kind==='recipe'?'Compartir receta':'Compartir recetario')}
     <p style="margin:0;font-family:var(--f-book);font-size:20px">${esc(item.title||item.name)}</p>
-    <div class="field"><label>Enviar a un amigo</label>${friendsHtml}</div>
-    <div class="field"><label for="shlink">Enlace</label><div class="linkbox"><input id="shlink" class="inp" readonly value="${esc(link)}"><button class="btn" id="shcopy">${ico('copy')}Copiar</button></div>
+    <div class="field"><label for="shto">Enviar por el chat a…</label>${toHtml}</div>
+    <div class="field"><label for="shlink">O compartir el enlace</label><div class="linkbox"><input id="shlink" class="inp" readonly value="${esc(link)}"><button class="btn" id="shcopy">${ico('copy')}Copiar</button></div>
     <p class="muted" style="margin:0;font-size:13px">Cualquiera con el enlace puede verla y guardarse una copia, aunque no tenga cuenta.</p></div>`);
   $('#shcopy',m).onclick=()=>copyText(link,$('#shlink',m));
-  m.querySelectorAll('[data-send]').forEach(b=>b.onclick=async()=>{
-    b.disabled=true;
-    try{ await sendShare(b.dataset.send, kind, item, 'share'); b.innerHTML=`${ico('send')}Enviado`; toast('Enviado por el chat'); }catch(err){ b.disabled=false; toast(err.error||'No se pudo enviar'); }
+  if(!S.profile) return;
+  const inp=$('#shto',m), sug=$('#shsug',m); let opts=[], act=0, remote=[], rt=null;
+  const norm=x=>String(x||'').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/^@/,'').trim();
+  const tokens=()=>inp.value.split(',').map(t=>t.trim());
+  const current=()=>{ const t=tokens(); return t[t.length-1]||''; };
+  const people=()=>{ const ids=new Set(friends()); remote.forEach(p=>ids.add(p.id)); return [...ids].filter(id=>id!==S.uid); };
+  const draw=()=>{
+    const q=norm(current()); const chosen=new Set(tokens().slice(0,-1).map(norm));
+    opts=people().filter(id=>{ const n=norm(pname(id)), u=norm(puser(id)); if(chosen.has(n)||chosen.has(u)) return false; return !q || n.includes(q) || u.includes(q); })
+      .sort((a,b)=>(friends().includes(b)-friends().includes(a)) || pname(a).localeCompare(pname(b),'es')).slice(0,6);
+    if(!opts.length || (!q && document.activeElement!==inp)){ sug.hidden=true; return; }
+    act=Math.min(act,opts.length-1);
+    sug.innerHTML=opts.map((id,i)=>`<button type="button" role="option" class="person sopt" aria-selected="${i===act}" data-id="${esc(id)}">${avatar(id)}<span class="pb"><span class="pn">${esc(pname(id))}</span><span class="pu">${esc(puser(id))}${friends().includes(id)?'':' · no sois amigos'}</span></span></button>`).join('');
+    sug.hidden=false;
+  };
+  const pick=id=>{ const t=tokens(); t[t.length-1]=pname(id); inp.value=t.filter(Boolean).join(', ')+', '; act=0; inp.focus(); draw(); };
+  inp.addEventListener('input',()=>{ act=0; draw(); clearTimeout(rt); const q=norm(current()); if(q.length>=2) rt=setTimeout(async()=>{ try{ const r=await api('GET','/users?q='+encodeURIComponent(current().replace(/^@/,''))); r.forEach(p=>S.profiles[p.id]=S.profiles[p.id]||p); remote=r; draw(); }catch{} },250); });
+  inp.addEventListener('focus',draw);
+  inp.addEventListener('keydown',e=>{
+    if(sug.hidden) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); act=(act+1)%opts.length; draw(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); act=(act-1+opts.length)%opts.length; draw(); }
+    else if((e.key==='Enter'||e.key==='Tab') && current()){ e.preventDefault(); pick(opts[act]); }
+    else if(e.key==='Escape'){ e.stopPropagation(); sug.hidden=true; }
   });
+  sug.addEventListener('mousedown',e=>e.preventDefault());
+  sug.addEventListener('click',e=>{ const b=e.target.closest('[data-id]'); if(b) pick(b.dataset.id); });
+  m.addEventListener('click',e=>{ if(!e.target.closest('.to-wrap')) sug.hidden=true; });
+  const resolve=async name=>{
+    const q=norm(name); if(!q) return null;
+    const find=list=>list.find(id=>norm(puser(id))===q) || list.find(id=>norm(pname(id))===q);
+    let id=find(people()); if(id) return id;
+    try{ const r=await api('GET','/users?q='+encodeURIComponent(name.trim().replace(/^@/,''))); r.forEach(p=>S.profiles[p.id]=S.profiles[p.id]||p); id=find(r.map(p=>p.id)); }catch{}
+    return id||null;
+  };
+  $('#shsend',m).onclick=async()=>{
+    const names=tokens().filter(Boolean); const st=$('#shst',m), b=$('#shsend',m);
+    if(!names.length){ st.innerHTML='<span class="err">Escribe a quién se lo mandas.</span>'; inp.focus(); return; }
+    b.disabled=true; st.textContent='Enviando…';
+    const ids=[], unknown=[];
+    for(const n of names){ const id=await resolve(n); if(id){ if(!ids.includes(id)) ids.push(id); } else unknown.push(n); }
+    if(unknown.length){ b.disabled=false; st.innerHTML=`<span class="err">No encuentro a: ${esc(unknown.join(', '))}</span>`; return; }
+    let ok=0; for(const id of ids){ try{ await sendShare(id, kind, item, 'share', $('#shmsg',m).value.trim()); ok++; }catch{} }
+    b.disabled=false;
+    if(ok===ids.length){ closeModal(); toast(ok===1?`Enviado a ${pname(ids[0])}`:`Enviado a ${ok} personas`); }
+    else st.innerHTML=`<span class="err">Solo se ha podido enviar a ${ok} de ${ids.length}.</span>`;
+  };
+  setTimeout(()=>inp.focus(),60);
 }
 function snapOf(kind,item){
   if(kind==='recipe') return {title:item.title||'Sin título', time:item.time||'', servings:item.servings||'', n:(item.ingredients||[]).length};
@@ -1338,7 +1396,51 @@ async function unfriend(id){
 
 /* ===== Chat ===== */
 let msgTimer=null;
-function stopChat(){ clearInterval(msgTimer); msgTimer=null; S.chatWith=null; S.msgs=[]; }
+const EMOJIS='😀 😂 🥹 😊 😍 🥰 😘 😋 😜 🤤 😎 🤩 🥳 😅 😉 🙃 🤔 🤗 😮 😢 😭 😡 🙈 🙏 👏 👍 👎 👌 💪 🤝 ✌️ 🫶 ❤️ 🧡 💛 💚 💙 💜 🤍 💯 ✨ 🔥 🎉 ⭐ 🍳 🥘 🍲 🍝 🍕 🍔 🌮 🥗 🍰 🎂 🧁 🍪 🍫 🍩 🍓 🍋 🥑 🍅 🧄 🧅 🌶️ 🥖 🧀 🥚 🍷 ☕ 🍽️'.split(' ');
+const isOnlyEmoji = t => { const x=String(t||'').trim(); return !!x && x.length<=24 && /^(?:\p{Extended_Pictographic}|\p{Emoji_Component}|\uFE0F|\u200D|\s)+$/u.test(x) && !/^[\d#*\s]+$/.test(x); };
+const fmtSize = n => n>=1048576 ? (n/1048576).toFixed(1).replace('.',',')+' MB' : Math.max(1,Math.round(n/1024))+' KB';
+const fileUrl = (f,dl) => `/api/files/${encodeURIComponent(f.id)}${dl?'?dl=1':''}`;
+/* Fotos: se reducen antes de enviarlas para que vayan rápido */
+async function shrinkImage(file){
+  if(file.type==='image/gif' || file.size<300000 && /jpeg|png|webp/.test(file.type)){ try{ const im=await loadImg(file); return {blob:file, w:im.width, h:im.height, type:file.type}; }catch{ return {blob:file, type:file.type}; } }
+  const img=await loadImg(file); const sc=Math.min(1,1600/Math.max(img.width,img.height));
+  const c=document.createElement('canvas'); c.width=Math.round(img.width*sc); c.height=Math.round(img.height*sc);
+  c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.84));
+  return {blob, w:c.width, h:c.height, type:'image/jpeg', name:file.name.replace(/\.[^.]+$/,'')+'.jpg'};
+}
+async function sendAttach(to, file){
+  if(file.size>10*1048576){ toast(`«${file.name}» ocupa más de 10 MB y no se puede enviar`); return; }
+  let body=file, type=file.type||'application/octet-stream', name=file.name||'archivo', w=0, h=0;
+  if(/^image\/(jpeg|png|webp|gif|heic|heif)/.test(file.type)){ try{ const x=await shrinkImage(file); body=x.blob; type=x.type; w=x.w||0; h=x.h||0; if(x.name) name=x.name; }catch{} }
+  const qs=new URLSearchParams({name}); if(w) { qs.set('w',w); qs.set('h',h); } if(S.replyTo) qs.set('reply',S.replyTo.id);
+  const r=await fetch(`/api/chats/${encodeURIComponent(to)}/attach?${qs}`,{method:'POST',credentials:'same-origin',headers:{'content-type':type},body});
+  let j=null; try{ j=await r.json(); }catch{}
+  if(!r.ok) throw {error:(j&&j.error)||'No se ha podido enviar el archivo.'};
+  setReply(null);
+  if(S.chatWith===to) await pollMsgs();
+  loadState().catch(()=>{});
+}
+async function sendFiles(files){
+  const to=S.chatWith; if(!to||!files.length) return;
+  toast(files.length>1?`Enviando ${files.length} archivos…`:'Enviando…');
+  for(const f of files){ try{ await sendAttach(to,f); }catch(err){ toast(err.error||'No se ha podido enviar'); } }
+}
+function setReply(m){
+  S.replyTo = m ? {id:m.id, from:m.from, text:msgText(m)} : null;
+  const bar=$('#replyBar'); if(!bar) return;
+  bar.hidden=!S.replyTo;
+  bar.innerHTML = S.replyTo ? `<div class="rq"><b>${esc(S.replyTo.from===S.uid?'Tú':pname(S.replyTo.from))}</b><span>${esc(S.replyTo.text)}</span></div><button type="button" class="x" data-act="cancelReply" aria-label="No responder">${ico('x')}</button>` : '';
+  if(S.replyTo) $('#ctext')?.focus();
+}
+function msgText(m){
+  if(m.type==='recipe') return 'Receta: '+(m.snap?.title||'');
+  if(m.type==='folder') return 'Recetario: '+(m.snap?.title||'');
+  if(m.type==='image') return '📷 Foto'+(m.text?': '+m.text:'');
+  if(m.type==='file') return '📎 '+(m.file?.name||'Archivo');
+  return String(m.text||'').replace(/\*\*?/g,'').slice(0,160);
+}
+function stopChat(){ clearInterval(msgTimer); msgTimer=null; S.chatWith=null; S.msgs=[]; S.replyTo=null; }
 function convPeople(){
   const fr=friends(); const lr=S.me?.lastRead||{};
   const ids=new Set([...fr, ...S.chats.map(c=>c.members.find(x=>x!==S.uid)).filter(Boolean)]);
@@ -1365,7 +1467,13 @@ function viewChat(){
           <button class="btn sm tbtn " data-act="chatAsk" aria-label="Pedir receta" title="Pedir receta">${ico('hand')}<span class="lbl">Pedir receta</span></button>
           <button class="btn sm tbtn " data-act="chatSuggest" aria-label="Sugerir receta" title="Sugerir receta">${ico('sparkle')}<span class="lbl">Sugerir receta</span></button>
         </div>
-        <form id="cform"><textarea id="ctext" rows="1" placeholder="Escribe un mensaje" aria-label="Mensaje"></textarea><button class="btn pri" aria-label="Enviar">${ico('send')}</button></form>
+        <div id="replyBar" class="replybar" hidden></div>
+        <div id="emojiPanel" class="emoji-panel" hidden role="dialog" aria-label="Emojis">${EMOJIS.map(e=>`<button type="button" data-emo="${e}" aria-label="${e}">${e}</button>`).join('')}</div>
+        <form id="cform">
+          <div class="cbtns"><button type="button" class="ibtn" id="emoBtn" aria-label="Emojis" title="Emojis" aria-expanded="false">${ico('smile')}</button>
+          <label class="ibtn" for="cphoto" title="Enviar fotos" aria-label="Enviar fotos">${ico('image')}</label><input id="cphoto" type="file" accept="image/*" multiple hidden>
+          <label class="ibtn" for="cfile" title="Enviar un archivo" aria-label="Enviar un archivo">${ico('clip')}</label><input id="cfile" type="file" multiple hidden></div>
+          <textarea id="ctext" rows="1" placeholder="Mensaje" aria-label="Mensaje"></textarea><button class="btn pri" aria-label="Enviar">${ico('send')}</button></form>
       </div>`:`<div class="chat-empty"><div>${spoon(54,'var(--muted)','var(--surface)')}<p>Elige una conversación para chatear, pedir recetas o sugerir alguna.</p></div></div>`}
     </section></div>`;
 }
@@ -1392,9 +1500,23 @@ function afterChat(){
   const draft=lsGet('ef_draft_'+S.chatWith); if(draft) ta.value=draft;
   ta.addEventListener('input',()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,120)+'px';lsSet('ef_draft_'+S.chatWith,ta.value)});
   ta.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();f.requestSubmit()}});
-  f.onsubmit=async e=>{e.preventDefault();const t=ta.value.trim();if(!t)return;ta.value='';lsSet('ef_draft_'+S.chatWith,'');
-    const type=S.askMode?'ask':'text'; S.askMode=false; ta.placeholder='Escribe un mensaje';
-    try{ await sendMsg(S.chatWith,{type,text:t}); }catch(err){ ta.value=t; toast(err.error||'No se pudo enviar'); }};
+  f.onsubmit=async e=>{e.preventDefault();const t=ta.value.trim();if(!t)return;ta.value='';ta.style.height='auto';lsSet('ef_draft_'+S.chatWith,'');
+    const type=S.askMode?'ask':'text'; S.askMode=false; ta.placeholder='Mensaje';
+    const reply=S.replyTo; setReply(null); $('#emojiPanel').hidden=true;
+    try{ await sendMsg(S.chatWith,{type,text:t,...(reply?{reply:{id:reply.id}}:{})}); }catch(err){ ta.value=t; if(reply) setReply(S.msgs.find(x=>x.id===reply.id)||null); toast(err.error||'No se pudo enviar'); }};
+  const ep=$('#emojiPanel'), eb=$('#emoBtn');
+  eb.onclick=()=>{ ep.hidden=!ep.hidden; eb.setAttribute('aria-expanded',String(!ep.hidden)); };
+  ep.onclick=e=>{ const b=e.target.closest('[data-emo]'); if(!b) return; const p=ta.selectionStart??ta.value.length, q=ta.selectionEnd??p;
+    ta.value=ta.value.slice(0,p)+b.dataset.emo+ta.value.slice(q); const np=p+b.dataset.emo.length; ta.setSelectionRange(np,np); ta.dispatchEvent(new Event('input')); };
+  $('#cphoto').onchange=e=>{ const fl=[...e.target.files]; e.target.value=''; sendFiles(fl); };
+  $('#cfile').onchange=e=>{ const fl=[...e.target.files]; e.target.value=''; sendFiles(fl); };
+  ta.addEventListener('paste',e=>{ const fl=[...(e.clipboardData?.files||[])]; if(fl.length){ e.preventDefault(); sendFiles(fl); } });
+  const pane=$('.conv-pane');
+  pane.addEventListener('dragover',e=>{ if([...(e.dataTransfer?.types||[])].includes('Files')){ e.preventDefault(); pane.classList.add('drop'); } });
+  pane.addEventListener('dragleave',e=>{ if(!pane.contains(e.relatedTarget)) pane.classList.remove('drop'); });
+  pane.addEventListener('drop',e=>{ pane.classList.remove('drop'); const fl=[...(e.dataTransfer?.files||[])]; if(fl.length){ e.preventDefault(); sendFiles(fl); } });
+  bindMsgGestures($('#msgs'));
+  setReply(null);
   S.msgs=[]; pollMsgs();
   clearInterval(msgTimer); msgTimer=setInterval(()=>{ if(document.visibilityState==='visible') pollMsgs(); },3000);
 }
@@ -1423,10 +1545,29 @@ function renderMsgs(forceBottom){
         ${mine?'':`<button class="btn sm" data-act="saveRef" data-k="${k}" data-i="${esc(m.ref?.id)}">${ico('save')}Guardar en mi recetario</button>`}</div></div>`;
     } else if(m.type==='ask'){
       inner=`<span class="tag">Pide una receta</span>${esc(m.text)}${mine?'':`<div class="row" style="margin-top:8px"><button class="btn sm" data-act="answerAsk">${ico('send')}Enviarle una receta</button></div>`}`;
+    } else if(m.type==='image' && m.file){
+      const ar=m.file.w&&m.file.h?`style="aspect-ratio:${m.file.w}/${m.file.h}"`:'';
+      inner=`<button class="mimg" data-act="viewImg" data-id="${esc(m.file.id)}" aria-label="Ver la foto"><img src="${fileUrl(m.file)}" alt="Foto" loading="lazy" ${ar}></button>${m.text?`<div>${fmt(m.text)}</div>`:''}`;
+    } else if(m.type==='file' && m.file){
+      inner=`<a class="mfile" href="${fileUrl(m.file,true)}" download="${esc(m.file.name)}">${ico('doc')}<span class="mf-b"><span class="mf-n">${esc(m.file.name)}</span><span class="mf-s">${esc(fmtSize(m.file.size||0))} · Descargar</span></span>${ico('download')}</a>${m.text?`<div>${fmt(m.text)}</div>`:''}`;
     } else inner=fmt(m.text);
-    return `${sep}<div class="msg ${mine?'mine':''} ${m.type==='ask'?'ask':''}">${inner}<span class="when">${esc(new Date(m.ts).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}))}</span></div>`;
+    const rq = m.reply ? `<button class="mquote" data-act="gotoMsg" data-id="${esc(m.reply.id)}"><b>${esc(m.reply.from===S.uid?'Tú':pname(m.reply.from))}</b><span>${esc(m.reply.text||'')}</span></button>` : '';
+    const emo = m.type==='text' && !m.reply && isOnlyEmoji(m.text);
+    return `${sep}<div class="msg ${mine?'mine':''} ${m.type==='ask'?'ask':''} ${m.type==='image'?'pic':''} ${emo?'emo':''}" data-mid="${esc(m.id)}">${rq}${inner}<span class="when">${esc(new Date(m.ts).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}))}</span><button class="mreply" data-act="replyMsg" data-id="${esc(m.id)}" aria-label="Responder" title="Responder">${ico('reply')}</button></div>`;
   }).join('');
   if(atBottom) box.scrollTop=box.scrollHeight;
+}
+/* Responder como en WhatsApp: deslizar el mensaje hacia la derecha, o el botón de responder */
+function bindMsgGestures(box){
+  if(!box) return; let el=null, sx=0, sy=0, dx=0, on=false;
+  box.addEventListener('touchstart',e=>{ const m=e.target.closest('.msg[data-mid]'); if(!m||e.touches.length!==1) return; el=m; sx=e.touches[0].clientX; sy=e.touches[0].clientY; dx=0; on=false; },{passive:true});
+  box.addEventListener('touchmove',e=>{ if(!el) return; const x=e.touches[0].clientX-sx, y=e.touches[0].clientY-sy;
+    if(!on){ if(Math.abs(y)>12 && Math.abs(y)>Math.abs(x)){ el=null; return; } if(x>12) on=true; else return; }
+    dx=Math.max(0,Math.min(90,x)); el.style.transform=`translateX(${dx}px)`; el.classList.toggle('swiping', dx>=60); },{passive:true});
+  const end=()=>{ if(!el) return; const m=el; el.style.transform=''; m.classList.remove('swiping'); if(on && dx>=60){ const msg=S.msgs.find(x=>x.id===m.dataset.mid); if(msg){ setReply(msg); navigator.vibrate?.(15); } } el=null; on=false; dx=0; };
+  box.addEventListener('touchend',end,{passive:true}); box.addEventListener('touchcancel',end,{passive:true});
+  // tocar un mensaje muestra el botón de responder
+  box.addEventListener('click',e=>{ if(e.target.closest('button,a')) return; const m=e.target.closest('.msg[data-mid]'); box.querySelectorAll('.msg.sel').forEach(x=>{ if(x!==m) x.classList.remove('sel'); }); if(m) m.classList.toggle('sel'); });
 }
 async function sendMsg(to, m){
   await api('POST',`/chats/${to}/messages`, m);
@@ -1728,6 +1869,10 @@ const ACT = {
   unfriend:el=>unfriend(el.dataset.id).catch(fail),
   chatWith:el=>openChat(el.dataset.id),
   chatBack:()=>{ stopChat(); render(); },
+  replyMsg:el=>{ const m=S.msgs.find(x=>x.id===el.dataset.id); if(m) setReply(m); },
+  cancelReply:()=>setReply(null),
+  gotoMsg:el=>{ const t=document.querySelector(`.msg[data-mid="${CSS.escape(el.dataset.id)}"]`); if(!t){ toast('Ese mensaje es muy antiguo y ya no está aquí'); return; } t.scrollIntoView({behavior:'smooth',block:'center'}); t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash'); },
+  viewImg:el=>{ const u=fileUrl({id:el.dataset.id}); openModal(`<div class="imgview"><img src="${u}" alt="Foto"><div class="row" style="justify-content:space-between"><a class="btn" href="${fileUrl({id:el.dataset.id},true)}" download>${ico('download')}Descargar</a><button class="btn pri" data-act="closeModal">Cerrar</button></div></div>`,{wide:true}); },
   chatShareRecipe:()=>recipePicker('Compartir una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'share',t).catch(fail)),
   chatSuggest:()=>recipePicker('Sugerir una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'suggest',t).catch(fail)),
   answerAsk:()=>recipePicker('Enviarle una receta', (r,t)=>sendShare(S.chatWith,'recipe',r,'answer',t).catch(fail)),
