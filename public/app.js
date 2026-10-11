@@ -1934,6 +1934,32 @@ function admSugg(list){
 }
 function bindAdmSugg(){ const f=$('#admSuggForm'); if(!f) return; f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector('button'); b.disabled=true;
   try{ await api('POST','/admin/suggestions',{url:$('#sgUrl').value.trim()}); S.sugg=null; toast('Sugerencia añadida'); adminLoad(); }catch(err){ toast(err.error); b.disabled=false; } }; }
+/* Sugiere usuarios al escribir en un campo de varios @usuario separados por comas (panel) */
+function userAutocomplete(inp, sug){
+  let opts=[], act=0, t=null, seq=0;
+  const tokens=()=>inp.value.split(',').map(x=>x.trim());
+  const current=()=>{ const tk=tokens(); return (tk[tk.length-1]||'').replace(/^@/,''); };
+  const close=()=>{ sug.hidden=true; inp.setAttribute('aria-expanded','false'); };
+  const draw=()=>{ if(!opts.length){ sug.innerHTML='<p class="muted" style="margin:6px 8px;font-size:14px">Nadie con ese nombre.</p>'; sug.hidden=false; return; }
+    act=Math.min(act,opts.length-1);
+    sug.innerHTML=opts.map((u,i)=>{ S.profiles[u.id]=S.profiles[u.id]||u; return `<button type="button" role="option" class="person sopt" aria-selected="${i===act}" data-u="${esc(u.username)}">${avatar(u.id)}<span class="pb"><span class="pn">${esc(u.display||u.username)}</span><span class="pu">@${esc(u.username)}${u.email?' · '+esc(u.email):''}</span></span></button>`; }).join('');
+    sug.hidden=false; inp.setAttribute('aria-expanded','true'); };
+  const search=async()=>{ const q=current(); const my=++seq;
+    try{ const chosen=new Set(tokens().slice(0,-1).map(x=>x.replace(/^@/,'').toLowerCase()));
+      const list=(await api('GET','/admin/users?q='+encodeURIComponent(q))).filter(u=>!chosen.has(u.username)).slice(0,8);
+      if(my!==seq) return; opts=list; act=0; draw(); }catch{} };
+  const pick=u=>{ const tk=tokens(); tk[tk.length-1]='@'+u; inp.value=tk.filter(Boolean).join(', ')+', '; inp.focus(); search(); };
+  inp.addEventListener('input',()=>{ clearTimeout(t); t=setTimeout(search,200); });
+  inp.addEventListener('focus',search);
+  inp.addEventListener('keydown',e=>{ if(sug.hidden||!opts.length) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); act=(act+1)%opts.length; draw(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); act=(act-1+opts.length)%opts.length; draw(); }
+    else if(e.key==='Enter'||e.key==='Tab'){ if(current()||e.key==='Enter'){ e.preventDefault(); pick(opts[act].username); } }
+    else if(e.key==='Escape'){ e.stopPropagation(); close(); } });
+  sug.addEventListener('mousedown',e=>e.preventDefault());
+  sug.addEventListener('click',e=>{ const b=e.target.closest('[data-u]'); if(b) pick(b.dataset.u); });
+  inp.addEventListener('blur',()=>setTimeout(close,150));
+}
 /* Subida masiva de recetas desde el panel */
 function admBulkHtml(){
   return `<details class="card bulk" ${S.bulkOpen?'open':''}><summary><h2 style="display:inline">${ico('upload')}Subida masiva</h2></summary>
@@ -1944,7 +1970,7 @@ function admBulkHtml(){
       <fieldset class="nt-opts"><legend>Dónde salen</legend>
         <label class="opt-line"><input type="radio" name="bkDest" value="sugg" checked> En «Recetas recomendadas», para todo el mundo</label>
         <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una o varias personas</label>
-        <div class="grid2" id="bkUser" hidden><div class="field"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="@lourdessalguero, @entrefogones"></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
+        <div class="grid2" id="bkUser" hidden><div class="field to-wrap"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="Escribe un nombre o @usuario" autocomplete="off" role="combobox" aria-controls="bkSug" aria-expanded="false"><div id="bkSug" class="to-sug" role="listbox" hidden></div></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
           <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas preferidas por los usuarios)</label></div></fieldset>
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
       <div><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
@@ -1955,6 +1981,7 @@ function bindAdmBulk(){
   const f=$('#bkF'); if(!f) return;
   f.closest('details').ontoggle=e=>{ S.bulkOpen=e.target.open; };
   f.querySelectorAll('input[name=bkDest]').forEach(r=>r.onchange=()=>{ $('#bkUser').hidden=f.querySelector('input[name=bkDest]:checked').value!=='user'; });
+  userAutocomplete($('#bkU'), $('#bkSug'));
   $('#bkFiles').onchange=e=>{ const n=e.target.files.length; $('#bkFn').textContent=n?`${n} ${n===1?'archivo':'archivos'}`:''; };
   f.onsubmit=async e=>{ e.preventDefault();
     const urls=$('#bkUrls').value.split('\n').map(x=>x.trim()).filter(x=>/^https?:\/\//.test(x));
