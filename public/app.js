@@ -227,11 +227,22 @@ function go(v){
 
 /* ===== Biblioteca ===== */
 function spineH(id,name=''){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return Math.min(268,178+(h%34)+Math.max(0,String(name).length-12)*5)}
-/* Ajusta el título de cada lomo para que se vea entero */
+/* Ajusta el título de cada lomo para que se vea entero: mide el texto y lo reparte en líneas */
 function fitSpines(){
+  const ctx=(fitSpines.c ||= document.createElement('canvas').getContext('2d'));
   document.querySelectorAll('.spine .st').forEach(st=>{
-    let fs=16; st.style.fontSize=fs+'px';
-    while(fs>9 && (st.scrollHeight>st.clientHeight+1 || st.scrollWidth>st.clientWidth+1)){ fs-=.5; st.style.fontSize=fs+'px'; }
+    const words=st.textContent.trim().split(/\s+/).filter(Boolean);
+    const L=st.clientHeight-6, W=st.clientWidth-8;
+    if(L<20||W<10) return;
+    for(let fs=16; fs>=7.5; fs-=.5){
+      ctx.font=`${fs}px "Young Serif", Georgia, serif`;
+      const maxLines=Math.max(1, Math.floor(W/(fs*1.12)));
+      const sp=ctx.measureText(' ').width; let lines=1, cur=0, ok=true;
+      for(const w of words){ const ww=ctx.measureText(w).width; if(ww>L){ ok=false; break; }
+        if(!cur) cur=ww; else if(cur+sp+ww<=L) cur+=sp+ww; else { lines++; cur=ww; } }
+      if(ok && lines<=maxLines){ st.style.fontSize=fs+'px'; return; }
+    }
+    st.style.fontSize='7.5px';
   });
 }
 function viewLibrary(){

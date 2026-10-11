@@ -126,7 +126,11 @@ const app = express();
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '6mb' }));
 app.get('/healthz', (req, res) => res.send('ok'));
-app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', index: 'index.html' }));
+// HTML, JS y manifiesto se revalidan siempre para que se vea la última versión al momento
+app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', setHeaders(res, file) {
+  if (/\.(html|js|css|webmanifest)$/.test(file)) res.setHeader('Cache-Control', 'no-cache');
+  else res.setHeader('Cache-Control', 'public, max-age=86400');
+} }));
 
 const api = express.Router();
 api.use(auth);
@@ -699,7 +703,7 @@ app.get('/legal/:page', (req, res, next) => {
   if (!html) return next();
   res.type('html').send(html);
 });
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
 migrate().then(() => app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)))
