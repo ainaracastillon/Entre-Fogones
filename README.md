@@ -30,6 +30,7 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 | `OPENAI_MODEL` | No | Modelo de ChatGPT (por defecto `gpt-4o-mini`) |
 | `ANTHROPIC_API_KEY` | No | Alternativa: la misma IA con Claude (se usa si no hay clave de OpenAI) |
 | `ANTHROPIC_MODEL` | No | Modelo de Claude (por defecto `claude-sonnet-5-5`) |
+| `CF_ACCOUNT_ID` y `CF_API_TOKEN` | No | Fotos generadas con IA para las recetas famosas con Cloudflare Workers AI (gratis con cuenta). Sin ellas se usa Pollinations, que tiene un límite muy bajo |
 | `BREVO_API_KEY` o `RESEND_API_KEY` | No | Envío de correos para recuperar la contraseña |
 | `MAIL_FROM` | Con correo | Remitente, p. ej. `Entre Fogones <tu-correo@gmail.com>` (en Brevo, un remitente verificado) |
 | `LEGAL_NAME` | No | Titular que aparece en los textos legales (por defecto `Ainara Castillón`) |

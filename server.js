@@ -72,6 +72,7 @@ async function migrate() {
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img BYTEA;
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_type TEXT;
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_tries INT;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS rewritten BOOLEAN;
   CREATE TABLE IF NOT EXISTS notices(
     id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
     popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
@@ -877,7 +878,7 @@ async function processSuggestions() {
         ld.image = '';
         const rec = await rewriteRecipe(ld);
         const data = cleanRecipe({ ...rec, source: '' });
-        await q('UPDATE suggestions SET data=$1, title=$2, image=NULL WHERE id=$3', [{ ...data, image: '' }, data.title, s.id]);
+        await q('UPDATE suggestions SET data=$1, title=$2, image=NULL, rewritten=$4 WHERE id=$3', [{ ...data, image: '' }, data.title, s.id, rec !== ld]);
       } catch { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]).catch(() => {}); }
       await sleep(PROVIDER ? 2500 : 800);
     }
@@ -896,11 +897,23 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join('
   for (const [id, t] of Object.entries(m)) { const c = SUGG_CATS.find(x => x.toLowerCase() === String(t).toLowerCase()); if (c) res[id] = c; }
   return res;
 }
-/* Foto generada con IA (gratis, Pollinations) para no usar fotos de otras personas */
+/* Foto generada con IA para no usar fotos de otras personas.
+   Con CF_ACCOUNT_ID y CF_API_TOKEN usa Cloudflare Workers AI (gratis con cuenta); si no, Pollinations. */
+const CF_ACCOUNT = process.env.CF_ACCOUNT_ID || '', CF_TOKEN = process.env.CF_API_TOKEN || '', POLL_TOKEN = process.env.POLLINATIONS_TOKEN || '';
 async function aiImage(title) {
   const prompt = `appetizing homemade food photography of ${title}, spanish home cooking, natural window light, rustic wooden table, shallow depth of field, no text, no people`;
+  if (CF_ACCOUNT && CF_TOKEN) {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
+      method: 'POST', signal: AbortSignal.timeout(90000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt, steps: 6 }) });
+    if (r.status === 429 || r.status === 402) { const e = new Error('cuota ' + r.status); e.quota = true; throw e; }
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok || !j.result?.image) throw new Error('cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200));
+    return { buf: Buffer.from(j.result.image, 'base64'), type: 'image/jpeg' };
+  }
   const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=640&height=480&nologo=true&seed=${Math.floor(Math.random() * 1e6)}`;
-  const r = await fetch(url, { signal: AbortSignal.timeout(90000) });
+  const r = await fetch(url, { signal: AbortSignal.timeout(90000), headers: POLL_TOKEN ? { authorization: `Bearer ${POLL_TOKEN}` } : {} });
+  if (r.status === 402 || r.status === 429) { const e = new Error('cuota ' + r.status); e.quota = true; throw e; }
   if (!r.ok) throw new Error('img ' + r.status);
   const type = (r.headers.get('content-type') || 'image/jpeg').split(';')[0];
   if (!/^image\//.test(type)) throw new Error('img type ' + type);
@@ -912,6 +925,17 @@ let artBusy = false;
 async function processSuggestionArt() {
   if (artBusy) return; artBusy = true;
   try {
+    // reescribir con palabras propias las que se guardaron cuando la IA fallaba
+    if (PROVIDER) for (const r of (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND rewritten IS NOT TRUE ORDER BY position LIMIT 200")).rows) {
+      const before = r.data.title;
+      const out = await rewriteRecipe({ ...r.data, image: '' });
+      if (out !== r.data && out.title && out.title !== before) {
+        const data = cleanRecipe({ ...out, source: '' });
+        await q('UPDATE suggestions SET data=$1, title=$2, rewritten=true, img=NULL, img_tries=0 WHERE id=$3', [{ ...data, image: '' }, data.title, r.id]);
+      } else if (out !== r.data) await q('UPDATE suggestions SET rewritten=true WHERE id=$1', [r.id]);
+      else break;
+      await sleep(3000);
+    }
     // tipos que falten, de 20 en 20
     for (let k = 0; k < 20; k++) {
       const rows = (await q("SELECT id, data FROM suggestions WHERE data IS NOT NULL AND category IS NULL LIMIT 10")).rows;
@@ -927,8 +951,8 @@ async function processSuggestionArt() {
     const rows = (await q("SELECT id, title FROM suggestions WHERE data IS NOT NULL AND img IS NULL AND coalesce(img_tries,0)<3 ORDER BY position LIMIT 200")).rows;
     for (const s of rows) {
       try { const { buf, type } = await aiImage(s.title); await q('UPDATE suggestions SET img=$1, img_type=$2 WHERE id=$3', [buf, type, s.id]); }
-      catch (e) { console.error('foto', s.title, e.message); await q('UPDATE suggestions SET img_tries=coalesce(img_tries,0)+1 WHERE id=$1', [s.id]); }
-      await sleep(4000);
+      catch (e) { console.error('foto', s.title, e.message); if (e.quota) break; await q('UPDATE suggestions SET img_tries=coalesce(img_tries,0)+1 WHERE id=$1', [s.id]); }
+      await sleep(CF_ACCOUNT ? 2000 : 15000);
     }
   } finally { artBusy = false; }
 }
