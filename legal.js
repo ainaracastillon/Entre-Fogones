@@ -144,7 +144,7 @@ function legalHtml(page, opts) {
 @media (prefers-color-scheme:dark){:root{--bg:#1C1310;--fg:#F3E6DA;--muted:#BFA391;--line:#3B2B23;--accent:#E8834F;--card:#271B16;color-scheme:dark}}
 body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.65 'Bricolage Grotesque',system-ui,sans-serif}
 .w{max-width:760px;margin:0 auto;padding:24px 16px 64px}
-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:20px;position:sticky;top:0;z-index:5;background:var(--bg);padding:12px 0;border-bottom:1px solid var(--line,rgba(0,0,0,.1))}
 header a.home{color:var(--fg);text-decoration:none;font-weight:800;font-size:20px}
 nav{display:flex;gap:2px;flex-wrap:nowrap;max-width:100%}nav a{color:var(--muted);text-decoration:none;padding:5px 10px;border-radius:999px;border:1px solid transparent;font-size:14px;white-space:nowrap}
 @media (max-width:480px){nav a{padding:4px 7px;font-size:13px}}

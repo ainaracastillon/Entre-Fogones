@@ -71,6 +71,15 @@ async function migrate() {
   ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS allergens JSONB NOT NULL DEFAULT '[]'::jsonb;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen BIGINT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at BIGINT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_suggested JSONB;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+  CREATE TABLE IF NOT EXISTS recipe_imgs(recipe_id TEXT PRIMARY KEY, img BYTEA NOT NULL, type TEXT, created BIGINT);
+  CREATE TABLE IF NOT EXISTS menus(user_id TEXT NOT NULL, week TEXT NOT NULL, data JSONB NOT NULL, created BIGINT, PRIMARY KEY(user_id, week));
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS credit TEXT;
+  CREATE TABLE IF NOT EXISTS pending_signups(
+    email TEXT PRIMARY KEY, code_hash TEXT NOT NULL, data JSONB NOT NULL, anon_id TEXT NOT NULL, created BIGINT NOT NULL, expires BIGINT NOT NULL, tries INT NOT NULL DEFAULT 0);
   ALTER TABLE contact_messages ADD COLUMN IF NOT EXISTS status TEXT;
   CREATE TABLE IF NOT EXISTS suggestions(
     id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, author TEXT, image TEXT, position INT NOT NULL DEFAULT 0, hidden BOOLEAN, tries INT, created BIGINT NOT NULL);
@@ -129,13 +138,12 @@ async function auth(req, res, next) {
     if (token) {
       const r = await q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1', [token]);
       const u = r.rows[0];
-      if (u && !u.blocked) {
+      if (u) {
         if (u.username && u.email && u.email.toLowerCase() === SUPERADMIN_EMAIL && u.role !== 'superadmin') { await q("UPDATE users SET role='superadmin' WHERE id=$1", [u.id]); u.role = 'superadmin'; }
         req.user = u; req.token = token;
         if (u.username && (!u.last_seen || now() - Number(u.last_seen) > 600e3)) q('UPDATE users SET last_seen=$1 WHERE id=$2', [now(), u.id]).catch(() => {});
         return next();
       }
-      if (u && u.blocked) await q('DELETE FROM sessions WHERE token=$1', [token]);
     }
     const id = gid();
     await q('INSERT INTO users(id,created) VALUES($1,$2)', [id, now()]);
@@ -146,6 +154,13 @@ async function auth(req, res, next) {
   } catch (e) { next(e); }
 }
 const needProfile = (req, res, next) => req.user.username ? next() : res.status(403).json({ error: 'Inicia sesión o crea una cuenta para usar esto.', needAccount: true });
+// Cuenta suspendida: solo puede ver por qué, escribir a Contacto o cerrar sesión
+const SUSPENDED_OK = new Set(['/state', '/config', '/logout', '/contact', '/notices']);
+function suspendedGate(req, res, next) {
+  if (req.user && req.user.blocked && req.user.username && !SUSPENDED_OK.has(req.path)) return res.status(403).json({ error: 'Tu cuenta está suspendida.', suspended: true });
+  next();
+}
+const suspension = u => u && u.blocked ? { reason: u.blocked_reason || '', at: Number(u.blocked_at) || null } : null;
 
 /* ---------- Ayudantes ---------- */
 const pub = u => u ? { id: u.id, username: u.username, display: u.display, color: u.color, avatar: u.avatar || null } : null;
@@ -154,11 +169,15 @@ function cleanRecipe(b) {
   const s = (v, n) => String(v ?? '').slice(0, n);
   const arr = (v, n, m) => (Array.isArray(v) ? v : []).map(x => s(x, m)).filter(Boolean).slice(0, n);
   let image = s(b.image, 400000);
-  if (image && !/^data:image\/(jpeg|png|webp);base64,/.test(image) && !/^https?:\/\//.test(image)) image = '';
+  if (image && !/^data:image\/(jpeg|png|webp);base64,/.test(image) && !/^https?:\/\//.test(image) && !/^\/img\/[rs]\/[A-Za-z0-9]+(\?v=\d+)?$/.test(image)) image = '';
+  const num = v => { const n = Number(v); return Number.isFinite(n) && n >= 0 && n < 100000 ? Math.round(n * 10) / 10 : null; };
+  const nu = b.nutrition && typeof b.nutrition === 'object' ? Object.fromEntries(['kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt'].map(k => [k, num(b.nutrition[k])]).filter(([, v]) => v !== null)) : null;
   return {
     title: s(b.title, 160) || 'Sin título', image, servings: s(b.servings, 20), time: s(b.time, 40), difficulty: s(b.difficulty, 20),
     ingredients: arr(b.ingredients, 120, 300), steps: arr(b.steps, 80, 2000), notes: s(b.notes, 2000),
-    source: /^https?:\/\//.test(b.source || '') ? s(b.source, 600) : '', fromUid: b.fromUid ? s(b.fromUid, 60) : null, fromSugg: b.fromSugg ? s(b.fromSugg, 60) : null
+    source: /^https?:\/\//.test(b.source || '') ? s(b.source, 600) : '', fromUid: b.fromUid ? s(b.fromUid, 60) : null, fromSugg: b.fromSugg ? s(b.fromSugg, 60) : null,
+    public: !!b.public, credit: s(b.credit, 120),
+    ...(nu && Object.keys(nu).length ? { nutrition: { ...nu, sig: s(b.nutrition.sig, 64) } } : {})
   };
 }
 const idOk = id => /^[A-Za-z0-9]{6,40}$/.test(id || '');
@@ -176,6 +195,7 @@ app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', se
 
 const api = express.Router();
 api.use(auth);
+api.use(suspendedGate);
 
 api.get('/config', (req, res) => res.json({ mail: mailReady(), ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA', canHear: CAN_HEAR }));
 
@@ -196,7 +216,7 @@ api.get('/state', async (req, res, next) => {
     const people = ids.size ? (await q('SELECT id,username,display,color,avatar FROM users WHERE id = ANY($1)', [[...ids]])).rows : [];
     const profiles = {}; people.forEach(p => profiles[p.id] = pub(p));
     res.json({
-      me: { ...pub(req.user), email: req.user.email || null, role: req.user.username ? req.user.role : 'user', allergens: req.user.allergens || [], lastRead: req.user.last_read || {} }, profiles,
+      me: { ...pub(req.user), email: req.user.email || null, role: req.user.username ? req.user.role : 'user', allergens: req.user.allergens || [], prefs: req.user.prefs || {}, lastRead: req.user.last_read || {}, suspended: suspension(req.user) }, profiles,
       folders: folders.rows.map(f => ({ id: f.id, name: f.name, color: f.color, created: Number(f.created) })),
       recipes: recipes.rows.map(recipeOut),
       requests: reqs.rows.map(r => ({ from: r.from_id, to: r.to_id, status: r.status, ts: Number(r.ts) })),
@@ -207,6 +227,19 @@ api.get('/state', async (req, res, next) => {
 
 /* Cuenta */
 const emailOk = e => /^[^\s@]{1,64}@[^\s@]{1,190}\.[a-z]{2,}$/i.test(e);
+const genCode = () => String(crypto.randomInt(0, 1e6)).padStart(6, '0');
+async function finishSignup(req, d) {
+  if ((await q('SELECT 1 FROM users WHERE username=$1', [d.username])).rows[0]) { const e = new Error(`@${d.username} ya está cogido. Prueba con otro.`); e.status = 409; throw e; }
+  if (d.email && (await q('SELECT 1 FROM users WHERE lower(email)=$1', [d.email])).rows[0]) { const e = new Error('Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.'); e.status = 409; throw e; }
+  await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',
+    [d.username, d.display, d.color, d.pass_hash, d.email || null, now(), req.user.id]);
+  await syncRole(req.user.id, d.email);
+}
+async function sendSignupCode(email, display, code) {
+  await sendMail(email, `${code} es tu código de Entre Fogones`,
+    `<div style="font-family:system-ui,sans-serif;max-width:420px"><h2 style="color:#B5562B">Entre Fogones</h2><p>Hola, ${String(display).replace(/[<>&]/g, '')}:</p><p>Este es tu código para crear la cuenta:</p><p style="font-size:32px;font-weight:700;letter-spacing:8px;margin:16px 0">${code}</p><p style="color:#7A5C4C">Caduca en 15 minutos. Si no has sido tú, ignora este correo y no se creará ninguna cuenta.</p></div>`,
+    `Tu código de Entre Fogones es ${code}. Caduca en 15 minutos. Si no has sido tú, ignora este correo.`);
+}
 api.post('/register', async (req, res, next) => {
   try {
     if (req.user.username) return res.status(400).json({ error: 'Ya tienes una cuenta abierta.' });
@@ -216,25 +249,59 @@ api.post('/register', async (req, res, next) => {
     const password = String(req.body.password || '');
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
     if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
-    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido. Lo necesitarás si olvidas la contraseña.' });
+    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido. Te enviaremos un código para comprobarlo.' });
     if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
     if (!req.body.accept) return res.status(400).json({ error: 'Para crear la cuenta tienes que aceptar los Términos de uso y la Política de privacidad.' });
     if ((await q('SELECT 1 FROM users WHERE username=$1', [username])).rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
     if ((await q('SELECT 1 FROM users WHERE lower(email)=$1', [email])).rows[0]) return res.status(409).json({ error: 'Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.' });
-    await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',
-      [username, display, String(req.body.color || '#B5562B').slice(0, 9), hashPass(password), email, now(), req.user.id]);
-    await syncRole(req.user.id, email);
-    res.json({ ok: true });
+    const d = { username, display, email, color: String(req.body.color || '#B5562B').slice(0, 9), pass_hash: hashPass(password) };
+    if (!mailReady()) { await finishSignup(req, d); return res.json({ ok: true }); }
+    // la cuenta no se crea hasta que se escribe el código que llega al correo
+    const prev = (await q('SELECT created FROM pending_signups WHERE email=$1', [email])).rows[0];
+    if (prev && now() - Number(prev.created) < 30e3) return res.status(429).json({ error: 'Espera unos segundos antes de pedir otro código.' });
+    const code = genCode();
+    await q(`INSERT INTO pending_signups(email,code_hash,data,anon_id,created,expires,tries) VALUES($1,$2,$3,$4,$5,$6,0)
+      ON CONFLICT(email) DO UPDATE SET code_hash=$2, data=$3, anon_id=$4, created=$5, expires=$6, tries=0`, [email, sha(code + email), d, req.user.id, now(), now() + 15 * 60e3]);
+    try { await sendSignupCode(email, display, code); }
+    catch (e) { console.error(e); return res.status(502).json({ error: 'No he podido enviar el correo con el código. Revisa la dirección o prueba en un rato.' }); }
+    res.json({ verify: true, email });
   } catch (e) { next(e); }
+});
+api.post('/register/verify', async (req, res, next) => {
+  try {
+    if (req.user.username) return res.status(400).json({ error: 'Ya tienes una cuenta abierta.' });
+    const email = String(req.body.email || '').trim().toLowerCase(), code = String(req.body.code || '').replace(/\D/g, '');
+    const p = (await q('SELECT * FROM pending_signups WHERE email=$1', [email])).rows[0];
+    if (!p || Number(p.expires) < now()) return res.status(400).json({ error: 'El código ha caducado. Pide uno nuevo.', expired: true });
+    if (p.tries >= 5) return res.status(429).json({ error: 'Demasiados intentos. Pide un código nuevo.', expired: true });
+    if (sha(code + email) !== p.code_hash) { await q('UPDATE pending_signups SET tries=tries+1 WHERE email=$1', [email]); return res.status(400).json({ error: 'Ese código no es correcto. Revisa el correo.' }); }
+    await finishSignup(req, p.data);
+    await q('DELETE FROM pending_signups WHERE email=$1', [email]);
+    res.json({ ok: true });
+  } catch (e) { if (e.status) return res.status(e.status).json({ error: e.message }); next(e); }
+});
+api.post('/register/resend', async (req, res, next) => {
+  try {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const p = (await q('SELECT * FROM pending_signups WHERE email=$1', [email])).rows[0];
+    if (!p) return res.status(400).json({ error: 'Vuelve a rellenar el formulario.' });
+    if (now() - Number(p.created) < 30e3) return res.status(429).json({ error: 'Espera unos segundos antes de pedir otro código.' });
+    const code = genCode();
+    await q('UPDATE pending_signups SET code_hash=$1, created=$2, expires=$3, tries=0 WHERE email=$4', [sha(code + email), now(), now() + 15 * 60e3, email]);
+    await sendSignupCode(email, p.data.display, code);
+    res.json({ ok: true });
+  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido enviar el correo. Prueba en un rato.' }); }
 });
 api.put('/me', needProfile, async (req, res, next) => {
   try {
     const display = String(req.body.display || '').trim().slice(0, 40);
     const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
-    if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
-    if ((await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
-    await q('UPDATE users SET display=$1, color=$2, email=$3 WHERE id=$4', [display, String(req.body.color || '#B5562B').slice(0, 9), email, req.user.id]);
+    if (email && !emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
+    if (!email && req.user.email) return res.status(400).json({ error: 'Escribe tu correo.' });
+    if (req.user.role === 'superadmin' && email !== String(req.user.email || '').toLowerCase()) return res.status(400).json({ error: 'El correo del Superadministrador solo se puede cambiar desde el código.' });
+    if (email && (await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
+    await q('UPDATE users SET display=$1, color=$2, email=$3 WHERE id=$4', [display, String(req.body.color || '#B5562B').slice(0, 9), email || null, req.user.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -244,7 +311,6 @@ api.post('/login', async (req, res, next) => {
     const r = await q('SELECT * FROM users WHERE username=$1 OR (email IS NOT NULL AND lower(email)=$1) LIMIT 1', [who]);
     const u = r.rows[0];
     if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
-    if (u.blocked) return res.status(403).json({ error: 'Esta cuenta está bloqueada. Si crees que es un error, escríbenos desde Contacto.' });
     await syncRole(u.id, u.email);
     await adoptAnon(req, u.id);
     await newSession(res, u.id);
@@ -265,6 +331,7 @@ api.post('/logout', async (req, res, next) => {
 });
 api.delete('/me', needProfile, async (req, res, next) => {
   try {
+    if (req.user.role === 'superadmin') return res.status(400).json({ error: 'La cuenta del Superadministrador no se puede borrar.' });
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
     const me = req.user.id;
     await q('DELETE FROM messages WHERE from_id=$1', [me]);
@@ -374,10 +441,71 @@ api.put('/recipes/:id', async (req, res, next) => {
     await q(`INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$6)
              ON CONFLICT(id) DO UPDATE SET folder_id=$3, data=$4, updated=$6`, [id, req.user.id, folderId, data, Number(req.body.created) || now(), now()]);
     res.json({ ok: true });
+    queueRecipeWork(id);
   } catch (e) { next(e); }
 });
 api.delete('/recipes/:id', async (req, res, next) => {
-  try { await q('DELETE FROM recipes WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]); res.json({ ok: true }); } catch (e) { next(e); }
+  try { await q('DELETE FROM recipes WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]); await q('DELETE FROM recipe_imgs WHERE recipe_id=$1 AND NOT EXISTS (SELECT 1 FROM recipes WHERE id=$1)', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+/* Trabajo en segundo plano para cada receta guardada: foto generada si no tiene, y tabla nutricional */
+const recipeQueue = new Set(); let recipeBusy = false, imgPauseUntil = 0;
+async function backfillRecipes() {
+  try {
+    const rows = (await q("SELECT id FROM recipes WHERE coalesce(data->>'image','')='' OR (data->'nutrition') IS NULL ORDER BY updated DESC LIMIT 300")).rows;
+    rows.forEach(r => recipeQueue.add(r.id)); runRecipeQueue();
+  } catch (e) { console.error('backfill', e.message); }
+}
+function queueRecipeWork(id) { recipeQueue.add(id); runRecipeQueue(); }
+const nutriSig = d => sha(JSON.stringify([d.ingredients || [], d.servings || ''])).slice(0, 16);
+async function runRecipeQueue() {
+  if (recipeBusy) return; recipeBusy = true;
+  try {
+    while (recipeQueue.size) {
+      const id = recipeQueue.values().next().value; recipeQueue.delete(id);
+      const r = (await q('SELECT data FROM recipes WHERE id=$1', [id])).rows[0]; if (!r) continue;
+      const d = r.data; let changed = false;
+      if (!d.image && d.title && Date.now() > imgPauseUntil) {
+        try {
+          const { buf, type } = await aiImage(d.title, (d.ingredients || []).slice(0, 5).join(', '));
+          await q('INSERT INTO recipe_imgs(recipe_id,img,type,created) VALUES($1,$2,$3,$4) ON CONFLICT(recipe_id) DO UPDATE SET img=$2, type=$3, created=$4', [id, buf, type, now()]);
+          d.image = `/img/r/${id}?v=${now()}`; changed = true;
+        } catch (e) { console.error('foto receta', e.message); if (e.quota) imgPauseUntil = Date.now() + 3600e3; }
+      }
+      if (PROVIDER && (d.ingredients || []).length && (!d.nutrition || d.nutrition.sig !== nutriSig(d))) {
+        try { const n = await aiNutrition(d); if (n) { d.nutrition = { ...n, sig: nutriSig(d) }; changed = true; } } catch (e) { console.error('nutricion', e.message); }
+      }
+      if (changed) await q("UPDATE recipes SET data = data || $1::jsonb WHERE id=$2", [JSON.stringify({ image: d.image, ...(d.nutrition ? { nutrition: d.nutrition } : {}) }), id]);
+      await sleep(1500);
+    }
+  } finally { recipeBusy = false; }
+}
+async function aiNutrition(d) {
+  countAi();
+  const out = parseJson(await llm({ maxTokens: 700, messages: [{ role: 'user', text: `Calcula la información nutricional aproximada POR RACIÓN de esta receta (${parseInt(d.servings) || 'calcula tú las'} raciones), con valores típicos de tablas de composición de alimentos.
+Devuelve SOLO un objeto JSON: {"kcal": número, "carbs": gramos de hidratos de carbono, "sugars": gramos de azúcares, "fat": gramos de grasas, "satfat": gramos de grasas saturadas, "protein": gramos de proteínas, "fiber": gramos de fibra, "salt": gramos de sal}.
+Receta: ${String(d.title || '').slice(0, 160)}
+Ingredientes:
+${(d.ingredients || []).slice(0, 60).join('\n')}` }] }));
+  if (!out || !Number(out.kcal)) return null;
+  const o = {}; for (const k of ['kcal', 'carbs', 'sugars', 'fat', 'satfat', 'protein', 'fiber', 'salt']) { const n = Number(out[k]); if (Number.isFinite(n) && n >= 0) o[k] = Math.round(n * 10) / 10; }
+  return o;
+}
+app.get('/img/r/:id', async (req, res) => {
+  try {
+    const r = (await q('SELECT img, type FROM recipe_imgs WHERE recipe_id=$1', [req.params.id])).rows[0];
+    if (!r) return res.status(404).end();
+    res.setHeader('Content-Type', r.type || 'image/jpeg'); res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); res.end(r.img);
+  } catch { res.status(500).end(); }
+});
+// Recetas que la gente ha hecho públicas
+api.get('/community', async (req, res, next) => {
+  try {
+    const term = String(req.query.q || '').trim().toLowerCase().slice(0, 60);
+    const rows = (await q(`SELECT r.*, u.username, u.display, u.color FROM recipes r JOIN users u ON u.id=r.user_id
+      WHERE (r.data->>'public')='true' AND u.username IS NOT NULL AND NOT u.blocked AND ($1='' OR lower(r.data->>'title') LIKE '%'||$1||'%' OR lower(r.data::text) LIKE '%'||$1||'%')
+      ORDER BY r.updated DESC LIMIT 200`, [term])).rows;
+    res.json(rows.map(r => ({ ...recipeOut(r), owner: { id: r.user_id, username: r.username, display: r.display, color: r.color } })));
+  } catch (e) { next(e); }
 });
 
 /* Enlaces públicos */
@@ -696,31 +824,11 @@ Título: ${String(title).slice(0, 300)}
 ${String(text).slice(0, 40000)}
 VIDEO>>>` }] })));
 }
-api.get('/_vdbg/k7Q2xw9Lm4', async (req, res) => {
-  try {
-    if (!req.query.url) {
-      const r = await jarFetch('https://www.tiktok.com/discover/' + (req.query.d || 'receta-facil'), {}, { Accept: 'text/html' });
-      const h = await r.text();
-      return res.json({ status: r.status, links: [...new Set([...h.matchAll(/https?:\/\/www\.tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => m[0]))].slice(0, 15), len: h.length });
-    }
-    const v = await videoText(String(req.query.url));
-    res.json({ how: v.how, title: v.title, image: !!v.image, text: v.text.slice(0, 3000) });
-  } catch (e) { res.json({ error: e.message }); }
-});
-async function tiktokSelfTest() {
-  for (const l of ['https://www.tiktok.com/@scout2015/video/6718335390845095173']) {
-    try {
-      const jar = {}; const r = await jarFetch(l, jar, { Accept: 'text/html' }); const h = await r.text();
-      console.log('VDBG page', r.status, h.length, /__UNIVERSAL_DATA_FOR_REHYDRATION__/.test(h), /SIGI_STATE/.test(h), /webapp.video-detail/.test(h), (h.match(/<title>[^<]*/) || [''])[0], Object.keys(jar).join(','));
-      const v = await videoText(l);
-      console.log('VDBG video', JSON.stringify(v.how), 'chars', v.text.length, '|', v.text.slice(0, 300).replace(/\n/g, ' / '));
-    } catch (e) { console.log('VDBG error', e.message); }
-  }
-}
-async function importVideo(url, res) {
+async function importVideo(url, res, note = '') {
   let v;
   try { v = await videoText(url); }
   catch (e) { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer; pega aquí la descripción o lo que dicen en el vídeo.', needText: true }); }
+  if (note) v.text = 'Lo que cuenta quien comparte el vídeo: ' + note + (v.text ? '\n\n' + v.text : '');
   if (v.text && PROVIDER && res.req.user.username) {
     countAi();
     try { const r = await aiFromVideo(v.title, v.text); if (r) return res.json({ recipe: { ...r, image: v.image || '', source: url }, fromVideo: true }); } catch (e) { console.error(e); }
@@ -740,14 +848,15 @@ api.post('/import/video-file', needProfile, express.raw({ type: () => true, limi
     catch (e) { quota = e.status === 429; }
     if (!text && quota) return res.status(502).json({ error: 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' });
     if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir, o no he podido escucharlo. Prueba con otro formato o un vídeo más corto.' });
-    const rec = await aiFromVideo(String(req.query.title || ''), 'Lo que se dice en el vídeo: ' + text);
+    const note = String(req.query.note || '').slice(0, 2000);
+    const rec = await aiFromVideo(String(req.query.title || ''), (note ? 'Lo que cuenta quien sube el vídeo: ' + note + '\n\n' : '') + 'Lo que se dice en el vídeo: ' + text);
     if (!rec) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado una receta.', needText: true, text });
     res.json({ recipe: rec });
   } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido procesar el vídeo. Vuelve a intentarlo.' }); }
 });
 
 api.post('/import', async (req, res) => {
-  if (isVideoUrl(String(req.body.url || '').trim())) return importVideo(String(req.body.url).trim(), res);
+  if (isVideoUrl(String(req.body.url || '').trim())) return importVideo(String(req.body.url).trim(), res, String(req.body.note || '').slice(0, 2000));
   const url = String(req.body.url || '').trim();
   let html;
   try { const r = await safeFetch(url); if (!r.ok) throw new Error('status ' + r.status); html = await r.text(); }
@@ -910,13 +1019,24 @@ api.post('/ai/extract', needProfile, async (req, res) => {
   try { const r = await aiExtract(req.body.text || ''); if (!r) return res.status(422).json({ error: 'No he encontrado una receta en ese texto. Revisa que hayas copiado la página entera.' }); res.json({ recipe: r }); }
   catch (e) { console.error(e); res.status(502).json({ error: 'No he podido leer el texto. Vuelve a intentarlo.' }); }
 });
+/* Alérgenos y diabetes de la persona: la IA los tiene siempre en cuenta */
+function healthCtx(u) {
+  const parts = [];
+  const al = (u && u.allergens) || [];
+  if (al.length) parts.push(`La persona tiene estas alergias o intolerancias: ${al.join(', ')}. Nunca uses esos ingredientes (tampoco ocultos) y propón sustitutos adecuados.`);
+  const dia = u && u.prefs && u.prefs.diabetes;
+  if (dia) parts.push(`La persona tiene diabetes (${({ tipo1: 'tipo 1', tipo2: 'tipo 2', gestacional: 'gestacional', prediabetes: 'prediabetes' })[dia] || dia}). Evita azúcares añadidos y harinas refinadas, usa sustitutos apropiados (edulcorantes aptos, harinas integrales o de almendra, más fibra y proteína) y raciones moderadas de hidratos.`);
+  if (u && u.prefs && u.prefs.diet) parts.push(`Otras indicaciones de la persona: ${String(u.prefs.diet).slice(0, 300)}.`);
+  return parts.join('\n');
+}
 const CHEF = `Eres el asistente de cocina de Entre Fogones, una app de recetas. Ayudas a crear recetas caseras en español de España.
 Responde SIEMPRE con un único objeto JSON con esta forma: {"reply": string, "recipe": ${SCHEMA} o null}.
 - "reply": una o dos frases cercanas que digan qué receta propones o qué has cambiado.
 - Cuando te pidan una receta, devuelve la receta completa en "recipe".
 - Cuando te pidan cambios, devuelve en "recipe" la receta completa ya modificada, no solo lo que cambia.
 - Si te preguntan algo que no es una receta, contesta en "reply" y pon "recipe": null.
-Usa cantidades métricas (g, ml, cucharadas), un ingrediente por elemento con su cantidad delante, pasos claros sin numerar, y en "notes" un consejo breve de cocinero. Puedes marcar con **texto** lo más importante de un paso.`;
+Usa cantidades métricas (g, ml, cucharadas), un ingrediente por elemento con su cantidad delante, pasos claros sin numerar, y en "notes" un consejo breve de cocinero. Puedes marcar con **texto** lo más importante de un paso.
+- La app crea la foto de cada receta con IA. Si te piden una foto, una imagen nueva o cambiar la foto, NUNCA digas que no puedes: pon "newImage": true en el JSON, devuelve la receta completa y di en "reply" que la foto nueva se creará al guardar (puedes describir brevemente cómo será).`;
 api.post('/ai/chat', needProfile, async (req, res) => {
   countAi();
   if (!PROVIDER) return noAi(res);
@@ -924,9 +1044,11 @@ api.post('/ai/chat', needProfile, async (req, res) => {
     .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.content || '').slice(0, 12000) })).filter(m => m.text);
   if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Escribe qué receta quieres.' });
   try {
-    const out = parseJson(await llm({ system: CHEF, messages: msgs, maxTokens: 3500 }));
+    const h = healthCtx(req.user);
+    const out = parseJson(await llm({ system: CHEF + (h ? '\n\nMUY IMPORTANTE, ten siempre en cuenta esto:\n' + h : ''), messages: msgs, maxTokens: 3500 }));
     if (!out) return res.status(502).json({ error: 'No he entendido la respuesta. Vuelve a intentarlo.' });
-    res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe) });
+    const wantImg = !!out.newImage || /\b(foto|imagen|picture|image)\b/i.test(msgs[msgs.length - 1].text) && /\b(pon|ponle|cambia|nueva|otra|genera|crea|haz|añade|mejor)\w*/i.test(msgs[msgs.length - 1].text);
+    res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe), newImage: wantImg });
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
 api.post('/ai/photo', needProfile, async (req, res) => {
@@ -937,7 +1059,7 @@ api.post('/ai/photo', needProfile, async (req, res) => {
   try {
     const r = cleanAi(parseJson(await llm({ messages: [{ role: 'user', image: { media: m[1], data: m[2] }, text: `La imagen es una foto de una receta (de un libro, revista, pantalla o papel escrito a mano). Transcribe la receta completa y devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.` }] })));
+Reglas: los ingredientes y cantidades, exactamente como se leen, sin inventar. La preparación redáctala tú mejor: pasos claros, completos y bien escritos en español de España, en orden, uno por elemento y sin numerar, sin cambiar lo que se hace ni añadir ingredientes. Corrige faltas y abreviaturas. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.` }] })));
     if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida, recta y con buena luz.' });
     res.json({ recipe: r });
   } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido leer la foto. Vuelve a intentarlo.' }); }
@@ -960,6 +1082,7 @@ api.put('/me/email', needProfile, async (req, res, next) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
     if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
+    if (req.user.role === 'superadmin') return res.status(400).json({ error: 'El correo del Superadministrador solo se puede cambiar desde el código.' });
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
     if ((await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
     await q('UPDATE users SET email=$1 WHERE id=$2', [email, req.user.id]);
@@ -987,6 +1110,17 @@ api.put('/me/avatar', needProfile, async (req, res, next) => {
 });
 api.delete('/me/avatar', needProfile, async (req, res, next) => {
   try { await q('UPDATE users SET avatar=NULL WHERE id=$1', [req.user.id]); res.json({ ok: true }); } catch (e) { next(e); }
+});
+api.put('/me/prefs', needProfile, async (req, res, next) => {
+  try {
+    const b = req.body || {}, cur = req.user.prefs || {};
+    const p = { ...cur };
+    if ('fontScale' in b) p.fontScale = Math.max(0.8, Math.min(1.6, Number(b.fontScale) || 1));
+    if ('diabetes' in b) p.diabetes = ['', 'tipo1', 'tipo2', 'gestacional', 'prediabetes'].includes(b.diabetes) ? b.diabetes : '';
+    if ('diet' in b) p.diet = String(b.diet || '').slice(0, 300);
+    await q('UPDATE users SET prefs=$1 WHERE id=$2', [p, req.user.id]);
+    res.json({ ok: true, prefs: p });
+  } catch (e) { next(e); }
 });
 api.put('/me/allergens', needProfile, async (req, res, next) => {
   try {
@@ -1133,8 +1267,8 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join('
 }
 /* Foto generada con IA para no usar fotos de otras personas.
    Con CF_ACCOUNT_ID y CF_API_TOKEN usa Cloudflare Workers AI (gratis con cuenta); si no, Pollinations. */
-async function aiImage(title) {
-  const prompt = `appetizing homemade food photography of ${title}, spanish home cooking, natural window light, rustic wooden table, shallow depth of field, no text, no people`;
+async function aiImage(title, extra = '') {
+  const prompt = `appetizing homemade food photography of ${title}${extra ? ' (' + extra + ')' : ''}, the whole dish centered and fully visible with margin around it, spanish home cooking, natural window light, rustic wooden table, no text, no people`;
   if (CF_ACCOUNT && CF_TOKEN) {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell`, {
       method: 'POST', signal: AbortSignal.timeout(90000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
@@ -1246,7 +1380,9 @@ api.get('/suggestions/:id', async (req, res, next) => {
 /* ---------- Alérgenos: la IA mira si la receta tiene algo que el usuario no puede tomar ---------- */
 api.post('/ai/allergens', needProfile, async (req, res) => {
   if (!PROVIDER) return noAi(res);
-  const allergens = req.user.allergens || [];
+  const allergens = [...(req.user.allergens || [])];
+  const dia = req.user.prefs && req.user.prefs.diabetes;
+  if (dia) allergens.push('Diabetes (azúcares y harinas refinadas)');
   if (!allergens.length) return res.json({ issues: [] });
   const r = req.body.recipe || {};
   const ings = (Array.isArray(r.ingredients) ? r.ingredients : []).map(String).slice(0, 80);
@@ -1254,7 +1390,7 @@ api.post('/ai/allergens', needProfile, async (req, res) => {
   try {
     countAi();
     const out = parseJson(await llm({ maxTokens: 2000, messages: [{ role: 'user', text: `Eres un cocinero experto en alergias e intolerancias alimentarias. La persona tiene estas alergias o intolerancias: ${allergens.join(', ')}.
-Revisa los ingredientes de la receta "${String(r.title || '').slice(0, 160)}" y detecta los que contienen alguna de ellas (también si la contienen de forma oculta, por ejemplo la harina de trigo tiene gluten o la mantequilla tiene lactosa).
+Revisa los ingredientes de la receta "${String(r.title || '').slice(0, 160)}" y detecta los que contienen alguna de ellas (también si la contienen de forma oculta, por ejemplo la harina de trigo tiene gluten o la mantequilla tiene lactosa). Si aparece la diabetes, señala el azúcar, la miel, los siropes, las harinas refinadas y otros ingredientes con mucho azúcar, y propón sustitutos aptos para diabéticos.
 Devuelve SOLO un objeto JSON con esta forma:
 {"issues":[{"index": número del ingrediente empezando en 0, "ingredient": texto del ingrediente, "allergen": cuál de las alergias de la persona, "substitutes": [hasta 3 ingredientes alternativos escritos como línea de ingrediente con su cantidad, que no tengan ninguna de sus alergias], "canRemove": true si la receta sigue funcionando sin él, "note": frase breve}]}
 Si no hay ninguno, devuelve {"issues": []}. No inventes problemas.
@@ -1266,6 +1402,134 @@ ${ings.map((x, i) => i + '. ' + x).join('\n')}` }] }));
   } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido revisar los alérgenos ahora.' }); }
 });
 
+/* ---------- Menú semanal: uno distinto cada semana, con desayuno, comida y cena ---------- */
+function isoWeek(d = new Date()) {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7; t.setUTCDate(t.getUTCDate() + 4 - day);
+  const y = t.getUTCFullYear(), w = Math.ceil(((t - Date.UTC(y, 0, 1)) / 864e5 + 1) / 7);
+  return `${y}-W${String(w).padStart(2, '0')}`;
+}
+const DAYS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+async function makeMenu(u, week) {
+  const mine = (await q("SELECT id, data->>'title' t FROM recipes WHERE user_id=$1 ORDER BY random() LIMIT 60", [u.id])).rows;
+  const sugg = (await q("SELECT id, title t, category FROM suggestions WHERE data IS NOT NULL AND hidden IS NOT TRUE ORDER BY random() LIMIT 120")).rows;
+  const prev = (await q('SELECT data FROM menus WHERE user_id=$1 AND week<>$2 ORDER BY week DESC LIMIT 1', [u.id, week])).rows[0];
+  const before = prev ? prev.data.days.flatMap(d => ['desayuno', 'comida', 'cena'].map(k => d[k] && d[k].name)).filter(Boolean) : [];
+  const h = healthCtx(u);
+  countAi();
+  const out = parseJson(await llm({ maxTokens: 3500, messages: [{ role: 'user', text: `Prepara un menú semanal casero, variado y equilibrado (dieta mediterránea, cocina de España) de lunes a domingo, con desayuno, comida y cena cada día.
+${h ? 'MUY IMPORTANTE: ' + h + '\n' : ''}Usa sobre todo platos de estas listas cuando encajen, indicando su referencia; si no hay uno adecuado, propón un plato sencillo tú (sin referencia). No repitas platos en la semana${before.length ? ' y evita los de la semana pasada: ' + before.slice(0, 21).join(', ') : ''}. Desayunos ligeros, comidas completas y cenas más suaves.
+Recetas de la persona (ref r:id): ${mine.map(r => `r:${r.id}=${r.t}`).join('; ') || 'ninguna'}
+Recetas recomendadas (ref s:id): ${sugg.map(r => `s:${r.id}=${r.t}`).join('; ')}
+Devuelve SOLO un objeto JSON: {"days":[{"desayuno":{"name":string,"ref":string o null},"comida":{"name":string,"ref":string o null},"cena":{"name":string,"ref":string o null}}, ... 7 días]}` }] }));
+  const ok = new Set([...mine.map(r => 'r:' + r.id), ...sugg.map(r => 's:' + r.id)]);
+  const names = Object.fromEntries([...mine.map(r => ['r:' + r.id, r.t]), ...sugg.map(r => ['s:' + r.id, r.t])]);
+  const days = (out && Array.isArray(out.days) ? out.days : []).slice(0, 7).map((d, i) => {
+    const o = { day: DAYS[i] };
+    for (const k of ['desayuno', 'comida', 'cena']) { const m = d && d[k] || {}; const ref = ok.has(m.ref) ? m.ref : null; o[k] = { name: String((ref && names[ref]) || m.name || '').slice(0, 120), ref }; }
+    return o;
+  });
+  if (days.length < 7) throw new Error('menú incompleto');
+  const data = { week, days, created: now() };
+  await q('INSERT INTO menus(user_id,week,data,created) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,week) DO UPDATE SET data=$3, created=$4', [u.id, week, data, now()]);
+  return data;
+}
+api.get('/menu', needProfile, async (req, res, next) => {
+  try {
+    const week = isoWeek();
+    const r = (await q('SELECT data FROM menus WHERE user_id=$1 AND week=$2', [req.user.id, week])).rows[0];
+    if (r) return res.json(r.data);
+    if (!PROVIDER) return noAi(res);
+    res.json(await makeMenu(req.user, week));
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'La IA está ocupada ahora mismo. Prueba en un rato.' : 'No he podido preparar el menú ahora. Vuelve a intentarlo.' }); }
+});
+api.post('/menu/new', needProfile, async (req, res) => {
+  if (!PROVIDER) return noAi(res);
+  try { res.json(await makeMenu(req.user, isoWeek())); }
+  catch (e) { console.error(e); res.status(502).json({ error: 'No he podido preparar otro menú ahora. Vuelve a intentarlo.' }); }
+});
+
+/* ---------- PDF de una receta o de un recetario ---------- */
+async function pdfImage(src) {
+  try {
+    if (!src) return null;
+    let m = String(src).match(/^data:image\/(jpeg|png);base64,(.+)$/); if (m) return Buffer.from(m[2], 'base64');
+    m = String(src).match(/^\/img\/r\/([A-Za-z0-9]+)/); if (m) { const r = (await q('SELECT img FROM recipe_imgs WHERE recipe_id=$1', [m[1]])).rows[0]; return r ? r.img : null; }
+    m = String(src).match(/^\/img\/s\/([A-Za-z0-9]+)/); if (m) { const r = (await q('SELECT img FROM suggestions WHERE id=$1', [m[1]])).rows[0]; return r ? r.img : null; }
+    if (/^https?:\/\//.test(src)) { const r = await safeFetch(src, { headers: { Accept: 'image/jpeg,image/png' } }); if (!r.ok || !/jpe?g|png/.test(r.headers.get('content-type') || '')) return null; const b = Buffer.from(await r.arrayBuffer()); return b.length < 6e6 ? b : null; }
+  } catch { }
+  return null;
+}
+const plain = t => String(t || '').replace(/\*\*(.+?)\*\*/g, '$1').replace(/\*(.+?)\*/g, '$1').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+async function buildPdf(title, recipes, res) {
+  let PDFDocument;
+  try { PDFDocument = require('pdfkit'); } catch { return res.status(503).json({ error: 'La descarga en PDF se está instalando. Prueba en unos minutos.' }); }
+  const doc = new PDFDocument({ size: 'A4', margin: 50, info: { Title: title, Author: 'Entre Fogones' } });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(title).replace(/%20/g, ' ')}.pdf"; filename*=UTF-8''${encodeURIComponent(title)}.pdf`);
+  doc.pipe(res);
+  const ink = '#3B2116', accent = '#B5562B', muted = '#7A5C4C';
+  if (recipes.length > 1) {
+    doc.moveDown(8).font('Times-Bold').fontSize(34).fillColor(ink).text(title, { align: 'center' });
+    doc.moveDown(0.5).font('Helvetica').fontSize(13).fillColor(muted).text(`${recipes.length} recetas · Entre Fogones`, { align: 'center' });
+    doc.addPage().font('Times-Bold').fontSize(22).fillColor(ink).text('Índice').moveDown(0.6);
+    recipes.forEach((r, i) => doc.font('Helvetica').fontSize(12).fillColor(ink).text(`${i + 1}. ${plain(r.title)}`).moveDown(0.2));
+  }
+  for (let i = 0; i < recipes.length; i++) {
+    const r = recipes[i];
+    if (recipes.length > 1 || i > 0) doc.addPage();
+    doc.font('Times-Bold').fontSize(26).fillColor(ink).text(plain(r.title || 'Sin título'));
+    const meta = [r.servings && `${r.servings} ${r.servings === '1' ? 'ración' : 'raciones'}`, r.time, r.difficulty].filter(Boolean).join('  ·  ');
+    if (meta) doc.moveDown(0.2).font('Helvetica').fontSize(11).fillColor(muted).text(meta);
+    doc.moveDown(0.6);
+    const img = await pdfImage(r.image);
+    if (img) { try { const y = doc.y; doc.image(img, { fit: [495, 240], align: 'center' }); if (doc.y < y + 10) doc.y = y + 240; doc.moveDown(0.8); } catch { } }
+    doc.font('Helvetica-Bold').fontSize(14).fillColor(accent).text('Ingredientes').moveDown(0.3);
+    (r.ingredients || []).forEach(x => doc.font('Helvetica').fontSize(11).fillColor(ink).text('•  ' + plain(x), { indent: 6 }).moveDown(0.15));
+    doc.moveDown(0.6).font('Helvetica-Bold').fontSize(14).fillColor(accent).text('Preparación').moveDown(0.3);
+    (r.steps || []).forEach((x, k) => doc.font('Helvetica').fontSize(11).fillColor(ink).text(`${k + 1}.  ${plain(x)}`, { indent: 6, lineGap: 2 }).moveDown(0.3));
+    if (r.notes) doc.moveDown(0.4).font('Helvetica-Oblique').fontSize(11).fillColor(muted).text(plain(r.notes));
+    const n = r.nutrition;
+    if (n && n.kcal) {
+      doc.moveDown(0.6).font('Helvetica-Bold').fontSize(12).fillColor(accent).text('Información nutricional por ración (aprox.)').moveDown(0.2);
+      const rows = [['Energía', `${Math.round(n.kcal)} kcal`], ['Hidratos de carbono', `${n.carbs ?? '–'} g`], ['  de los cuales azúcares', `${n.sugars ?? '–'} g`], ['Grasas', `${n.fat ?? '–'} g`], ['  de las cuales saturadas', `${n.satfat ?? '–'} g`], ['Proteínas', `${n.protein ?? '–'} g`], ['Fibra', `${n.fiber ?? '–'} g`], ['Sal', `${n.salt ?? '–'} g`]];
+      rows.forEach(([a, b]) => { const y = doc.y; doc.font('Helvetica').fontSize(10).fillColor(ink).text(a, 56, y, { width: 260 }); doc.text(b, 320, y, { width: 120, align: 'right' }); doc.moveDown(0.1); });
+      doc.x = 50;
+    }
+  }
+  doc.end();
+}
+api.get('/pdf/recipe/:id', async (req, res, next) => {
+  try {
+    const r = (await q('SELECT * FROM recipes WHERE id=$1', [req.params.id])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Esta receta ya no existe.' });
+    const d = recipeOut(r); await buildPdf(plain(d.title) || 'Receta', [d], res);
+  } catch (e) { next(e); }
+});
+api.get('/pdf/folder/:id', async (req, res, next) => {
+  try {
+    const id = req.params.id;
+    let name, rows;
+    if (id === 'all' || id === 'none') {
+      rows = (await q(`SELECT * FROM recipes WHERE user_id=$1 ${id === 'none' ? 'AND (folder_id IS NULL OR folder_id NOT IN (SELECT id FROM folders WHERE user_id=$1))' : ''}`, [req.user.id])).rows; name = id === 'all' ? 'Todas mis recetas' : 'Sin recetario';
+    } else {
+      const f = (await q('SELECT * FROM folders WHERE id=$1', [id])).rows[0];
+      if (!f) return res.status(404).json({ error: 'Este recetario ya no existe.' });
+      name = f.name; rows = (await q('SELECT * FROM recipes WHERE folder_id=$1 AND user_id=$2', [f.id, f.user_id])).rows;
+    }
+    const list = rows.map(recipeOut).sort((a, b) => String(a.title).localeCompare(String(b.title), 'es'));
+    if (!list.length) return res.status(400).json({ error: 'Este recetario no tiene recetas.' });
+    await buildPdf(name, list, res);
+  } catch (e) { next(e); }
+});
+api.get('/pdf/sugg/:id', async (req, res, next) => {
+  try {
+    const r = (await q('SELECT id,data FROM suggestions WHERE id=$1 AND data IS NOT NULL', [req.params.id])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Esta receta ya no existe.' });
+    await buildPdf(plain(r.data.title) || 'Receta', [{ ...r.data, image: `/img/s/${r.id}` }], res);
+  } catch (e) { next(e); }
+});
+
 /* ---------- Panel de administración ---------- */
 const SUPERADMIN_EMAIL = (process.env.SUPERADMIN_EMAIL || 'ainara14cs@hotmail.com').toLowerCase();
 async function syncRole(userId, email) {
@@ -1275,7 +1539,7 @@ async function syncRole(userId, email) {
 }
 const isAdmin = u => u && (u.role === 'admin' || u.role === 'superadmin') && u.username;
 const needAdmin = (req, res, next) => isAdmin(req.user) ? next() : res.status(403).json({ error: 'No tienes acceso al panel de administración.' });
-const needSuper = (req, res, next) => req.user.role === 'superadmin' ? next() : res.status(403).json({ error: 'Solo la superadministradora puede hacer esto.' });
+const needSuper = (req, res, next) => req.user.role === 'superadmin' ? next() : res.status(403).json({ error: 'Solo el Superadministrador puede hacer esto.' });
 const adm = express.Router();
 adm.use(needAdmin);
 adm.get('/stats', async (req, res, next) => {
@@ -1303,11 +1567,29 @@ adm.get('/stats', async (req, res, next) => {
 adm.get('/users', async (req, res, next) => {
   try {
     const term = String(req.query.q || '').trim().toLowerCase().replace(/^@/, '').slice(0, 60);
-    const rows = (await q(`SELECT u.id,u.username,u.display,u.email,u.color,u.avatar,u.role,u.blocked,u.accepted_at,u.last_seen,
+    const rows = (await q(`SELECT u.id,u.username,u.display,u.email,u.color,u.avatar,u.role,u.blocked,u.blocked_reason,u.delete_suggested,u.accepted_at,u.last_seen,
       (SELECT count(*)::int FROM recipes r WHERE r.user_id=u.id) recetas
       FROM users u WHERE u.username IS NOT NULL AND ($1='' OR u.username LIKE '%'||$1||'%' OR lower(u.display) LIKE '%'||$1||'%' OR lower(u.email) LIKE '%'||$1||'%')
       ORDER BY (u.role='superadmin') DESC, (u.role='admin') DESC, u.accepted_at DESC NULLS LAST LIMIT 200`, [term])).rows;
     res.json(rows.map(x => ({ ...x, accepted_at: Number(x.accepted_at) || null, last_seen: Number(x.last_seen) || null })));
+  } catch (e) { next(e); }
+});
+// Crear una cuenta desde el panel (el correo es opcional)
+adm.post('/users', async (req, res, next) => {
+  try {
+    const username = String(req.body.username || '').trim().toLowerCase().replace(/^@/, '');
+    const display = String(req.body.display || '').trim().slice(0, 40) || username;
+    const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
+    const password = String(req.body.password || '');
+    if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
+    if (email && !emailOk(email)) return res.status(400).json({ error: 'Ese correo no es válido. Puedes dejarlo vacío.' });
+    if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+    if ((await q('SELECT 1 FROM users WHERE username=$1', [username])).rows[0]) return res.status(409).json({ error: `@${username} ya existe.` });
+    if (email && (await q('SELECT 1 FROM users WHERE lower(email)=$1', [email])).rows[0]) return res.status(409).json({ error: 'Ya hay una cuenta con ese correo.' });
+    const id = gid();
+    await q('INSERT INTO users(id,created,username,display,color,pass_hash,email,accepted_at) VALUES($1,$2,$3,$4,$5,$6,$7,$2)', [id, now(), username, display, '#B5562B', hashPass(password), email || null]);
+    await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [gid(), id, 'Mis recetas', '#2F5D46', now()]);
+    res.json({ ok: true, id });
   } catch (e) { next(e); }
 });
 adm.put('/users/:id/role', needSuper, async (req, res, next) => {
@@ -1315,7 +1597,7 @@ adm.put('/users/:id/role', needSuper, async (req, res, next) => {
     const role = req.body.role === 'admin' ? 'admin' : 'user';
     const t = (await q('SELECT role FROM users WHERE id=$1 AND username IS NOT NULL', [req.params.id])).rows[0];
     if (!t) return res.status(404).json({ error: 'Esa cuenta no existe.' });
-    if (t.role === 'superadmin') return res.status(400).json({ error: 'La superadministradora no se puede cambiar.' });
+    if (t.role === 'superadmin') return res.status(400).json({ error: 'El Superadministrador no se puede cambiar.' });
     await q('UPDATE users SET role=$1 WHERE id=$2', [role, req.params.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -1324,26 +1606,63 @@ async function canModerate(actor, targetId) {
   const t = (await q('SELECT role FROM users WHERE id=$1', [targetId])).rows[0];
   if (!t) return 'Esa cuenta no existe.';
   if (targetId === actor.id) return 'No puedes hacerlo con tu propia cuenta.';
-  if (t.role === 'superadmin') return 'La superadministradora no se puede bloquear ni borrar.';
-  if (t.role === 'admin' && actor.role !== 'superadmin') return 'Solo la superadministradora puede hacerlo con otros administradores.';
+  if (t.role === 'superadmin') return 'El Superadministrador no se puede suspender ni borrar.';
+  if (t.role === 'admin' && actor.role !== 'superadmin') return 'Solo el Superadministrador puede hacerlo con otros administradores.';
   return null;
 }
 adm.put('/users/:id/block', async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
     const blocked = !!req.body.blocked;
-    await q('UPDATE users SET blocked=$1 WHERE id=$2', [blocked, req.params.id]);
-    if (blocked) await q('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+    const reason = String(req.body.reason || '').trim().slice(0, 1000);
+    if (blocked && !reason) return res.status(400).json({ error: 'Escribe el motivo de la suspensión. La persona lo verá.' });
+    await q('UPDATE users SET blocked=$1, blocked_reason=$2, blocked_at=$3 WHERE id=$4', [blocked, blocked ? reason : null, blocked ? now() : null, req.params.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
-adm.delete('/users/:id', async (req, res, next) => {
+// Los administradores sugieren borrar una cuenta; solo el Superadministrador la borra
+adm.put('/users/:id/suggest-delete', async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    const on = req.body.on !== false;
+    await q('UPDATE users SET delete_suggested=$1 WHERE id=$2', [on ? { by: req.user.username, reason: String(req.body.reason || '').slice(0, 500), at: now() } : null, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.delete('/users/:id', needSuper, async (req, res, next) => {
+  try {
+    const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    await q('DELETE FROM attachments WHERE owner=$1', [req.params.id]);
     await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);
     await q('DELETE FROM chats WHERE a=$1 OR b=$1', [req.params.id]);
     await q('DELETE FROM users WHERE id=$1', [req.params.id]);
     res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Subida masiva: cada receta ya leída (de enlace, vídeo, foto o texto) se guarda donde diga el administrador
+adm.post('/bulk/save', async (req, res, next) => {
+  try {
+    const d = cleanRecipe(req.body.recipe || {}), dest = req.body.dest || {};
+    if (!d.ingredients.length && !d.steps.length) return res.status(400).json({ error: 'La receta está vacía.' });
+    d.credit = String(req.body.credit || d.credit || '').slice(0, 120);
+    if (dest.type === 'user') {
+      const u = (await q('SELECT id FROM users WHERE username=$1', [String(dest.username || '').toLowerCase().replace(/^@/, '')])).rows[0];
+      if (!u) return res.status(404).json({ error: `No existe @${dest.username}.` });
+      let fid = null; const fname = String(dest.folder || '').trim().slice(0, 40);
+      if (fname) {
+        const f = (await q('SELECT id FROM folders WHERE user_id=$1 AND lower(name)=lower($2)', [u.id, fname])).rows[0];
+        fid = f ? f.id : gid(); if (!f) await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [fid, u.id, fname, '#7A2E2E', now()]);
+      }
+      const id = gid();
+      await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
+      queueRecipeWork(id);
+      return res.json({ ok: true, id });
+    }
+    // por defecto, a Recetas recomendadas (visibles para todo el mundo)
+    const id = gid(), pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
+    await q('INSERT INTO suggestions(id,url,title,position,created,data,rewritten,title_ok,credit) VALUES($1,$2,$3,$4,$5,$6,true,true,$7)', [id, d.source || 'manual:' + id, cleanTitle(d.title), pos, now(), { ...d, title: cleanTitle(d.title), image: '' }, d.credit || null]);
+    processSuggestionArt().catch(() => {});
+    res.json({ ok: true, id });
   } catch (e) { next(e); }
 });
 adm.get('/recipes', async (req, res, next) => {
@@ -1486,5 +1805,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(tiktokSelfTest, 8000); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setInterval(backfillRecipes, 3 * 3600e3); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });

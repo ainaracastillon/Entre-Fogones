@@ -43,6 +43,12 @@ const ICONS = {
   doc:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  calendar:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
+  search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
+  help:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/>',
+  scale:'<path d="M12 4v16M5 20h14M6 8h12M6 8l-3 6a3 3 0 0 0 6 0zM18 8l-3 6a3 3 0 0 0 6 0z"/>',
+  mic:'<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  pdf:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5"/><path d="M9 15h1.5a1.5 1.5 0 0 0 0-3H9v5M14 12v5h1a2 2 0 0 0 2-2v-1a2 2 0 0 0-2-2z"/>',
   clip:'<path d="M20 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7L9.7 17.2a1.7 1.7 0 0 1-2.4-2.4l7.4-7.4"/>',
   smile:'<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5a4.5 4.5 0 0 0 7 0M9 9.5h.01M15 9.5h.01"/>',
   reply:'<path d="M10 8L5 12l5 4"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/>',
@@ -83,13 +89,33 @@ function fmtNum(n){
 }
 /* ===== Negritas y cursivas =====
    Se guardan como **negrita** y *cursiva* (o _cursiva_) y se pintan con <strong>/<em>. */
-function fmt(s){
+function fmt(s, opts={}){
   let h=esc(s);
+  // enlaces escritos como [texto](https://…) o [texto](#r~id)
+  h=h.replace(/\[([^\]\n]{1,200})\]\(((?:https?:\/\/|#[rf]~)[^\s)]{1,600})\)/g,(_,t,u)=>u.startsWith('#')?`<a href="${u}" class="rlink">${t}</a>`:`<a href="${u}" target="_blank" rel="noopener">${t}</a>`);
+  if(opts.link) h=linkRecipes(h, opts.self);
   h=h.replace(/\*\*(?=\S)([\s\S]*?\S)\*\*/g,'<strong>$1</strong>');
   h=h.replace(/__(?=\S)([\s\S]*?\S)__/g,'<strong>$1</strong>');
   h=h.replace(/(^|[^*\w])\*(?=\S)([^*]*?\S)\*(?![*\w])/g,'$1<em>$2</em>');
   h=h.replace(/(^|[^_\w])_(?=\S)([^_]*?\S)_(?![_\w])/g,'$1<em>$2</em>');
   return h;
+}
+/* Si el texto nombra otra receta tuya, se enlaza sola */
+function linkRecipes(h, selfId){
+  const list=(S.recipes||[]).filter(r=>r.id!==selfId && (r.title||'').trim().length>=4).sort((a,b)=>b.title.length-a.title.length).slice(0,300);
+  if(!list.length) return h;
+  const parts=h.split(/(<a\b[^>]*>.*?<\/a>|<[^>]+>)/);
+  const done=new Set();
+  for(let i=0;i<parts.length;i++){
+    if(parts[i].startsWith('<')) continue;
+    for(const r of list){
+      if(done.has(r.id)) continue;
+      const t=esc(r.title.trim()).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+      const re=new RegExp(`(^|[^\\p{L}])(${t})(?![\\p{L}])`,'iu');
+      if(re.test(parts[i])){ parts[i]=parts[i].replace(re,(_,a,b)=>`${a}<a href="#r~${r.id}" class="rlink">${b}</a>`); done.add(r.id); break; }
+    }
+  }
+  return parts.join('');
 }
 /* Convierte HTML pegado (de una web, Word, Google Docs…) en texto con ** y * */
 function htmlToMd(html){
@@ -137,8 +163,24 @@ function wrapSel(ta,mk){
   else { ta.setRangeText(mk+(sel||'texto')+mk,a,b,'select'); }
   ta.focus(); ta.dispatchEvent(new Event('input'));
 }
-const fmtBar = id => `<span class="fmtbar"><button type="button" data-fmt="**" data-for="${id}" aria-label="Negrita" title="Negrita (Ctrl+B)"><b>N</b></button><button type="button" data-fmt="*" data-for="${id}" aria-label="Cursiva" title="Cursiva (Ctrl+I)"><i>C</i></button></span>`;
-document.addEventListener('mousedown',e=>{ const b=e.target.closest('[data-fmt]'); if(!b) return; e.preventDefault(); const ta=document.getElementById(b.dataset.for); if(ta) wrapSel(ta,b.dataset.fmt); });
+const fmtBar = id => `<span class="fmtbar"><button type="button" data-fmt="**" data-for="${id}" aria-label="Negrita" title="Negrita (Ctrl+B)"><b>N</b></button><button type="button" data-fmt="*" data-for="${id}" aria-label="Cursiva" title="Cursiva (Ctrl+I)"><i>C</i></button><button type="button" data-fmt="link" data-for="${id}" aria-label="Enlace" title="Poner un enlace en las palabras seleccionadas">${ico('link')}</button></span>`;
+document.addEventListener('mousedown',e=>{ const b=e.target.closest('[data-fmt]'); if(!b) return; e.preventDefault(); const ta=document.getElementById(b.dataset.for); if(!ta) return; if(b.dataset.fmt==='link') linkSel(ta); else wrapSel(ta,b.dataset.fmt); });
+/* Enlace dentro de las palabras: a una web o a otra receta tuya */
+function linkSel(ta){
+  const a=ta.selectionStart, b=ta.selectionEnd, sel=ta.value.slice(a,b).trim();
+  const host=$('#modal-root .modal'); if(!host) return;
+  const box=document.createElement('div'); box.className='linkpop';
+  box.innerHTML=`<div class="field"><label>Enlace para «${esc(sel||'texto')}»</label><input class="inp" id="lpUrl" placeholder="https://… o busca una receta tuya" autocomplete="off"></div><div class="pick" id="lpRes"></div><div class="row" style="justify-content:flex-end"><button type="button" class="btn sm" id="lpNo">Cancelar</button><button type="button" class="btn sm pri" id="lpOk">Poner enlace</button></div>`;
+  ta.closest('.field').after(box);
+  const inp=$('#lpUrl',box), res=$('#lpRes',box);
+  const put=u=>{ ta.setRangeText(`[${sel||'texto'}](${u})`,a,b,'end'); ta.dispatchEvent(new Event('input')); box.remove(); ta.focus(); };
+  const draw=()=>{ const q=inp.value.trim().toLowerCase(); if(!q||/^https?:/.test(q)){ res.innerHTML=''; return; }
+    res.innerHTML=S.recipes.filter(r=>(r.title||'').toLowerCase().includes(q)).slice(0,6).map(r=>`<button type="button" class="btn sm" data-rid="${esc(r.id)}">${ico('book')}${esc(r.title)}</button>`).join(''); };
+  inp.oninput=draw; res.onclick=e=>{ const x=e.target.closest('[data-rid]'); if(x) put('#r~'+x.dataset.rid); };
+  $('#lpNo',box).onclick=()=>box.remove();
+  $('#lpOk',box).onclick=()=>{ let u=inp.value.trim(); if(!u) return; if(!/^https?:\/\//.test(u)) u='https://'+u; put(u); };
+  setTimeout(()=>inp.focus(),20);
+}
 
 function scaleLine(line,f){
   if(f===1) return line;
@@ -162,6 +204,7 @@ async function loadState(){
   S.folders = st.folders; S.recipes = st.recipes;
   S.reqIn = st.requests.filter(r=>r.to===S.uid); S.reqOut = st.requests.filter(r=>r.from===S.uid);
   S.chats = st.chats;
+  document.documentElement.style.setProperty('--rfs', String(S.me?.prefs?.fontScale||1));
   refresh();
 }
 const store = {
@@ -217,6 +260,8 @@ function renderTop(){
           <div class="um-head"><b>${esc(S.profile.display||'')}</b><small>@${esc(S.profile.username)}${S.me.email?' · '+esc(S.me.email):''}</small></div>
           <button role="menuitem" data-act="go" data-v="account" class="${cur==='account'?'active':''}">${ico('user')}Mi cuenta</button>
           ${isAdminMe()?`<button role="menuitem" data-act="go" data-v="admin" class="${cur==='admin'?'active':''}">${ico('shield')}Panel de administración</button>`:''}
+          <button role="menuitem" data-act="go" data-v="help">${ico('help')}Ayuda y manual de uso</button>
+          <button role="menuitem" data-act="go" data-v="equiv">${ico('scale')}Equivalencias de medidas</button>
           <a role="menuitem" class="um-link" href="/legal/aviso-legal" target="_blank" rel="noopener">${ico('doc')}Textos legales</a>
           <a role="menuitem" class="um-link" href="/legal/contacto" target="_blank" rel="noopener">${ico('mail')}Contacto</a>
           <hr>
@@ -227,6 +272,7 @@ function renderTop(){
     <button class="brand" data-act="go" data-v="library" aria-label="Entre Fogones, ir a la biblioteca">${spoon(38)}<span class="w"><span class="w1">entre</span><span class="w2">fogones</span></span></button>
     <nav class="nav" aria-label="Secciones">
       <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
+      <button data-act="go" data-v="menu" ${cur==='menu'?'aria-current="page"':''}>${ico('calendar')}<span class="nl">Menú</span></button>
       <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
       <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
       ${S.booted?bellHtml():''}${userBox}
@@ -238,19 +284,26 @@ function renderTop(){
 document.addEventListener('click',e=>{ const m=$('#userMenu'); if(m && !m.hidden && (!e.target.closest('.userbox') || e.target.closest('[role=menuitem]'))){ m.hidden=true; $('#userBtn')?.setAttribute('aria-expanded','false'); } });
 document.addEventListener('keydown',e=>{ const m=$('#userMenu'); if(e.key==='Escape' && m && !m.hidden){ m.hidden=true; $('#userBtn')?.focus(); } });
 function render(){
+  if(S.me?.suspended){ renderTop(); $('#main').innerHTML=viewSuspended(); return; }
   document.body.classList.toggle('in-book', S.view==='book');
+  document.documentElement.classList.toggle('in-chat', S.view==='chat');
   if(['account','admin'].includes(S.view) && !S.profile) S.view='library';
   if(S.view==='admin' && !isAdminMe()) S.view='library';
   renderTop();
   const m=$('#main');
   if(S.view!=='famous') S.suggView=null;
-  if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); loadSuggestions(); }
+  if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); loadSuggestions(); bindLibSearch(); }
   else if(S.view==='book'){ renderBook(); }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
   else if(S.view==='account'){ m.innerHTML = viewAccount(); bindAccount(m); }
   else if(S.view==='admin'){ m.innerHTML = viewAdmin(); adminLoad(); }
   else if(S.view==='famous'){ m.innerHTML = viewFamous(); afterFamous(); }
+  else if(S.view==='community'){ m.innerHTML = viewCommunity(); afterCommunity(); }
+  else if(S.view==='menu'){ m.innerHTML = viewMenu(); afterMenu(); }
+  else if(S.view==='help'){ m.innerHTML = viewHelp(); }
+  else if(S.view==='equiv'){ m.innerHTML = viewEquiv(); bindEquiv(); }
+  const top=$('.top'); if(top) document.documentElement.style.setProperty('--toph', top.offsetHeight+'px');
   navTrack();
 }
 let refreshQueued=false;
@@ -259,7 +312,9 @@ function refresh(){
   requestAnimationFrame(()=>{ refreshQueued=false;
     const menuOpen = ($('#userMenu') && !$('#userMenu').hidden) || ($('#bellPanel') && !$('#bellPanel').hidden);
     if(!menuOpen) renderTop();
-    if(S.view==='library'){ const keep=window.scrollY; $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); window.scrollTo(0,keep); }
+    if(S.view==='library'){
+      if(['libQ','libF'].includes(document.activeElement?.id)){ const b=$('#libRes'); if(b) b.innerHTML=libResultsHtml(); }
+      else { const keep=window.scrollY; $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); bindLibSearch(); window.scrollTo(0,keep); } }
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
@@ -368,6 +423,7 @@ function viewLibrary(){
     slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`),
     ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
     none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
+    slot(`<button class="spine community" style="--cloth:#3F5E3A;height:240px" data-act="go" data-v="community" aria-label="Recetas de la comunidad: las que crean otras personas"><span class="st">Recetas de la comunidad</span><span class="sc">${ico('users')}</span></button>`),
     slot(`<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
   ].join('');
   const recent = S.recipes.slice(0,3);
@@ -378,6 +434,11 @@ function viewLibrary(){
       <button class="btn" data-act="openLink" title="Abre una receta o un recetario que alguien te ha compartido con un enlace">${ico('link')}<span class="lbl-long">Abrir enlace compartido</span><span class="lbl-short">Abrir enlace</span></button>
     </div>
   </div>
+  <div class="fam-tools lib-search">
+    <input id="libQ" class="inp" type="search" placeholder="Buscar en tus recetas: nombre o ingrediente" value="${esc(S.libQ||'')}" aria-label="Buscar en tus recetas">
+    <select id="libF" class="inp" aria-label="Recetario"><option value="">Todos los recetarios</option>${S.folders.map(f=>`<option value="${esc(f.id)}" ${S.libF===f.id?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="none" ${S.libF==='none'?'selected':''}>Sin recetario</option></select>
+  </div>
+  <section class="lib-res" id="libRes">${libResultsHtml()}</section>
   <div class="shelf-wrap"><div class="shelves">${books}</div></div>
   <section class="recent">
     <h2>Últimas recetas</h2>
@@ -385,10 +446,30 @@ function viewLibrary(){
       `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina o de un vídeo, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
   </section>
   <section class="recent sugg">
-    <div class="sugg-h"><h2>Recetas famosas</h2><p class="muted">Ábrelas y guarda las que te gusten en tus recetarios.</p></div>
-    <div class="cards" id="suggList">${suggHtml(5)}</div>
-    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="famous">Ver todas las recetas famosas ${ico('next')}</button></div>
+    <div class="sugg-h"><h2>Recetas recomendadas</h2><p class="muted">Cambian cada día. Ábrelas y guarda las que te gusten en tus recetarios.</p></div>
+    <div class="cards" id="suggList">${suggHtml(6)}</div>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="famous">Ver todas las recetas recomendadas ${ico('next')}</button></div>
   </section>`;
+}
+/* Buscador de la biblioteca */
+function libResultsHtml(){
+  const q=(S.libQ||'').trim().toLowerCase(), f=S.libF||'';
+  if(!q && !f) return '';
+  const norm=t=>String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');
+  const nq=norm(q);
+  const list=S.recipes.filter(r=>{
+    if(f==='none' ? (r.folderId && S.folders.some(x=>x.id===r.folderId)) : (f && r.folderId!==f)) return false;
+    if(!nq) return true;
+    return norm(r.title).includes(nq) || (r.ingredients||[]).some(i=>norm(i).includes(nq)) || norm(r.notes).includes(nq);
+  }).sort(byTitle);
+  return `<div class="lr-h"><h2>${list.length} ${list.length===1?'receta':'recetas'}</h2><button class="btn ghost sm" data-act="libClear">${ico('x')}Quitar búsqueda</button></div>
+    ${list.length?`<div class="cards">${list.slice(0,60).map(cardHtml).join('')}</div>`:'<p class="muted" style="margin:0">No tienes recetas con esa búsqueda.</p>'}`;
+}
+let libT=null;
+function bindLibSearch(){
+  const i=$('#libQ'), f=$('#libF'); if(!i) return;
+  i.oninput=()=>{ S.libQ=i.value; clearTimeout(libT); libT=setTimeout(()=>{ const b=$('#libRes'); if(b) b.innerHTML=libResultsHtml(); },150); };
+  f.onchange=()=>{ S.libF=f.value; $('#libRes').innerHTML=libResultsHtml(); };
 }
 function cardHtml(r){
   const f=S.folders.find(f=>f.id===r.folderId);
@@ -397,7 +478,7 @@ function cardHtml(r){
     <span style="min-width:0"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([f?.name, r.time].filter(Boolean).join(' · ')||'Sin recetario')}</span></span>
   </button>`;
 }
-/* Sugerencias de recetas famosas */
+/* Recetas recomendadas */
 function suggHtml(max){
   const list=S.suggView || S.sugg;
   if(!list) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
@@ -410,7 +491,7 @@ function suggHtml(max){
     const h=t=>{ let x=2166136261; for(const c of t){ x^=c.charCodeAt(0); x=Math.imul(x,16777619)>>>0; } return x; };
     const pool=list.filter(s=>!saved.has(s.id));
     shown=pool.map(s=>({s,k:(s.image?0:2**32)+h(day+s.id)})).sort((a,b)=>a.k-b.k).slice(0,max).map(x=>x.s);
-    if(!shown.length) return `<p class="muted" style="margin:0">Ya tienes guardadas todas las recetas famosas. ¡Qué cocinillas!</p>`;
+    if(!shown.length) return `<p class="muted" style="margin:0">Ya tienes guardadas todas las recetas recomendadas. ¡Qué cocinillas!</p>`;
   }
   return shown.map(s=>`<div class="rcard sg">
     <button class="sg-open" data-act="openSugg" data-id="${esc(s.id)}">
@@ -419,7 +500,7 @@ function suggHtml(max){
     ${saved.has(s.id)?`<span class="saved" title="Ya está en tus recetarios">${ico('check')}</span>`:`<button class="btn sm tbtn" data-act="addSugg" data-id="${esc(s.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button>`}
   </div>`).join('');
 }
-function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(S.view==='library'?5:0); }
+function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(S.view==='library'?6:0); }
 let suggLoaded=0;
 async function loadSuggestions(){
   if(S.sugg && Date.now()-suggLoaded<5*60e3){ drawSuggestions(); return; }
@@ -429,9 +510,9 @@ async function loadSuggestions(){
 /* Todas las recetas famosas, con buscador y tipos */
 function viewFamous(){
   const cats=S.suggCats||[];
-  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas famosas</h1></div>
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas recomendadas</h1></div>
     <div class="fam-tools">
-      <input id="famQ" class="inp" type="search" placeholder="Buscar: tarta de queso, croquetas, pollo…" value="${esc(S.famQ||'')}" aria-label="Buscar recetas famosas">
+      <input id="famQ" class="inp" type="search" placeholder="Buscar: tarta de queso, croquetas, pollo…" value="${esc(S.famQ||'')}" aria-label="Buscar recetas recomendadas">
       <select id="famCat" class="inp" aria-label="Tipo de receta"><option value="">Todos los tipos</option>${cats.map(c=>`<option value="${esc(c.category)}" ${S.famCat===c.category?'selected':''}>${esc(c.category)} (${c.n})</option>`).join('')}</select>
     </div>
     <p class="muted" id="famCount" style="margin:0 0 10px;font-size:14px"></p>
@@ -504,13 +585,14 @@ const tbBtn=(act,attrs,icon,label,cls='')=>`<button class="btn sm tbtn ${cls}" d
 function bookTools(){
   const b=S.book, cur=currentRecipe();
   if(b.visiting){
-    let t = cur ? tbBtn('saveCopy','','save','Guardar en mi recetario','pri') : '';
+    let t = cur ? tbBtn('saveCopy','','save','Guardar en mi recetario','pri')+tbBtn('pdfRecipe',` data-id="${esc(cur.suggId?'sg:'+cur.suggId:cur.id)}"`,'pdf','PDF') : '';
     if(b.folder && b.recipes.length) t += tbBtn('saveFolderCopy','','book','Guardar el recetario entero');
     return t;
   }
-  if(cur){ const a=` data-id="${esc(cur.id)}"`; return tbBtn('editRecipe',a,'edit','Editar')+tbBtn('shareRecipe',a,'share','Compartir')+tbBtn('moveRecipe',a,'move','Mover')+tbBtn('delRecipe',a,'trash','Borrar','danger'); }
-  if(b.folder) return tbBtn('shareFolder','','share','Compartir recetario')+tbBtn('editFolder','','edit','Renombrar o color')+tbBtn('delFolder','','trash','Borrar recetario','danger');
-  return '';
+  if(cur){ const a=` data-id="${esc(cur.id)}"`; return tbBtn('shareRecipe',a,'share','Compartir')+tbBtn('pdfRecipe',a,'pdf','PDF')+tbBtn('moveRecipe',a,'move','Mover')+tbBtn('delRecipe',a,'trash','Borrar','danger'); }
+  const pdfF = b.recipes.length ? tbBtn('pdfFolder',` data-id="${esc(b.id)}"`,'pdf','PDF') : '';
+  if(b.folder) return tbBtn('shareFolder','','share','Compartir recetario')+pdfF+tbBtn('editFolder','','edit','Renombrar o color')+tbBtn('delFolder','','trash','Borrar recetario','danger');
+  return pdfF;
 }
 function servSelect(r, cls=''){
   const base=parseInt(r.servings)||0; if(!base) return r.servings?`<span>${esc(r.servings)}</span>`:'';
@@ -534,7 +616,7 @@ function viewBook(){
     <div class="book-stage" id="stage"><div class="book" id="book" style="--cloth:${esc(b.color||'#2F5D46')}"><div class="spread">${pagesHtml}</div></div></div>
     <div class="book-foot">
       <div class="pager"><button class="btn" data-act="prevPage" aria-label="Página anterior" ${S.page<=0?'disabled':''}>${ico('back')}</button><span class="muted">${label}</span><button class="btn" data-act="nextPage" aria-label="Página siguiente" ${S.page+2>=total?'disabled':''}>${ico('next')}</button></div>
-      ${!b.visiting?`<button class="btn pri sm tbtn" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}" aria-label="Añadir receta aquí">${ico('plus')}<span class="lbl">Añadir receta aquí</span></button>`:''}
+      ${b.visiting?'':currentRecipe()?`<button class="btn pri sm tbtn" data-act="editRecipe" data-id="${esc(currentRecipe().id)}" aria-label="Editar receta">${ico('edit')}<span class="lbl">Editar</span></button>`:`<button class="btn pri sm tbtn" data-act="newRecipe" data-folder="${b.folder?esc(b.id):''}" aria-label="Añadir receta aquí">${ico('plus')}<span class="lbl">Añadir receta aquí</span></button>`}
     </div>
     <section class="below" id="below">${belowHtml()}</section>`;
 }
@@ -555,10 +637,20 @@ function belowHtml(){
       <div class="meta">${servSelect(r)}${r.time?`<span>${ico('clock')}${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div></header>
     <div class="rr-cols">
       <section><h3>Ingredientes</h3>${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p class="muted">Sin ingredientes apuntados.</p>'}</section>
-      <section><h3>Preparación</h3>${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${fmt(s)}</span></li>`).join('')}</ol>`:'<p class="muted">Sin pasos apuntados.</p>'}
-        ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}
+      <section><h3>Preparación</h3>${(r.steps||[]).length?`<ol class="steps">${r.steps.map(s=>`<li><span>${fmt(s,{link:!b.visiting,self:r.id})}</span></li>`).join('')}</ol>`:'<p class="muted">Sin pasos apuntados.</p>'}
+        ${r.notes?`<p class="note">${fmt(r.notes,{link:!b.visiting,self:r.id})}</p>`:''}
+        ${r.credit?`<p class="src">Receta de ${esc(r.credit)}</p>`:''}
         ${r.source?`<p class="src">Fuente: <a href="${esc(r.source)}" target="_blank" rel="noopener">${esc(r.source)}</a></p>`:''}${from}</section>
-    </div></article>`;
+    </div>${nutritionHtml(r)}</article>`;
+}
+/* Tabla nutricional por ración (la calcula la IA al guardar la receta) */
+function nutritionHtml(r){
+  const n=r.nutrition;
+  if(!n||!n.kcal) return (!r.visiting && S.recipes.some(x=>x.id===r.id) && S.ai) ? `<section class="nutri"><h3>Información nutricional</h3><p class="muted" style="margin:0">Calculándola… aparecerá en unos segundos.</p></section>` : '';
+  const g=v=>v==null?'—':fmtNum(v)+' g';
+  const rows=[['Energía',`${Math.round(n.kcal)} kcal`,1],['Hidratos de carbono',g(n.carbs),1],['de los cuales azúcares',g(n.sugars),0],['Grasas',g(n.fat),1],['de las cuales saturadas',g(n.satfat),0],['Proteínas',g(n.protein),1],['Fibra',g(n.fiber),1],['Sal',g(n.salt),1]];
+  return `<section class="nutri"><h3>Información nutricional <small class="muted">por ración, aproximada</small></h3>
+    <table class="nutri-t"><tbody>${rows.map(([a,b,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${b}</td></tr>`).join('')}</tbody></table></section>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
@@ -579,7 +671,7 @@ function pageHtml(p,num){
   if(p.k==='rl'){
     return wrap(`<h2>${esc(r.title||'Sin título')}</h2>
       <div class="meta">${servSelect(r,'onpage')}${r.time?`<span>${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div>
-      ${r.image?`<img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.remove();fitPages()">`:''}
+      ${r.image?`<div class="pimgw" style="--pimg:url('${esc(r.image).replace(/'/g,'%27')}')"><img class="pimg" src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onload="fitPages()" onerror="this.parentNode.remove();fitPages()"></div>`:''}
       <h3>Ingredientes</h3>
       ${(r.ingredients||[]).length?`<ul class="ing">${r.ingredients.map(i=>`<li>${fmt(scaleLine(i,f))}</li>`).join('')}</ul>`:'<p style="color:var(--paper-muted)">Sin ingredientes apuntados.</p>'}`);
   }
@@ -654,10 +746,19 @@ function openModal(html,{wide=false,onClose}={}){
   const root=$('#modal-root');
   root.innerHTML=`<div class="scrim" data-scrim><div class="modal ${wide?'wide':''}" role="dialog" aria-modal="true">${html}</div></div>`;
   root._onClose=onClose;
+  document.documentElement.classList.add('modal-open');
   setTimeout(()=>root.querySelector('input:not([readonly]),textarea,select')?.focus(),30);
   return root.querySelector('.modal');
 }
-function closeModal(){ const root=$('#modal-root'); const cb=root._onClose; root.innerHTML=''; root._onClose=null; cb?.(); }
+function closeModal(){ const root=$('#modal-root'); const cb=root._onClose; root.innerHTML=''; root._onClose=null; document.documentElement.classList.remove('modal-open'); cb?.(); }
+function promptBox(title, label, {ok='Aceptar', value='', required=true, hint=''}={}){
+  return new Promise(res=>{
+    const m=openModal(`${mHead(title)}<form id="pbF" style="display:grid;gap:12px"><div class="field"><label for="pbT">${esc(label)}</label><textarea id="pbT" class="inp" rows="4" maxlength="1000">${esc(value)}</textarea>${hint?`<span class="muted" style="font-size:13px">${esc(hint)}</span>`:''}</div>
+      <div id="pbS"></div><div class="row" style="justify-content:flex-end"><button type="button" class="btn" id="pbNo">Cancelar</button><button class="btn pri">${esc(ok)}</button></div></form>`,{onClose:()=>res(null)});
+    $('#pbNo',m).onclick=()=>closeModal();
+    $('#pbF',m).onsubmit=e=>{ e.preventDefault(); const v=$('#pbT',m).value.trim(); if(required&&!v){ $('#pbS',m).innerHTML='<p class="err">Escribe algo para seguir.</p>'; return; } $('#modal-root')._onClose=null; closeModal(); res(v); };
+  });
+}
 document.addEventListener('keydown',e=>{ if(e.key==='Escape' && $('#modal-root').children.length) closeModal(); });
 document.addEventListener('mousedown',e=>{ if(e.target.matches?.('[data-scrim]')) closeModal(); });
 const mHead = t => `<div class="modal-h"><h2>${esc(t)}</h2><button class="x" data-act="closeModal" aria-label="Cerrar">${ico('x')}</button></div>`;
@@ -672,23 +773,66 @@ function folderPicker(title, cb, {allowNone=true}={}){
   const m=openModal(`${mHead(title)}<div class="pick">
     ${S.folders.map(f=>`<button class="btn" data-fid="${esc(f.id)}"><span style="width:14px;height:20px;border-radius:2px;background:${esc(f.color)};display:inline-block"></span>${esc(f.name)}</button>`).join('')}
     ${allowNone?`<button class="btn" data-fid="">Sin recetario</button>`:''}
+    <button class="btn pri" data-newf>${ico('plus')}Nuevo recetario</button>
   </div>`);
   m.querySelectorAll('[data-fid]').forEach(b=>b.onclick=()=>{closeModal();cb(b.dataset.fid||null)});
+  $('[data-newf]',m).onclick=()=>{ closeModal(); folderModal(null,{onCreated:id=>cb(id), simple:true}); };
+}
+/* Desplegable de recetarios con la opción de crear uno nuevo */
+const folderOptions = sel => `${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===sel?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!sel?'selected':''}>Sin recetario</option><option value="__new">＋ Nuevo recetario…</option>`;
+function bindFolderSelect(select, onPick){
+  let last=select.value;
+  select.addEventListener('change',()=>{
+    if(select.value!=='__new'){ last=select.value; onPick?.(last); return; }
+    select.value=last;
+    const name=prompt('Nombre del nuevo recetario'); if(!name||!name.trim()) return;
+    const f={id:gid(), name:name.trim().slice(0,40), color:CLOTHS[S.folders.length%CLOTHS.length][0], created:now()};
+    store.saveFolder(f).then(()=>{ select.innerHTML=folderOptions(f.id); last=f.id; onPick?.(f.id); toast('Recetario creado'); }).catch(err=>toast(err.error||'No se pudo crear'));
+  });
 }
 
 /* ===== Recetario ===== */
-function folderModal(f){
+function folderModal(f,{onCreated,simple}={}){
   const isNew=!f; f=f||{id:gid(),name:'',color:CLOTHS[(S.folders.length)%CLOTHS.length][0],created:now()};
-  let color=f.color;
+  let color=f.color; const pickMine=new Set(), pickSugg=new Set();
+  const bulk = isNew && !simple;
   const m=openModal(`${mHead(isNew?'Nuevo recetario':'Editar recetario')}
     <form id="ff" style="display:grid;gap:16px">
       <div class="field"><label for="fname">Nombre</label><input id="fname" class="inp" required maxlength="40" value="${esc(f.name)}" placeholder="Postres, Cenas rápidas, De la abuela…"></div>
       <div class="field"><label>Color de la tela</label>${colorField('fcolor', color, CLOTHS)}</div>
-      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri">${isNew?'Crear recetario':'Guardar'}</button></div>
-    </form>`);
+      ${bulk?`<div class="field"><label>Añadir recetas que ya tienes (opcional)</label>
+        <div class="tabs" role="tablist"><button type="button" role="tab" data-bt="mine" aria-selected="true">Subidas por ti</button><button type="button" role="tab" data-bt="sugg" aria-selected="false">Recomendadas</button></div>
+        <input id="bq" class="inp" type="search" placeholder="Buscar" aria-label="Buscar recetas">
+        <div class="pick bulk-pick" id="bpick"></div><p class="muted" id="bcount" style="margin:0;font-size:13px"></p></div>`:''}
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="fgo">${isNew?'Crear recetario':'Guardar'}</button></div>
+    </form>`,{wide:bulk});
   initColorField(m,'fcolor',c=>{color=c});
-  $('#ff',m).onsubmit=async e=>{e.preventDefault();const name=$('#fname',m).value.trim();if(!name)return;
-    try{ await store.saveFolder({...f,name,color}); closeModal(); toast(isNew?'Recetario creado':'Recetario guardado'); }catch(err){ toast(err.error||'No se pudo guardar el recetario'); }};
+  let tab='mine';
+  const drawPick=()=>{ if(!bulk) return; const q=($('#bq',m).value||'').trim().toLowerCase();
+    const list = tab==='mine' ? S.recipes.map(r=>({id:r.id,title:r.title,image:r.image,sub:S.folders.find(x=>x.id===r.folderId)?.name||'Sin recetario'})) : (S.sugg||[]).map(x=>({id:x.id,title:x.title,image:x.image,sub:x.category||''}));
+    const set = tab==='mine'?pickMine:pickSugg;
+    const rows=list.filter(r=>(r.title||'').toLowerCase().includes(q));
+    $('#bpick',m).innerHTML=rows.length?rows.map(r=>`<label class="bp-row"><input type="checkbox" data-bid="${esc(r.id)}" ${set.has(r.id)?'checked':''}><span class="thumb sm">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(22,'var(--accent)','var(--accent-soft)')}</span><span class="bp-t">${esc(r.title||'Sin título')}<small>${esc(r.sub)}</small></span></label>`).join('')
+      :`<p class="muted" style="margin:0">${tab==='mine'?'Todavía no tienes recetas.':'No hay recetas recomendadas con esa búsqueda.'}</p>`;
+    const n=pickMine.size+pickSugg.size; $('#bcount',m).textContent=n?`${n} ${n===1?'receta elegida':'recetas elegidas'}`:'';
+  };
+  if(bulk){
+    if(!S.sugg) loadSuggestions().then(drawPick);
+    m.querySelectorAll('[data-bt]').forEach(b=>b.onclick=()=>{ tab=b.dataset.bt; m.querySelectorAll('[data-bt]').forEach(x=>x.setAttribute('aria-selected',String(x===b))); drawPick(); });
+    $('#bq',m).oninput=drawPick;
+    $('#bpick',m).onchange=e=>{ const c=e.target.closest('[data-bid]'); if(!c) return; const set=tab==='mine'?pickMine:pickSugg; c.checked?set.add(c.dataset.bid):set.delete(c.dataset.bid); drawPick(); };
+    drawPick();
+  }
+  $('#ff',m).onsubmit=async e=>{e.preventDefault();const name=$('#fname',m).value.trim();if(!name)return; const b=$('#fgo',m); b.disabled=true;
+    try{
+      await api('PUT','/folders/'+f.id,{name,color,created:f.created});
+      for(const id of pickMine){ const r=S.recipes.find(x=>x.id===id); if(r){ const {id:rid,...body}=r; await api('PUT','/recipes/'+rid,{...body, folderId:f.id}); } }
+      for(const id of pickSugg){ try{ const r=await api('GET','/suggestions/'+id); const {id:_i,suggId,...rest}=r; await api('PUT','/recipes/'+gid(),{...rest, folderId:f.id, fromSugg:id, source:'', created:now()}); }catch{} }
+      await loadState(); closeModal();
+      const n=pickMine.size+pickSugg.size;
+      toast(isNew?(n?`Recetario creado con ${n} ${n===1?'receta':'recetas'}`:'Recetario creado'):'Recetario guardado');
+      onCreated?.(f.id);
+    }catch(err){ b.disabled=false; toast(err.error||'No se pudo guardar el recetario'); }};
 }
 
 /* ===== Nueva receta ===== */
@@ -739,13 +883,14 @@ function newRecipeModal(folderId){
       body.innerHTML=`<div style="display:grid;gap:16px">
         <form id="fv" style="display:grid;gap:12px">
           <div class="field"><label for="vurl">Enlace del vídeo</label><input id="vurl" class="inp" type="url" required placeholder="Enlace de TikTok, Instagram, Facebook o YouTube"></div>
-          <p class="muted" style="margin:0;font-size:14px">Se lee el título, la descripción y, en YouTube, los subtítulos. Si la receta solo se dice en voz, sube el vídeo.</p>
+          <div class="field"><label for="vnote">¿Qué receta es? (opcional)</label><textarea id="vnote" class="inp" rows="2" maxlength="2000" placeholder="Por ejemplo: tarta de queso al horno, para 8; las cantidades se dicen al final"></textarea></div>
+          <p class="muted" style="margin:0;font-size:14px">Se lee la descripción, los subtítulos y, si hace falta, se escucha el vídeo.</p>
           <div id="vpasteWrap" hidden class="field"><label for="vpaste">Texto del vídeo</label><p class="muted" style="margin:0;font-size:14px" id="vpasteMsg"></p><textarea id="vpaste" class="inp" rows="6"></textarea></div>
           <div id="vstatus"></div>
           <div class="row" style="justify-content:flex-end"><button class="btn pri" id="vgo">${ico('play')}Sacar la receta</button></div>
         </form>
         <div style="border-top:1px solid var(--line);padding-top:14px;display:grid;gap:10px">
-          <p style="margin:0"><strong>¿Lo tienes guardado en el móvil?</strong> Súbelo y se escucha lo que dicen para sacar la receta (máximo 25 MB).</p>
+          <p style="margin:0"><strong>¿Lo tienes guardado en el móvil?</strong> Súbelo y se escucha lo que dicen para sacar la receta (máximo 25 MB). Lo que escribas arriba en «¿Qué receta es?» también se usa.</p>
           <div class="row"><label class="btn" for="vfile">${ico('upload')}Subir vídeo</label><input id="vfile" type="file" accept="video/*,audio/*" hidden></div>
           <div id="vfstatus"></div>
         </div>
@@ -760,7 +905,7 @@ function newRecipeModal(folderId){
             return;
           }
           busy(st,'Mirando el vídeo…');
-          const {recipe}=await api('POST','/import',{url});
+          const {recipe}=await api('POST','/import',{url, note:$('#vnote',m).value.trim()});
           closeModal();
           if(S.ai && S.profile) aiChatModal({folderId, seed:{recipe, reply:'He sacado la receta del vídeo. Revísala: si está bien, apruébala; si falta algo, pídemelo.'}});
           else editorModal({...recipe, folderId});
@@ -777,7 +922,7 @@ function newRecipeModal(folderId){
         if(f.size>25*1024*1024){ st.innerHTML=`<p class="err">El vídeo pesa más de 25 MB. Prueba con uno más corto o con el enlace.</p>`; return; }
         busy(st,'Escuchando el vídeo… puede tardar un minuto');
         try{
-          const r=await fetch('/api/import/video-file',{method:'POST',credentials:'same-origin',headers:{'content-type':f.type||'video/mp4'},body:f});
+          const r=await fetch('/api/import/video-file?note='+encodeURIComponent($('#vnote',m).value.trim()),{method:'POST',credentials:'same-origin',headers:{'content-type':f.type||'video/mp4'},body:f});
           const j=await r.json().catch(()=>({})); if(!r.ok) throw {error:j.error||'No he podido procesar el vídeo.'};
           closeModal(); aiChatModal({folderId, seed:{recipe:j.recipe, reply:'He escuchado el vídeo y he sacado la receta. Revísala: apruébala o pídeme cambios.'}});
         }catch(err){ st.innerHTML=`<p class="err">${esc(err.error)}</p>`; }
@@ -830,11 +975,11 @@ function recipePreview(r){
     </div></div>`;
 }
 /* Chat con la IA: pides una receta, la revisas, pides cambios y la apruebas */
-function aiChatModal({folderId, seed}={}){
-  const st={msgs:[], recipe:null, busy:false};
+function aiChatModal({folderId, seed, edit=false, prompt=''}={}){
+  const st={msgs:[], recipe:null, busy:false, newImage:false};
   if(folderId===undefined||folderId==='') folderId = S.book && !S.book.visiting && S.book.folder ? S.book.id : (S.folders[0]?.id||'');
   if(seed){ st.recipe=seed.recipe; st.msgs.push({role:'assistant', text:seed.reply, raw:JSON.stringify({reply:seed.reply, recipe:seed.recipe})}); }
-  const m=openModal(`${mHead(seed?'Receta de la foto':'Receta con '+aiName())}
+  const m=openModal(`${mHead(edit?'Pedir cambios':seed?'Revisa la receta':'Receta con '+aiName())}
     <div class="aichat" id="aichat"></div>
     <div id="aiprev"></div>
     <form id="aiform" class="aiform">
@@ -849,28 +994,29 @@ function aiChatModal({folderId, seed}={}){
       + st.msgs.map(x=>`<div class="aimsg ${x.role}">${fmt(x.text)}</div>`).join('')
       + (st.busy?`<div class="aimsg assistant"><span class="spin"></span> Pensando…</div>`:'');
     log.scrollTop=log.scrollHeight;
-    inp.placeholder = st.recipe ? '¿Quieres cambiar algo? Por ejemplo: sin lactosa, para 6, más picante' : 'Por ejemplo: una lasaña de verduras para 4, fácil';
+    inp.placeholder = st.recipe ? '¿Quieres cambiar algo? Por ejemplo: sin lactosa, para 6, más picante, otra foto' : 'Por ejemplo: una lasaña de verduras para 4, fácil';
     go.innerHTML = `${ico('send')}${st.recipe?'Pedir cambios':'Pedir receta'}`;
     go.disabled = st.busy;
   };
   const drawPrev=()=>{
     const ap=$('#aiapprove',m);
     if(!st.recipe){ prev.innerHTML=''; ap.innerHTML=''; return; }
-    prev.innerHTML = recipePreview(st.recipe);
+    prev.innerHTML = recipePreview(st.newImage?{...st.recipe,image:''}:st.recipe) + (st.newImage||!st.recipe.image?`<p class="muted" style="margin:6px 0 0;font-size:13px">${ico('camera')} La foto ${st.newImage?'nueva ':''}del plato se creará con IA al guardar.</p>`:'');
     ap.innerHTML = `<div class="approve">
       <div class="field"><label for="aifold">Guardar en</label>
-        <select id="aifold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin recetario</option></select></div>
+        <select id="aifold" class="inp">${folderOptions(folderId)}</select></div>
       <div class="approve-btns">
         <button type="button" class="btn" id="aiedit">${ico('edit')}Retocar a mano</button>
         <button type="button" class="btn pri" id="aiok">${ico('save')}Aprobar</button>
       </div>
     </div>`;
-    $('#aifold',m).onchange=e=>{folderId=e.target.value};
-    $('#aiedit',m).onclick=()=>{ const r=st.recipe; closeModal(); editorModal({...r, folderId:$('#aifold',m)?.value||folderId}); };
+    bindFolderSelect($('#aifold',m), v=>{folderId=v});
+    $('#aiedit',m).onclick=()=>{ const r={...st.recipe, ...(st.newImage?{image:''}:{})}; closeModal(); editorModal({...r, folderId:folderId||null}); };
     $('#aiok',m).onclick=async()=>{
       const b=$('#aiok',m); b.disabled=true;
-      const r={...st.recipe, id:gid(), folderId:folderId||null, created:now()};
-      try{ S.pendingFocus=r.id; await store.saveRecipe(r); closeModal(); toast('Receta aprobada y guardada'); openBook(r.folderId||'none', r.id); }
+      const base=st.recipe;
+      const r={...base, ...(st.newImage?{image:''}:{}), id:edit&&base.id?base.id:gid(), folderId:folderId||null, created:edit&&base.created?base.created:now()};
+      try{ S.pendingFocus=r.id; await store.saveRecipe(r); closeModal(); toast(edit?'Cambios guardados':'Receta aprobada y guardada'); openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); }
       catch(err){ b.disabled=false; $('#aierr',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
     };
   };
@@ -880,13 +1026,16 @@ function aiChatModal({folderId, seed}={}){
     st.msgs.push({role:'user', text:t, raw:t}); st.busy=true; drawLog();
     try{
       const out=await api('POST','/ai/chat',{messages:st.msgs.map(x=>({role:x.role, content:x.raw}))});
-      if(out.recipe){ const keep=st.recipe?.image; st.recipe={...out.recipe, ...(keep?{image:keep}:{})}; }
+      if(out.recipe){ const prevR=st.recipe||{}; st.recipe={...prevR, ...out.recipe, image:prevR.image||'', id:prevR.id, created:prevR.created, public:prevR.public, source:prevR.source||out.recipe.source||''}; if(!st.recipe.id) delete st.recipe.id; if(!st.recipe.created) delete st.recipe.created; }
+      if(out.newImage) st.newImage=true;
       st.msgs.push({role:'assistant', text:out.reply||(out.recipe?'Aquí la tienes.':''), raw:JSON.stringify({reply:out.reply, recipe:out.recipe})});
     }catch(err){ st.msgs.pop(); inp.value=t; $('#aierr',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
     st.busy=false; drawLog(); drawPrev();
   };
   $('#aiform',m).onsubmit=e=>{e.preventDefault(); send();};
-  inp.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
+  // Intro hace salto de línea; para enviar, el botón (o Ctrl/Cmd + Intro)
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){ e.preventDefault(); send(); } });
+  if(prompt) inp.value=prompt;
   drawLog(); drawPrev();
 }
 
@@ -961,6 +1110,7 @@ async function toDataUrl(file,max,q,limit){
 const compressImage = file => toDataUrl(file,1000,.78,180000);
 
 /* ===== Editor ===== */
+const servOptions = cur => { const n=parseInt(cur)||0; const max=Math.max(24,n); return `<option value="" ${n?'':'selected'}>—</option>`+Array.from({length:max},(_,i)=>i+1).map(i=>`<option value="${i}" ${i===n?'selected':''}>${i} ${i===1?'ración':'raciones'}</option>`).join(''); };
 function editorModal(d){
   const isNew=!d.id; const r={id:d.id||gid(), title:'', image:'', servings:'', time:'', difficulty:'', ingredients:[], steps:[], notes:'', source:'', folderId:null, created:now(), ...d};
   if(r.folderId===undefined||r.folderId==='') r.folderId = S.book && !S.book.visiting && S.book.folder ? S.book.id : (S.folders[0]?.id||null);
@@ -969,32 +1119,41 @@ function editorModal(d){
   ${d.byClaude?'<p class="muted" style="margin:0;font-size:14px">Receta escrita por Claude. Cambia lo que quieras antes de guardarla.</p>':''}
   <form id="fe" style="display:grid;gap:14px">
     <div class="field"><label for="etitle">Título</label><input id="etitle" class="inp" required maxlength="120" value="${esc(r.title)}"></div>
-    <div class="field"><label>Foto del plato (opcional)</label><div class="imgbox"><span id="eimgPrev">${image?`<img src="${esc(image)}" alt="" referrerpolicy="no-referrer">`:''}</span>
+    <div class="field"><label>Foto del plato</label><div class="imgbox"><span id="eimgPrev">${image?`<img src="${esc(image)}" alt="" referrerpolicy="no-referrer">`:''}</span>
       <label class="btn sm" for="eimg">${ico('camera')}${image?'Cambiar foto':'Añadir foto'}</label><input id="eimg" type="file" accept="image/*" hidden>
-      <button type="button" class="btn sm ghost" id="eimgDel" ${image?'':'hidden'}>Quitar</button></div></div>
+      <button type="button" class="btn sm ghost" id="eimgDel" ${image?'':'hidden'}>Quitar</button></div>
+      <span class="muted" style="font-size:13px">Si no pones ninguna, la IA crea una foto del plato al guardar.</span></div>
     <div class="grid2">
-      <div class="field"><label for="eserv">Raciones</label><input id="eserv" class="inp" inputmode="numeric" value="${esc(r.servings)}" placeholder="4"></div>
+      <div class="field"><label for="eserv">Raciones</label><select id="eserv" class="inp">${servOptions(r.servings)}</select></div>
       <div class="field"><label for="etime">Tiempo</label><input id="etime" class="inp" value="${esc(r.time)}" placeholder="45 min"></div>
       <div class="field"><label for="ediff">Dificultad</label><select id="ediff" class="inp">${['','Fácil','Media','Difícil'].map(x=>`<option ${x===r.difficulty?'selected':''} value="${x}">${x||'—'}</option>`).join('')}</select></div>
-      <div class="field"><label for="efold">Recetario</label><select id="efold" class="inp">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===r.folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!r.folderId?'selected':''}>Sin recetario</option></select></div>
+      <div class="field"><label for="efold">Recetario</label><select id="efold" class="inp">${folderOptions(r.folderId)}</select></div>
     </div>
     <div class="field"><div class="lblrow"><label for="eing">Ingredientes, uno por línea</label>${fmtBar('eing')}</div><textarea id="eing" class="inp" rows="7" placeholder="200 g de harina&#10;2 huevos&#10;1 pizca de sal">${esc((r.ingredients||[]).join('\n'))}</textarea></div>
     <div class="field"><div class="lblrow"><label for="esteps">Preparación, un paso por línea</label>${fmtBar('esteps')}</div><textarea id="esteps" class="inp" rows="7">${esc((r.steps||[]).join('\n'))}</textarea></div>
     <div class="field"><div class="lblrow"><label for="enotes">Notas (salen escritas a mano en el libro)</label>${fmtBar('enotes')}</div><textarea id="enotes" class="inp" rows="2">${esc(r.notes)}</textarea></div>
     <div class="field"><label for="esrc">Enlace de origen (opcional)</label><input id="esrc" class="inp" type="url" value="${esc(r.source)}"></div>
-    <p class="muted" style="margin:0;font-size:13px">Para poner algo en negrita o cursiva, selecciónalo y pulsa N o C. Al pegar texto de una web se conservan.</p>
+    ${S.profile?`<fieldset class="nt-opts"><legend>¿Quién puede verla?</legend>
+      <label class="opt-line"><input type="radio" name="epub" value="0" ${r.public?'':'checked'}> Privada: solo tú y a quien se la mandes</label>
+      <label class="opt-line"><input type="radio" name="epub" value="1" ${r.public?'checked':''}> Pública: sale en «Recetas de la comunidad» para todo el mundo</label></fieldset>`:''}
+    <p class="muted" style="margin:0;font-size:13px">Selecciona palabras y pulsa N (negrita), C (cursiva) o el enlace. Si nombras otra receta tuya, se enlaza sola. También puedes dictar con el micrófono del teclado.</p>
     <div id="estatus"></div>
-    <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar en mi recetario</button></div>
+    <div class="row" style="justify-content:space-between">${S.ai&&S.profile?`<button type="button" class="btn" id="eask">${ico('sparkle')}Pedir cambios a ${esc(aiName())}</button>`:'<span></span>'}<div class="row"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar</button></div></div>
   </form>`,{wide:true});
   ['eing','esteps','enotes'].forEach(id=>enableRichPaste($('#'+id,m)));
   $('#eimg',m).onchange=async e=>{const f=e.target.files[0];if(!f)return;$('#eimgPrev',m).innerHTML='<span class="spin"></span>';
     try{ image=await compressImage(f); $('#eimgPrev',m).innerHTML=`<img src="${image}" alt="">`; $('#eimgDel',m).hidden=false; }catch{ $('#eimgPrev',m).innerHTML=''; toast('No se pudo leer esa imagen'); }};
   $('#eimgDel',m).onclick=()=>{image='';$('#eimgPrev',m).innerHTML='';$('#eimgDel',m).hidden=true};
-  $('#fe',m).onsubmit=async e=>{e.preventDefault();
+  bindFolderSelect($('#efold',m));
+  const collect=()=>{
     const lines=v=>v.split('\n').map(s=>s.replace(/^\s*[-•*]\s*/,'').trim()).filter(Boolean);
     const out={...r, title:$('#etitle',m).value.trim(), image, servings:$('#eserv',m).value.trim(), time:$('#etime',m).value.trim(), difficulty:$('#ediff',m).value,
-      folderId:$('#efold',m).value||null, ingredients:lines($('#eing',m).value), steps:lines($('#esteps',m).value).map(s=>s.replace(/^\d+[.)]\s*/,'')), notes:$('#enotes',m).value.trim(), source:$('#esrc',m).value.trim()};
-    delete out.byClaude;
+      folderId:($('#efold',m).value==='__new'?'':$('#efold',m).value)||null, ingredients:lines($('#eing',m).value), steps:lines($('#esteps',m).value).map(s=>s.replace(/^\d+[.)]\s*/,'')), notes:$('#enotes',m).value.trim(), source:$('#esrc',m).value.trim(),
+      public: m.querySelector('input[name=epub]:checked')?.value==='1'};
+    delete out.byClaude; return out; };
+  const ask=$('#eask',m); if(ask) ask.onclick=()=>{ const cur=collect(); closeModal(); aiChatModal({folderId:cur.folderId||'', edit:!isNew, seed:{recipe:cur, reply:`¿Qué quieres cambiar de «${cur.title||'esta receta'}»? Por ejemplo: para 6 personas, sin lactosa, más fácil o una foto nueva.`}}); };
+  $('#fe',m).onsubmit=async e=>{e.preventDefault();
+    const out=collect();
     const btn=$('#esave',m); btn.disabled=true;
     try{ S.pendingFocus=out.id; await store.saveRecipe(out); closeModal(); toast(isNew?'Receta guardada':'Cambios guardados');
       if(isNew && (S.view!=='book' || S.book.visiting || (S.book.folder && S.book.id!==out.folderId))) openBook(out.folderId||'none', out.id);
@@ -1080,7 +1239,7 @@ async function sendShare(to, kind, item, purpose, text=''){
 
 /* ===== Recetas y carpetas compartidas ===== */
 function parseCode(s){ const m=String(s||'').match(/([rf])~([A-Za-z0-9]{6,40})/); return m?{kind:m[1],id:m[2]}:null; }
-function routeHash(){ const rm=location.hash.match(/^#reset~([a-f0-9]{64})$/); if(rm){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} resetModal(rm[1]); return; } const c=parseCode(location.hash); if(c){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} openShared(c); } }
+function routeHash(){ const pg=location.hash.match(/^#(ayuda|equivalencias|menu)$/); if(pg){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} go({ayuda:'help',equivalencias:'equiv',menu:'menu'}[pg[1]]); return; } const rm=location.hash.match(/^#reset~([a-f0-9]{64})$/); if(rm){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} resetModal(rm[1]); return; } const c=parseCode(location.hash); if(c){ try{history.replaceState(null,'',location.pathname+location.search)}catch{} openShared(c); } }
 async function openShared(c){
   if(c.kind==='r'){ const mine=S.recipes.find(x=>x.id===c.id); if(mine){ openBook(mine.folderId&&S.folders.some(f=>f.id===mine.folderId)?mine.folderId:'none', mine.id); return; } }
   else if(S.folders.some(f=>f.id===c.id)){ openBook(c.id); return; }
@@ -1139,7 +1298,7 @@ function authModal(mode='login'){
         <div class="field"><label for="ruser">Nombre de usuario</label><input id="ruser" class="inp" required maxlength="20" placeholder="ainara_cocina" autocomplete="username">
           <span class="muted" style="font-size:13px">De 3 a 20 letras minúsculas, números o _. Tus amigos te buscan por este nombre.</span></div>
         <div class="field"><label for="rmail">Correo electrónico</label><input id="rmail" class="inp" type="email" required maxlength="254" autocomplete="email">
-          <span class="muted" style="font-size:13px">Solo para recuperar la contraseña si la olvidas. Nadie más lo ve.</span></div>
+          <span class="muted" style="font-size:13px">Te enviaremos un código para comprobar que es tuyo. Sirve también para recuperar la contraseña. Nadie más lo ve.</span></div>
         <div class="field"><label for="rpass">Contraseña</label><input id="rpass" class="inp" type="password" required minlength="6" autocomplete="new-password">
           <span class="muted" style="font-size:13px">Al menos 6 caracteres.</span></div>
         <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
@@ -1151,7 +1310,8 @@ function authModal(mode='login'){
       $('#ruser',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
       initColorField(m,'pcolor',c=>{color=c});
       $('#fr',m).onsubmit=async e=>{e.preventDefault(); $('#rgo',m).disabled=true;
-        try{ await api('POST','/register',{display:$('#rname',m).value.trim(), username:$('#ruser',m).value.trim(), email:$('#rmail',m).value.trim(), password:$('#rpass',m).value, color, accept:$('#racc',m).checked});
+        try{ const r=await api('POST','/register',{display:$('#rname',m).value.trim(), username:$('#ruser',m).value.trim(), email:$('#rmail',m).value.trim(), password:$('#rpass',m).value, color, accept:$('#racc',m).checked});
+          if(r.verify){ verifyModal(r.email); return; }
           await afterAuth('Cuenta creada. Ya puedes añadir amigos'); }
         catch(err){ $('#rgo',m).disabled=false; $('#rstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
       };
@@ -1174,6 +1334,24 @@ function authModal(mode='login'){
   };
   m.querySelectorAll('[data-mode]').forEach(t=>t.onclick=()=>{ m.querySelectorAll('[data-mode]').forEach(x=>x.setAttribute('aria-selected',x===t)); views[t.dataset.mode](); });
   views[mode]();
+}
+/* Código de verificación: la cuenta solo se crea al escribir el código que llega al correo */
+function verifyModal(email){
+  const m=openModal(`${mHead('Comprueba tu correo')}
+    <form id="vf" style="display:grid;gap:14px">
+      <p style="margin:0">Te hemos enviado un código de 6 cifras a <b>${esc(email)}</b>. Escríbelo aquí para crear la cuenta. Mira también en la carpeta de spam.</p>
+      <input id="vcode" class="inp code-inp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" aria-label="Código de verificación" required>
+      <div id="vst"></div>
+      <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="vres">Enviar otro código</button><button class="btn pri" id="vgo">Crear cuenta</button></div>
+      <p class="muted" style="margin:0;font-size:13px">Si cierras esta ventana sin escribir el código, la cuenta no se crea.</p>
+    </form>`);
+  const c=$('#vcode',m);
+  c.oninput=()=>{ c.value=c.value.replace(/\D/g,'').slice(0,6); if(c.value.length===6) $('#vf',m).requestSubmit(); };
+  $('#vres',m).onclick=async()=>{ try{ await api('POST','/register/resend',{email}); $('#vst',m).innerHTML='<p style="margin:0">Te hemos enviado un código nuevo.</p>'; }catch(err){ $('#vst',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
+  $('#vf',m).onsubmit=async e=>{ e.preventDefault(); const b=$('#vgo',m); if(b.disabled) return; b.disabled=true;
+    try{ await api('POST','/register/verify',{email, code:c.value}); await afterAuth('Cuenta creada. Ya puedes añadir amigos'); }
+    catch(err){ b.disabled=false; $('#vst',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; c.select(); }
+  };
 }
 async function afterAuth(msg){ stopChat(); S.view='library'; await loadState(); closeModal(); render(); toast(msg); }
 function resetModal(token){
@@ -1224,6 +1402,22 @@ function viewAccount(){
     </section>
 
     <section class="card">
+      <h2>Diabetes</h2>
+      <p class="muted">Si lo indicas, la IA te propondrá sustitutos apropiados (sin azúcares añadidos, harinas integrales, raciones de hidratos moderadas) en las recetas que añadas, en el chat de recetas y en tu menú semanal.</p>
+      <div class="grid2"><div class="field"><label for="diaType">¿Tienes diabetes?</label><select id="diaType" class="inp">
+        ${[['','No'],['tipo1','Sí, tipo 1'],['tipo2','Sí, tipo 2'],['gestacional','Sí, gestacional'],['prediabetes','Prediabetes']].map(([v,l])=>`<option value="${v}" ${(me.prefs?.diabetes||'')===v?'selected':''}>${l}</option>`).join('')}</select></div></div>
+      <div class="field"><label for="diaNote">Otras indicaciones para la IA (opcional)</label><input id="diaNote" class="inp" maxlength="300" placeholder="Por ejemplo: poca sal, vegetariana, sin picante…" value="${esc(me.prefs?.diet||'')}"></div>
+      <div><button class="btn pri" id="diaSave">Guardar</button></div>
+    </section>
+
+    <section class="card">
+      <h2>Tamaño de la letra de las recetas</h2>
+      <p class="muted">Cambia el tamaño del texto de los ingredientes y la preparación cuando abres una receta.</p>
+      <div class="chips" id="fsChips">${[[0.9,'Pequeña'],[1,'Normal'],[1.15,'Grande'],[1.3,'Muy grande'],[1.5,'Enorme']].map(([v,l])=>`<button type="button" class="chip" data-fs="${v}" aria-pressed="${Math.abs((me.prefs?.fontScale||1)-v)<.01}">${l}</button>`).join('')}</div>
+      <p class="fs-sample" id="fsSample">200 g de harina de trigo · Mezcla la harina con los huevos hasta que quede una masa lisa.</p>
+    </section>
+
+    <section class="card">
       <h2>Correo electrónico</h2>
       <p class="muted">Es con el que puedes entrar y donde te llega el enlace si olvidas la contraseña. Para cambiarlo, confirma tu contraseña.</p>
       <form id="fEmail" class="form-grid"><div class="form-grid">
@@ -1247,7 +1441,15 @@ function viewAccount(){
     </section>
 
     <section class="card">
-      <h2>Ayuda y textos legales</h2>
+      <h2>Ayuda</h2>
+      <ul class="legal-list">
+        <li><a href="#" data-act="go" data-v="help">${ico('help')}Manual de uso</a></li>
+        <li><a href="#" data-act="go" data-v="equiv">${ico('scale')}Tabla de equivalencias de medidas</a></li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>Textos legales</h2>
       <ul class="legal-list">
         <li><a href="/legal/aviso-legal" target="_blank" rel="noopener">${ico('doc')}Aviso legal y términos de uso</a></li>
         <li><a href="/legal/privacidad" target="_blank" rel="noopener">${ico('shield')}Política de privacidad</a></li>
@@ -1256,11 +1458,11 @@ function viewAccount(){
       </ul>
     </section>
 
-    <section class="card danger-zone">
+    ${me.role==='superadmin'?'':`<section class="card danger-zone">
       <h2>Eliminar cuenta</h2>
       <p class="muted">Se borrarán para siempre tu cuenta, tus recetarios, tus recetas, tus amistades y los mensajes que has enviado. No se puede deshacer.</p>
       <button class="btn danger" id="accDel">${ico('trash')}Eliminar mi cuenta</button>
-    </section>
+    </section>`}
 
     <button class="btn ghost logout-line" data-act="logout">${ico('out')}Cerrar sesión</button>
   </div>`;
@@ -1285,7 +1487,10 @@ function bindAccount(root){
     try{ const data=await api('GET','/me/export'); const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
       const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`entre-fogones-mis-datos-${new Date().toISOString().slice(0,10)}.json`; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Datos descargados'); }
     catch(err){ toast(err.error||'No se han podido descargar'); } b.disabled=false; };
-  $('#accDel',root).onclick=()=>deleteAccountModal();
+  const ad=$('#accDel',root); if(ad) ad.onclick=()=>deleteAccountModal();
+  $('#diaSave',root).onclick=()=>ok(()=>api('PUT','/me/prefs',{diabetes:$('#diaType',root).value, diet:$('#diaNote',root).value.trim()}),'Guardado. La IA lo tendrá en cuenta');
+  $('#fsChips',root).onclick=async e=>{ const c=e.target.closest('[data-fs]'); if(!c) return; root.querySelectorAll('[data-fs]').forEach(x=>x.setAttribute('aria-pressed',String(x===c)));
+    document.documentElement.style.setProperty('--rfs', c.dataset.fs); await ok(()=>api('PUT','/me/prefs',{fontScale:+c.dataset.fs}),'Tamaño de letra guardado'); };
 }
 /* Recorta la foto en cuadrado y la reduce a 320 px */
 async function squarePhoto(file){
@@ -1312,14 +1517,14 @@ function deleteAccountModal(){
 }
 
 /* ===== Alérgenos: al añadir una receta, la IA avisa y tú eliges qué hacer ===== */
-const wantsAllergenCheck = () => S.profile && S.ai && (S.me.allergens||[]).length;
+const wantsAllergenCheck = () => S.profile && S.ai && ((S.me.allergens||[]).length || S.me.prefs?.diabetes);
 async function allergenReview(r){
   if(!wantsAllergenCheck() || !(r.ingredients||[]).length) return r;
   let issues=[];
   try{ toast('Revisando tus alérgenos…'); issues=(await api('POST','/ai/allergens',{recipe:{title:r.title, ingredients:r.ingredients}})).issues||[]; }catch{ return r; }
   if(!issues.length) return r;
   return await new Promise(res=>{
-    const m=openModal(`${mHead('Atención a tus alérgenos')}
+    const m=openModal(`${mHead(S.me.prefs?.diabetes&&!(S.me.allergens||[]).length?'Adaptar a tu diabetes':'Atención a tus alérgenos')}
       <p style="margin:0">«${esc(r.title)}» lleva ${issues.length===1?'un ingrediente':'ingredientes'} con ${esc([...new Set(issues.map(i=>i.allergen))].join(', '))}. Elige qué hacer con cada uno:</p>
       <div class="alg-list">${issues.map((it,k)=>`<fieldset class="alg-item"><legend><strong>${fmt(it.ingredient)}</strong> <span class="alg-tag">${esc(it.allergen)}</span></legend>
         ${it.note?`<p class="muted" style="margin:0 0 6px;font-size:14px">${esc(it.note)}</p>`:''}
@@ -1335,7 +1540,7 @@ async function allergenReview(r){
         if(v==='del'){ drop.add(it.index); changes.push(`sin ${it.ingredient.replace(/\*/g,'')}`); }
         else if(v[0]==='s'){ const sub=it.substitutes[+v.slice(1)]; ing[it.index]=sub; changes.push(`${it.ingredient.replace(/\*/g,'')} → ${sub.replace(/\*/g,'')}`); } });
       const out={...r, ingredients:ing.filter((_,i)=>!drop.has(i))};
-      if(changes.length) out.notes=[r.notes, `Adaptada a tus alérgenos: ${changes.join('; ')}.`].filter(Boolean).join('\n');
+      if(changes.length) out.notes=[r.notes, `Adaptada a tus alérgenos y necesidades: ${changes.join('; ')}.`].filter(Boolean).join('\n');
       $('#modal-root')._onClose=null; closeModal(); res(out);
     };
   });
@@ -1377,11 +1582,13 @@ function friendsSide(){
 }
 function drawSearch(){
   const box=$('#fres'); if(!box) return;
+  if(!S.search){ box.innerHTML=`<p class="muted" style="margin:0">Escribe el @usuario o el nombre de quien buscas.</p>`; return; }
   box.innerHTML = S.searchRes.length ? S.searchRes.map(p=>personRow(p.id, friendState(p.id))).join('')
     : `<p class="muted" style="margin:0">${S.search?'Nadie con ese nombre todavía.':'Todavía no hay más personas en Entre Fogones. Pásales el enlace de la app a tus amigos para que se creen su cuenta.'}</p>`;
 }
 let searchT=null;
 async function runSearch(){
+  if(!S.search){ S.searchRes=[]; drawSearch(); return; }
   try{ const res=await api('GET','/users?q='+encodeURIComponent(S.search)); res.forEach(p=>S.profiles[p.id]=S.profiles[p.id]||p); S.searchRes=res; drawSearch(); }catch{}
 }
 function afterFriends(){
@@ -1584,12 +1791,12 @@ function recipePicker(title, cb){
 }
 
 /* ===== Panel de administración ===== */
-const ADM_TABS=[['resumen','chart','Resumen'],['avisos','bell','Avisos'],['usuarios','users','Usuarios'],['recetas','book','Recetas'],['mensajes','mail','Mensajes'],['sugerencias','sparkle','Sugerencias']];
+const ADM_TABS=[['resumen','chart','Resumen'],['avisos','bell','Avisos'],['usuarios','users','Usuarios'],['recetas','book','Recetas'],['mensajes','mail','Mensajes'],['sugerencias','sparkle','Recomendadas']];
 const isSuper = () => S.me?.role==='superadmin';
 function viewAdmin(){
   S.admTab=S.admTab||'resumen';
   return `<div class="admin">
-    <div class="lib-head"><div><p class="eyebrow">${isSuper()?'Superadministradora':'Administración'}</p><h1>Panel de administración</h1></div></div>
+    <div class="lib-head"><div><p class="eyebrow">${isSuper()?'Superadministrador':'Administración'}</p><h1>Panel de administración</h1></div></div>
     <div class="adm-tabs" role="tablist">${ADM_TABS.map(([k,i,t])=>`<button role="tab" data-adm="${k}" aria-selected="${S.admTab===k}">${ico(i)}<span>${t}</span></button>`).join('')}</div>
     <div id="admBody" class="adm-body"><div class="status"><span class="spin"></span>Cargando…</div></div>
   </div>`;
@@ -1602,8 +1809,8 @@ async function adminLoad(){
   box.innerHTML='<div class="status"><span class="spin"></span>Cargando…</div>';
   try{
     if(tab==='resumen') box.innerHTML=admResumen(await api('GET','/admin/stats'));
-    else if(tab==='usuarios'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"></div><div id="admList"></div>`; bindAdmSearch('usuarios'); await admUsers(); }
-    else if(tab==='recetas'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); await admRecipes(); }
+    else if(tab==='usuarios'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"><button class="btn pri" data-act="admNewUser">${ico('plus')}Crear cuenta</button></div><div id="admList"></div>`; bindAdmSearch('usuarios'); await admUsers(); }
+    else if(tab==='recetas'){ box.innerHTML=`${admBulkHtml()}<h2 class="below-h">Recetas de las cuentas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); bindAdmBulk(); await admRecipes(); }
     else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
     else if(tab==='avisos'){ box.innerHTML=admNotices(await api('GET','/admin/notices')); bindAdmNotices(); }
     else if(tab==='sugerencias'){ box.innerHTML=admSugg(await api('GET','/admin/suggestions')); bindAdmSugg(); }
@@ -1626,23 +1833,27 @@ function admResumen(d){
     </div>
     ${d.contacto.nuevos?`<div class="banner">${ico('mail')}<span style="flex:1">Tienes ${d.contacto.nuevos} ${d.contacto.nuevos===1?'mensaje nuevo':'mensajes nuevos'} de contacto.</span><button class="btn sm" data-adm="mensajes">Ver mensajes</button></div>`:''}
     <div class="charts">${bars(d.altas,'Cuentas nuevas por día')}${bars(d.recetasDia,'Recetas nuevas por día')}</div>
-    <p class="muted" style="font-size:13px">${d.usuarios.admins} ${d.usuarios.admins===1?'persona administra':'personas administran'} la app${d.usuarios.bloqueados?` · ${d.usuarios.bloqueados} ${d.usuarios.bloqueados===1?'cuenta bloqueada':'cuentas bloqueadas'}`:''}.</p>`;
+    <p class="muted" style="font-size:13px">${d.usuarios.admins} ${d.usuarios.admins===1?'persona administra':'personas administran'} la app${d.usuarios.bloqueados?` · ${d.usuarios.bloqueados} ${d.usuarios.bloqueados===1?'cuenta suspendida':'cuentas suspendidas'}`:''}.</p>`;
 }
 async function admUsers(){
   const list=await api('GET','/admin/users?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
   if(!list.length){ box.innerHTML='<p class="muted">No hay cuentas con esa búsqueda.</p>'; return; }
-  const roleLbl={superadmin:'Superadministradora',admin:'Administrador',user:'Usuario'};
+  const roleLbl={superadmin:'Superadministrador',admin:'Administrador',user:'Usuario'};
   box.innerHTML=`<div class="adm-rows">${list.map(u=>{
     S.profiles[u.id]=S.profiles[u.id]||{id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
     const me=u.id===S.uid, target=u.role;
     const canMod = !me && target!=='superadmin' && (target!=='admin' || isSuper());
     return `<div class="adm-row ${u.blocked?'blocked':''}">
       ${avatar(u.id)}
-      <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-${target}">${roleLbl[target]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Bloqueada</span>':''}</div>
-        <div class="ar-s">${esc(u.email||'sin correo')} · ${u.recetas} recetas · alta ${fmtDate(u.accepted_at)} · última vez ${fmtAgo(u.last_seen)}</div></div>
+      <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-${target}">${roleLbl[target]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Suspendida</span>':''}${u.delete_suggested?'<span class="role r-blocked">Se sugiere borrar</span>':''}</div>
+        <div class="ar-s">${esc(u.email||'sin correo')} · ${u.recetas} recetas · alta ${fmtDate(u.accepted_at)} · última vez ${fmtAgo(u.last_seen)}</div>
+        ${u.blocked&&u.blocked_reason?`<div class="ar-s">Motivo de la suspensión: ${esc(u.blocked_reason)}</div>`:''}
+        ${u.delete_suggested?`<div class="ar-s">@${esc(u.delete_suggested.by||'')} sugiere borrarla${u.delete_suggested.reason?': '+esc(u.delete_suggested.reason):''}</div>`:''}</div>
       <div class="ar-act">
         ${isSuper() && target!=='superadmin' ? `<button class="btn sm" data-act="admRole" data-id="${esc(u.id)}" data-role="${target==='admin'?'user':'admin'}">${target==='admin'?'Quitar administrador':'Hacer administrador'}</button>`:''}
-        ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Desbloquear':'Bloquear'}</button><button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`:''}
+        ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Quitar suspensión':'Suspender'}</button>
+          ${isSuper()?`<button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`
+            :`<button class="btn sm ${u.delete_suggested?'':'danger'}" data-act="admSuggestDel" data-id="${esc(u.id)}" data-on="${u.delete_suggested?0:1}">${u.delete_suggested?'Retirar sugerencia de borrar':'Sugerir borrar'}</button>`}`:''}
       </div></div>`; }).join('')}</div>`;
 }
 async function admRecipes(){
@@ -1665,7 +1876,7 @@ function admContact(list){
 }
 function admSugg(list){
   const ready=list.filter(s=>s.lista).length;
-  return `<p class="muted" style="margin-top:0">Las recetas que aparecen en «Recetas famosas» en la biblioteca de todo el mundo. ${ready} listas de ${list.length}; las demás se van preparando solas cada media hora.</p>
+  return `<p class="muted" style="margin-top:0">Las recetas que aparecen en «Recetas recomendadas» en la biblioteca de todo el mundo. ${ready} listas de ${list.length}; las demás se van preparando solas cada media hora.</p>
     <form id="admSuggForm" class="inline-form"><div class="field" style="flex:1"><label for="sgUrl">Enlace de la receta</label><input id="sgUrl" class="inp" type="url" required placeholder="https://cookpad.com/es/recetas/…"></div><button class="btn pri">${ico('plus')}Añadir sugerencia</button></form>
     <div class="adm-rows">${list.map(s=>`<div class="adm-row ${s.hidden?'blocked':''}">
       <span class="thumb sm">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
@@ -1674,10 +1885,76 @@ function admSugg(list){
 }
 function bindAdmSugg(){ const f=$('#admSuggForm'); if(!f) return; f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector('button'); b.disabled=true;
   try{ await api('POST','/admin/suggestions',{url:$('#sgUrl').value.trim()}); S.sugg=null; toast('Sugerencia añadida'); adminLoad(); }catch(err){ toast(err.error); b.disabled=false; } }; }
+/* Subida masiva de recetas desde el panel */
+function admBulkHtml(){
+  return `<details class="card bulk" ${S.bulkOpen?'open':''}><summary><h2 style="display:inline">${ico('upload')}Subida masiva</h2></summary>
+    <form id="bkF" style="display:grid;gap:14px;margin-top:12px">
+      <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea></div>
+      <div class="field"><label>Fotos de recetas y vídeos</label><div class="row"><label class="btn" for="bkFiles">${ico('camera')}Elegir archivos</label><input id="bkFiles" type="file" accept="image/*,video/*,audio/*" multiple hidden><span class="muted" id="bkFn" style="font-size:13px"></span></div></div>
+      <div class="field"><label for="bkText">Recetas en texto (separa cada receta con una línea que tenga solo ---)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>
+      <fieldset class="nt-opts"><legend>Dónde salen</legend>
+        <label class="opt-line"><input type="radio" name="bkDest" value="sugg" checked> En «Recetas recomendadas», para todo el mundo</label>
+        <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una persona</label>
+        <div class="grid2" id="bkUser" hidden><div class="field"><label for="bkU">Usuario</label><input id="bkU" class="inp" placeholder="@usuario"></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
+          <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas de la comunidad)</label></div></fieldset>
+      <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
+      <div><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
+      <ol class="bk-log" id="bkLog"></ol>
+    </form></details>`;
+}
+function bindAdmBulk(){
+  const f=$('#bkF'); if(!f) return;
+  f.closest('details').ontoggle=e=>{ S.bulkOpen=e.target.open; };
+  f.querySelectorAll('input[name=bkDest]').forEach(r=>r.onchange=()=>{ $('#bkUser').hidden=f.querySelector('input[name=bkDest]:checked').value!=='user'; });
+  $('#bkFiles').onchange=e=>{ const n=e.target.files.length; $('#bkFn').textContent=n?`${n} ${n===1?'archivo':'archivos'}`:''; };
+  f.onsubmit=async e=>{ e.preventDefault();
+    const urls=$('#bkUrls').value.split('\n').map(x=>x.trim()).filter(x=>/^https?:\/\//.test(x));
+    const files=[...$('#bkFiles').files];
+    const texts=$('#bkText').value.split(/\n\s*---+\s*\n/).map(x=>x.trim()).filter(x=>x.length>20);
+    const jobs=[...urls.map(u=>({k:'url',v:u,l:u})), ...files.map(x=>({k:/^image\//.test(x.type)?'photo':'video',v:x,l:x.name})), ...texts.map((t,i)=>({k:'text',v:t,l:'Texto '+(i+1)+': '+t.split('\n')[0].slice(0,50)}))];
+    if(!jobs.length){ toast('Añade enlaces, archivos o texto'); return; }
+    const dest=f.querySelector('input[name=bkDest]:checked').value==='user'?{type:'user', username:$('#bkU').value.trim(), folder:$('#bkFo').value.trim(), public:$('#bkPub').checked}:{type:'sugg'};
+    if(dest.type==='user' && !dest.username){ toast('Escribe el usuario'); return; }
+    const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML='';
+    let ok=0;
+    for(const j of jobs){
+      const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)}`; log.append(li);
+      try{
+        let recipe;
+        if(j.k==='url') recipe=(await api('POST','/import',{url:j.v})).recipe;
+        else if(j.k==='text') recipe=(await api('POST','/ai/extract',{text:j.v})).recipe;
+        else if(j.k==='photo'){ const big=await toDataUrl(j.v,1600,.85,2600000); recipe=(await api('POST','/ai/photo',{image:big})).recipe; }
+        else { const r=await fetch('/api/import/video-file',{method:'POST',credentials:'same-origin',headers:{'content-type':j.v.type||'video/mp4'},body:j.v}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; recipe=jj.recipe; }
+        await api('POST','/admin/bulk/save',{recipe, dest, credit});
+        ok++; li.innerHTML=`${ico('check')} ${esc(recipe.title||j.l)}`; li.className='ok';
+      }catch(err){ li.innerHTML=`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
+    }
+    b.disabled=false; toast(`${ok} de ${jobs.length} recetas subidas`); S.sugg=null;
+  };
+}
 const admDo = async (fn,msg) => { try{ await fn(); toast(msg); adminLoad(); }catch(err){ toast(err.error||'No se ha podido hacer'); } };
 const ADM_ACT = {
   admRole:el=>admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/role`,{role:el.dataset.role}), el.dataset.role==='admin'?'Ahora es administrador':'Ya no es administrador'),
-  admBlock:el=>admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:el.dataset.b==='1'}), el.dataset.b==='1'?'Cuenta bloqueada':'Cuenta desbloqueada'),
+  admBlock:async el=>{
+    if(el.dataset.b!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:false}),'Suspensión quitada');
+    const reason=await promptBox('Suspender cuenta','Motivo de la suspensión',{ok:'Suspender',hint:'La persona lo verá al entrar, junto con dónde puede reclamar.'});
+    if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:true, reason}),'Cuenta suspendida');
+  },
+  admSuggestDel:async el=>{
+    if(el.dataset.on!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-delete`,{on:false}),'Sugerencia retirada');
+    const reason=await promptBox('Sugerir borrar la cuenta','¿Por qué se debería borrar?',{ok:'Sugerir',hint:'El Superadministrador lo verá y decidirá.'});
+    if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-delete`,{on:true, reason}),'Sugerencia enviada al Superadministrador');
+  },
+  admNewUser:async()=>{
+    const m=openModal(`${mHead('Crear cuenta')}<form id="nuF" style="display:grid;gap:12px">
+      <div class="field"><label for="nuU">Usuario</label><input id="nuU" class="inp" required maxlength="20" placeholder="ej. lourdes"></div>
+      <div class="field"><label for="nuD">Nombre</label><input id="nuD" class="inp" maxlength="40"></div>
+      <div class="field"><label for="nuE">Correo (opcional)</label><input id="nuE" class="inp" type="email" maxlength="254"></div>
+      <div class="field"><label for="nuP">Contraseña</label><input id="nuP" class="inp" type="password" required minlength="6"></div>
+      <div id="nuS"></div><div class="row" style="justify-content:flex-end"><button class="btn pri">${ico('plus')}Crear cuenta</button></div></form>`);
+    $('#nuU',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
+    $('#nuF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('POST','/admin/users',{username:$('#nuU',m).value,display:$('#nuD',m).value,email:$('#nuE',m).value,password:$('#nuP',m).value}); closeModal(); toast('Cuenta creada'); adminLoad(); }catch(err){ $('#nuS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
+  },
   admDelUser:async el=>{ if(await confirmBox(`Se borrará la cuenta @${el.dataset.n} con todas sus recetas y mensajes. No se puede deshacer.`)) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
   admDelRecipe:async el=>{ if(await confirmBox(`Se borrará la receta «${el.dataset.n}» de su recetario.`)) admDo(()=>api('DELETE','/admin/recipes/'+el.dataset.id),'Receta borrada'); },
   admMsg:el=>admDo(()=>api('PUT','/admin/contact/'+el.dataset.id,{status:el.dataset.s}),'Mensaje actualizado'),
@@ -1834,13 +2111,133 @@ Object.assign(ADM_ACT,{
   }
 });
 
+async function downloadPdf(url){
+  toast('Preparando el PDF…');
+  try{ const r=await fetch(url,{credentials:'same-origin'}); if(!r.ok){ const j=await r.json().catch(()=>({})); throw {error:j.error}; }
+    const blob=await r.blob(); const cd=r.headers.get('content-disposition')||''; const m=cd.match(/filename\*=UTF-8''([^;]+)/);
+    const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=m?decodeURIComponent(m[1]):'receta.pdf'; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('PDF descargado'); }
+  catch(err){ toast(err.error||'No se ha podido crear el PDF'); }
+}
+/* ===== Cuenta suspendida ===== */
+function viewSuspended(){
+  const s=S.me.suspended||{};
+  return `<div class="empty suspended" style="margin-top:20px">${ico('lock')}
+    <h2 style="font-size:24px;color:var(--ink);margin:0">Tu cuenta está suspendida</h2>
+    ${s.at?`<p class="muted" style="margin:0">Desde el ${esc(new Date(s.at).toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'}))}</p>`:''}
+    <div class="card" style="text-align:left;max-width:520px;width:100%"><b>Motivo</b><p style="margin:6px 0 0;white-space:pre-wrap">${esc(s.reason||'No se ha indicado un motivo.')}</p></div>
+    <p style="margin:0;max-width:520px">Si crees que es un error o quieres reclamar, escríbenos desde el formulario de contacto contando tu usuario (@${esc(S.profile?.username||'')}). Revisaremos tu caso y te responderemos por correo.</p>
+    <div class="row" style="justify-content:center"><a class="btn pri" href="/legal/contacto">${ico('mail')}Reclamar en Contacto</a><button class="btn" data-act="logout">${ico('out')}Cerrar sesión</button></div>
+  </div>`;
+}
+
+/* ===== Recetas de la comunidad (las que la gente hace públicas) ===== */
+function viewCommunity(){
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas de la comunidad</h1></div>
+    <p class="muted" style="margin:0 0 12px">Recetas que otras personas han creado y han querido compartir con todo el mundo. Ábrelas y guárdate las que te gusten.</p>
+    <div class="fam-tools"><input id="comQ" class="inp" type="search" placeholder="Buscar en las recetas de la comunidad" value="${esc(S.comQ||'')}" aria-label="Buscar"></div>
+    <div class="cards fam-grid" id="comList"><p class="muted">Cargando…</p></div>`;
+}
+let comT=null;
+async function loadCommunity(){
+  const box=$('#comList'); if(!box) return;
+  try{ const list=await api('GET','/community?q='+encodeURIComponent(S.comQ||'')); S.community=list;
+    list.forEach(r=>{ S.profiles[r.owner.id]=S.profiles[r.owner.id]||r.owner; });
+    box.innerHTML=list.length?list.map(r=>`<button class="rcard" data-act="openCommunity" data-id="${esc(r.id)}">
+      <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">de ${esc(r.owner.display||'@'+r.owner.username)}${r.time?' · '+esc(r.time):''}</span></span></button>`).join('')
+      :`<p class="muted" style="margin:0">${S.comQ?'No hay recetas con esa búsqueda.':'Todavía nadie ha compartido recetas públicas. Al crear o editar una receta puedes marcarla como pública.'}</p>`;
+  }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se han podido cargar.')}</p>`; }
+}
+function afterCommunity(){ const i=$('#comQ'); if(i) i.oninput=()=>{ S.comQ=i.value.trim(); clearTimeout(comT); comT=setTimeout(loadCommunity,250); }; loadCommunity(); }
+
+/* ===== Menú semanal ===== */
+function viewMenu(){
+  if(!S.profile) return needProfileView('Menú semanal');
+  return `<div class="lib-head"><div><p class="eyebrow">Esta semana</p><h1>Menú semanal</h1></div>
+    <div class="row nowrap"><button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div></div>
+    <p class="muted" style="margin:-8px 0 16px">Cada semana se prepara solo un menú distinto con desayuno, comida y cena${(S.me.allergens||[]).length||S.me.prefs?.diabetes?', teniendo en cuenta tus alérgenos y necesidades':''}. Toca un plato para ver la receta.</p>
+    <div id="menuBox"><div class="status"><span class="spin"></span>Preparando tu menú…</div></div>`;
+}
+function menuHtml(m){
+  const today=(new Date().getDay()+6)%7;
+  const cell=(x,k)=>{ if(!x||!x.name) return '<span class="muted">—</span>';
+    const [t,id]=String(x.ref||'').split(':');
+    return x.ref?`<button class="mdish" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}">${esc(x.name)}</button>`:`<button class="mdish free" data-act="menuAsk" data-n="${esc(x.name)}" title="Pedir la receta a la IA">${esc(x.name)}</button>`; };
+  return `<div class="menu-grid">${m.days.map((d,i)=>`<section class="mday card ${i===today?'today':''}"><h3>${esc(d.day)}${i===today?' <span class="role r-admin">Hoy</span>':''}</h3>
+    <div class="mrow"><span class="mlbl">Desayuno</span>${cell(d.desayuno)}</div>
+    <div class="mrow"><span class="mlbl">Comida</span>${cell(d.comida)}</div>
+    <div class="mrow"><span class="mlbl">Cena</span>${cell(d.cena)}</div></section>`).join('')}</div>`;
+}
+async function afterMenu(force){
+  const box=$('#menuBox'); if(!box) return;
+  if(force) box.innerHTML='<div class="status"><span class="spin"></span>Preparando otro menú…</div>';
+  try{ S.menu=await api(force?'POST':'GET', force?'/menu/new':'/menu'); box.innerHTML=menuHtml(S.menu); }
+  catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido preparar el menú.')}</p><button class="btn" data-act="menuRetry">Volver a intentarlo</button>`; }
+}
+
+/* ===== Ayuda: manual de uso ===== */
+function viewHelp(){
+  const sec=(t,ic,body)=>`<section class="card help-sec"><h2>${ico(ic)}${t}</h2>${body}</section>`;
+  return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Manual de uso</h1></div></div>
+  <div class="help">
+    ${sec('La biblioteca','book',`<p>Cada recetario es un libro de tu estantería. Ábrelo para ver el índice y pasa las páginas como en un libro de verdad. Debajo del libro tienes la lista de recetas y, cuando abres una, los ingredientes y la preparación en grande.</p><ul><li>Usa el buscador de arriba para encontrar cualquier receta tuya.</li><li>«Todas» reúne todas tus recetas; «Sin recetario», las que aún no has guardado en ninguno.</li><li>Las <b>Recetas recomendadas</b> cambian cada día; las que ya has guardado no vuelven a salir.</li><li>En <b>Recetas de la comunidad</b> están las que otras personas han hecho públicas.</li></ul>`)}
+    ${sec('Añadir recetas','plus',`<p>Pulsa <b>Nueva receta</b> y elige cómo:</p><ul><li><b>Desde un enlace</b>: pega el enlace de una web de cocina.</li><li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo. Puedes escribir qué receta es o algún detalle para ayudar a la IA.</li><li><b>Desde una foto</b>: hazle una foto a una receta de un libro, una revista o un papel; la IA la copia y redacta bien los pasos.</li><li><b>Con IA</b>: pide la receta que quieras y pide cambios hasta que te guste; luego apruébala.</li><li><b>A mano</b>: escríbela tú.</li></ul><p>Todas las recetas tienen foto: si no le pones una, la IA crea una. También se calcula sola su tabla nutricional.</p>`)}
+    ${sec('Dictar en vez de escribir','mic',`<p>Puedes dictar las recetas: toca cualquier casilla de texto, pulsa el <b>micrófono del teclado</b> del móvil y habla. Por ejemplo: «doscientos gramos de harina, tres huevos…». Sirve para escribir la receta a mano, para el chat de la IA, para pedir cambios y para el chat con tus amigos.</p>`)}
+    ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas de la comunidad, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
+    ${sec('Raciones, letra y alérgenos','user',`<ul><li>Cambia las raciones con el desplegable y las cantidades se recalculan.</li><li>En <b>Mi cuenta</b> eliges el tamaño de la letra de las recetas.</li><li>Apunta tus <b>alérgenos</b> y si tienes <b>diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li></ul>`)}
+    ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con desayuno, comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
+    ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li></ul>`)}
+    ${sec('Moverte por la app','next',`<p>Desliza desde el borde izquierdo de la pantalla hacia el centro para volver a la página anterior, y desde el borde derecho para ir a la siguiente. El botón de atrás del móvil también funciona.</p>`)}
+    ${sec('¿Más dudas?','mail',`<p>Escríbenos desde <a href="/legal/contacto">Contacto</a>.</p>`)}
+  </div>`;
+}
+
+/* ===== Equivalencias de medidas ===== */
+const EQUIV=[
+  ['Harina de trigo',8,120],['Azúcar blanco',12,200],['Azúcar glas',8,120],['Azúcar moreno',12,200],['Sal fina',18,300],['Arroz',13,200],['Cacao en polvo',7,100],
+  ['Levadura química',10,null],['Maicena',8,130],['Pan rallado',7,110],['Copos de avena',6,90],['Almendra molida',7,100],['Mantequilla',14,225],['Aceite de oliva',13,215],
+  ['Leche',15,240],['Agua',15,240],['Nata',15,240],['Miel',21,340],['Yogur natural',15,245],['Queso rallado',6,90]
+];
+function viewEquiv(){
+  return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Equivalencias de medidas</h1></div></div>
+  <p class="muted" style="margin:-8px 0 16px">Valores aproximados para cucharadas rasas y tazas de 240 ml. Una cucharada colmada es más o menos el doble de una rasa.</p>
+  <section class="card"><h2>Calculadora</h2>
+    <div class="eq-calc"><input id="eqN" class="inp" type="number" min="0" step="0.25" value="1" aria-label="Cantidad">
+      <select id="eqU" class="inp" aria-label="Medida"><option value="cs">cucharada rasa</option><option value="cc">cucharadita rasa</option><option value="taza">taza</option><option value="g">gramos</option></select>
+      <span>de</span><select id="eqI" class="inp" aria-label="Ingrediente">${EQUIV.map((e,i)=>`<option value="${i}">${esc(e[0].toLowerCase())}</option>`).join('')}</select></div>
+    <p class="eq-out" id="eqOut"></p></section>
+  <section class="card"><h2>Por ingrediente</h2><div class="tbl-wrap"><table class="eq-tbl"><thead><tr><th>Ingrediente</th><th>1 cucharada rasa</th><th>1 cucharadita rasa</th><th>1 taza</th></tr></thead>
+    <tbody>${EQUIV.map(([n,cs,t])=>`<tr><td>${esc(n)}</td><td>${fmtNum(cs)} g</td><td>${fmtNum(Math.round(cs/3*10)/10)} g</td><td>${t?fmtNum(t)+' g':'—'}</td></tr>`).join('')}</tbody></table></div></section>
+  <section class="card"><h2>Volumen</h2><div class="tbl-wrap"><table class="eq-tbl"><tbody>
+    <tr><td>1 cucharada</td><td>15 ml</td></tr><tr><td>1 cucharadita</td><td>5 ml</td></tr><tr><td>1 cucharada de postre</td><td>10 ml</td></tr><tr><td>1 taza</td><td>240 ml</td></tr><tr><td>1 vaso de agua</td><td>200–250 ml</td></tr><tr><td>1 taza de café</td><td>100 ml</td></tr><tr><td>1 chorrito</td><td>10–15 ml</td></tr><tr><td>1 pizca</td><td>menos de 1 g</td></tr><tr><td>1 onza líquida (fl oz)</td><td>30 ml</td></tr><tr><td>1 pinta (EE. UU.)</td><td>473 ml</td></tr></tbody></table></div></section>
+  <section class="card"><h2>Peso y temperatura</h2><div class="tbl-wrap"><table class="eq-tbl"><tbody>
+    <tr><td>1 onza (oz)</td><td>28 g</td></tr><tr><td>1 libra (lb)</td><td>454 g</td></tr><tr><td>1 huevo mediano sin cáscara</td><td>50–55 g</td></tr><tr><td>1 sobre de levadura química</td><td>16 g</td></tr><tr><td>1 diente de ajo</td><td>4–5 g</td></tr><tr><td>1 nuez de mantequilla</td><td>10–15 g</td></tr>
+    <tr><td>Horno suave</td><td>150–160 °C</td></tr><tr><td>Horno medio</td><td>180 °C (350 °F)</td></tr><tr><td>Horno fuerte</td><td>200–220 °C (400–425 °F)</td></tr><tr><td>Horno con ventilador</td><td>unos 20 °C menos</td></tr></tbody></table></div></section>`;
+}
+function bindEquiv(){
+  const n=$('#eqN'), u=$('#eqU'), i=$('#eqI'), o=$('#eqOut'); if(!n) return;
+  const calc=()=>{ const e=EQUIV[+i.value], q=parseFloat(String(n.value).replace(',','.'))||0, cs=e[1], taza=e[2];
+    let g = u.value==='cs'?q*cs : u.value==='cc'?q*cs/3 : u.value==='taza'?(taza?q*taza:null) : q;
+    if(g==null){ o.textContent='No hay equivalencia en tazas para este ingrediente.'; return; }
+    const r=x=>fmtNum(Math.round(x*10)/10);
+    o.innerHTML=`<b>${r(g)} g</b> · ${r(g/cs)} cucharadas · ${r(g/cs*3)} cucharaditas${taza?` · ${r(g/taza)} tazas`:''}`; };
+  [n,u,i].forEach(x=>x.addEventListener('input',calc)); calc();
+}
+
 /* ===== Acciones ===== */
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
   addSugg:el=>addSuggestion(el.dataset.id),
+  menuNew:()=>afterMenu(true), menuRetry:()=>afterMenu(),
+  pdfRecipe:el=>{ const id=el.dataset.id; downloadPdf(id.startsWith('sg:')?'/api/pdf/sugg/'+id.slice(3):'/api/pdf/recipe/'+id); },
+  pdfFolder:el=>downloadPdf('/api/pdf/folder/'+el.dataset.id),
+  menuOpen:el=>{ if(el.dataset.t==='r') ACT.openRecipe(el); else openSuggestion(el.dataset.id); },
+  menuAsk:el=>{ if(!S.ai) return toast('La IA no está disponible ahora'); aiChatModal({prompt:'Dame la receta de '+el.dataset.n}); },
+  openCommunity:el=>{ const r=(S.community||[]).find(x=>x.id===el.dataset.id); if(r) showVisiting({id:'c-'+r.id, name:r.title, color:'#6E4429', owner:r.owner.id, ownerName:r.owner.display||('@'+r.owner.username), visiting:true, recipes:[r]}, 2); },
   openSugg:el=>openSuggestion(el.dataset.id),
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
+  libClear:()=>{ S.libQ=''; S.libF=''; const i=$('#libQ'); if(i) i.value=''; const f=$('#libF'); if(f) f.value=''; $('#libRes').innerHTML=''; },
   go:el=>go(el.dataset.v),
   closeModal:()=>closeModal(),
   register:()=>{ closeModal(); authModal('signup'); },
