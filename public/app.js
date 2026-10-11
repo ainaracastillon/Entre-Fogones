@@ -157,7 +157,7 @@ async function boot(){
   renderTop();
   try{
     const [cfg] = await Promise.all([api('GET','/config'), loadState()]);
-    S.ai = !!cfg.ai; S.aiName = cfg.aiName || 'ChatGPT';
+    S.ai = !!cfg.ai; S.aiName = cfg.aiName || 'la IA';
   }catch(e){
     $('#main').innerHTML = `<div class="splash"><div>${spoon(60)}<p>No se ha podido conectar con el servidor. Recarga la página en unos segundos.</p></div></div>`;
     return;
@@ -497,7 +497,7 @@ function folderModal(f){
 }
 
 /* ===== Nueva receta ===== */
-const aiName = () => S.aiName || 'ChatGPT';
+const aiName = () => S.aiName || 'la IA';
 const noAiHtml = what => `<div class="empty" style="padding:22px">${ico('sparkle')}<p style="margin:0;max-width:440px">${what} usa inteligencia artificial y todavía no está activada en el servidor. Mientras tanto puedes importar desde un enlace o escribir la receta a mano.</p></div>`;
 function newRecipeModal(folderId){
   const m=openModal(`${mHead('Nueva receta')}
@@ -555,7 +555,7 @@ function newRecipeModal(folderId){
       </div>`;
       const go=async file=>{ if(!file) return;
         const st=$('#pstatus',m); busy(st,'Leyendo la receta de la foto…');
-        try{ const big=await toDataUrl(file,1600,.85,3500000); const {recipe}=await api('POST','/ai/photo',{image:big});
+        try{ const big=await toDataUrl(file,1600,.85,2600000); const {recipe}=await api('POST','/ai/photo',{image:big});
           let image=''; if($('#puse',m).checked) image=await compressImage(file);
           closeModal(); aiChatModal({folderId, seed:{recipe:{...recipe, image}, reply:'He leído la receta de la foto. Revísala: si está bien, apruébala; si quieres, pídeme cambios.'}});
         }catch(err){ st.innerHTML=`<p class="err">${esc(err.error||'No se pudo leer la foto.')}</p>`; }

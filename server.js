@@ -12,7 +12,11 @@ const AI_KEY = process.env.ANTHROPIC_API_KEY || '';
 const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const PROVIDER = OPENAI_KEY ? 'openai' : (AI_KEY ? 'claude' : null);
+const GROQ_KEY = process.env.GROQ_API_KEY || '';
+const GROQ_MODEL = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
+const GROQ_FALLBACK = process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-120b';
+const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b';
+const PROVIDER = GROQ_KEY ? 'groq' : OPENAI_KEY ? 'openai' : (AI_KEY ? 'claude' : null);
 const PROD = process.env.NODE_ENV === 'production';
 
 if (!DATABASE_URL) { console.error('Falta DATABASE_URL'); process.exit(1); }
@@ -119,7 +123,7 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', index: 'i
 const api = express.Router();
 api.use(auth);
 
-api.get('/config', (req, res) => res.json({ ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : 'ChatGPT' }));
+api.get('/config', (req, res) => res.json({ ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA' }));
 
 api.get('/state', async (req, res, next) => {
   try {
@@ -381,10 +385,35 @@ api.post('/import', async (req, res) => {
   res.status(422).json({ error: 'No he encontrado la receta en esa página. Pega el texto de la receta y la saco de ahí.', needText: true });
 });
 
-/* ---------- IA (opcional): ChatGPT (OPENAI_API_KEY) o Claude (ANTHROPIC_API_KEY) ---------- */
+/* ---------- IA (opcional): Groq (GROQ_API_KEY, gratis), ChatGPT (OPENAI_API_KEY) o Claude (ANTHROPIC_API_KEY) ---------- */
 const SCHEMA = `{"title":string,"servings":string (solo el número de raciones),"time":string (p. ej. "45 min"),"difficulty":"Fácil"|"Media"|"Difícil"|"","ingredients":[string],"steps":[string],"notes":string}`;
 // messages: [{ role: 'user'|'assistant', text, image?: { media, data } }]
+// API compatible con OpenAI (Groq y OpenAI)
+async function openaiCompat({ url, key, model, system, messages, maxTokens }) {
+  const msgs = system ? [{ role: 'system', content: system }] : [];
+  for (const m of messages) msgs.push({ role: m.role, content: m.image
+    ? [{ type: 'text', text: m.text }, { type: 'image_url', image_url: { url: `data:${m.image.media};base64,${m.image.data}` } }] : m.text });
+  const r = await fetch(url, {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+    body: JSON.stringify({ model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens, temperature: 0.6 })
+  });
+  if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
+  const j = await r.json();
+  return j.choices?.[0]?.message?.content || '';
+}
 async function llm({ system = '', messages, maxTokens = 3000 }) {
+  if (PROVIDER === 'groq') {
+    const url = 'https://api.groq.com/openai/v1/chat/completions';
+    const hasImage = messages.some(m => m.image);
+    const model = hasImage ? GROQ_VISION_MODEL : GROQ_MODEL;
+    try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages, maxTokens }); }
+    catch (e) {
+      if (hasImage || e.status === 429 || !GROQ_FALLBACK || GROQ_FALLBACK === model) throw e;
+      console.error(e.message, '→ probando', GROQ_FALLBACK);
+      return await openaiCompat({ url, key: GROQ_KEY, model: GROQ_FALLBACK, system, messages, maxTokens });
+    }
+  }
   if (PROVIDER === 'openai') {
     const msgs = system ? [{ role: 'system', content: system }] : [];
     for (const m of messages) msgs.push({ role: m.role, content: m.image
@@ -408,7 +437,7 @@ async function llm({ system = '', messages, maxTokens = 3000 }) {
   const j = await r.json();
   return (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
 }
-function parseJson(t) { const m = String(t || '').match(/\{[\s\S]*\}/); if (!m) return null; try { return JSON.parse(m[0]); } catch { return null; } }
+function parseJson(t) { const m = String(t || '').replace(/<think>[\s\S]*?<\/think>/gi, '').match(/\{[\s\S]*\}/); if (!m) return null; try { return JSON.parse(m[0]); } catch { return null; } }
 function cleanAi(r) {
   if (!r || r.error || !r.title) return null;
   return { title: String(r.title), servings: String(r.servings || '').match(/\d+/)?.[0] || String(r.servings || ''), time: String(r.time || ''), difficulty: String(r.difficulty || ''),
@@ -444,7 +473,7 @@ api.post('/ai/chat', async (req, res) => {
     const out = parseJson(await llm({ system: CHEF, messages: msgs, maxTokens: 3500 }));
     if (!out) return res.status(502).json({ error: 'No he entendido la respuesta. Vuelve a intentarlo.' });
     res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe) });
-  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
 api.post('/ai/photo', async (req, res) => {
   if (!PROVIDER) return noAi(res);
@@ -456,7 +485,7 @@ ${SCHEMA}
 Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.` }] })));
     if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida, recta y con buena luz.' });
     res.json({ recipe: r });
-  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido leer la foto. Vuelve a intentarlo.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido leer la foto. Vuelve a intentarlo.' }); }
 });
 
 app.use('/api', api);

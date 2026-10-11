@@ -12,6 +12,8 @@ services:
         value: production
       - key: DATABASE_URL
         sync: false # cadena de conexión de Neon
+      - key: GROQ_API_KEY
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
