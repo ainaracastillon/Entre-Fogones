@@ -13,14 +13,14 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 ## Tecnología
 
 - Node.js 20 + Express
-- PostgreSQL
+- PostgreSQL en [Neon](https://neon.tech) (proyecto `entre-fogones`, región Frankfurt)
 - Frontend en HTML, CSS y JavaScript sin compilación (`public/`)
 
 ## Variables de entorno
 
 | Variable | Obligatoria | Para qué |
 | --- | --- | --- |
-| `DATABASE_URL` | Sí | Conexión a PostgreSQL |
+| `DATABASE_URL` | Sí | Conexión a PostgreSQL (la de Neon, con `?sslmode=require`) |
 | `ANTHROPIC_API_KEY` | No | Activa «Con Claude», «Desde foto» y la lectura de recetas en webs sin datos estructurados |
 | `ANTHROPIC_MODEL` | No | Modelo de Claude (por defecto `claude-sonnet-5-5`) |
 | `NODE_ENV` | No | `production` para cookies seguras |
@@ -36,4 +36,4 @@ Abre http://localhost:3000. Las tablas se crean solas al arrancar.
 
 ## Desplegar en Render
 
-El archivo `render.yaml` crea la base de datos y el servicio web en Frankfurt. Para activar las funciones con Claude, añade `ANTHROPIC_API_KEY` en las variables de entorno del servicio.
+El archivo `render.yaml` crea el servicio web en Frankfurt. La base de datos vive en Neon: pon su cadena de conexión en `DATABASE_URL`. Para activar las funciones con Claude, añade `ANTHROPIC_API_KEY` en las variables de entorno del servicio.
