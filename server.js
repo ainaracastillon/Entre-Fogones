@@ -85,6 +85,9 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS notices(
     id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
     popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
+  CREATE TABLE IF NOT EXISTS attachments(
+    id TEXT PRIMARY KEY, chat_id TEXT NOT NULL, owner TEXT NOT NULL, name TEXT, type TEXT, size INT, data BYTEA NOT NULL, created BIGINT NOT NULL);
+  CREATE INDEX IF NOT EXISTS attachments_chat ON attachments(chat_id);
   CREATE TABLE IF NOT EXISTS notice_reads(
     notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     read_at BIGINT NOT NULL, dismissed BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(notice_id,user_id));
@@ -265,6 +268,7 @@ api.delete('/me', needProfile, async (req, res, next) => {
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
     const me = req.user.id;
     await q('DELETE FROM messages WHERE from_id=$1', [me]);
+    await q('DELETE FROM attachments WHERE owner=$1', [me]);
     await q('DELETE FROM chats WHERE a=$1 OR b=$1', [me]);
     await q('DELETE FROM users WHERE id=$1', [me]);
     res.setHeader('Set-Cookie', 'ef=; Path=/; Max-Age=0');
@@ -428,23 +432,69 @@ api.get('/chats/:other/messages', needProfile, async (req, res, next) => {
     res.json(r.rows.map(m => ({ ...m.data, id: m.id, from: m.from_id, ts: Number(m.ts) })));
   } catch (e) { next(e); }
 });
+// Guarda un mensaje (texto, receta, recetario, foto o archivo), con la respuesta a otro mensaje si la hay
+async function saveMessage(me, other, b, file) {
+  const key = pairKey(me, other), ts = now();
+  const type = ['text', 'ask', 'recipe', 'folder', 'image', 'file'].includes(b.type) ? b.type : 'text';
+  const data = { type, text: String(b.text || '').slice(0, 4000) };
+  if (b.purpose) data.purpose = String(b.purpose).slice(0, 20);
+  if (b.ref && idOk(b.ref.id)) data.ref = { owner: String(b.ref.owner || '').slice(0, 60), id: b.ref.id };
+  if (b.snap) data.snap = { title: String(b.snap.title || '').slice(0, 160), time: String(b.snap.time || '').slice(0, 40), servings: String(b.snap.servings || '').slice(0, 20), n: Number(b.snap.n) || 0 };
+  if (file) data.file = file;
+  const replyId = b.reply && (b.reply.id || b.reply);
+  if (replyId && typeof replyId === 'string') {
+    const o = (await q('SELECT from_id, data FROM messages WHERE id=$1 AND chat_id=$2', [replyId, key])).rows[0];
+    if (o) data.reply = { id: replyId, from: o.from_id, type: o.data.type, text: msgPreview(o.data).slice(0, 160) };
+  }
+  if (type === 'text' && !data.text) { const e = new Error('Mensaje vacío'); e.status = 400; throw e; }
+  const id = gid();
+  await q('INSERT INTO messages(id,chat_id,from_id,ts,data) VALUES($1,$2,$3,$4,$5)', [id, key, me, ts, data]);
+  const [a, bb] = [me, other].sort();
+  await q(`INSERT INTO chats(id,a,b,ts,last) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET ts=$4, last=$5`, [key, a, bb, ts, { from: me, text: msgPreview(data).slice(0, 140) }]);
+  return { id, ts };
+}
+function msgPreview(d) {
+  if (d.type === 'recipe') return `Receta: ${d.snap?.title || ''}`;
+  if (d.type === 'folder') return `Recetario: ${d.snap?.title || ''}`;
+  if (d.type === 'image') return '📷 Foto' + (d.text ? ': ' + d.text : '');
+  if (d.type === 'file') return '📎 ' + (d.file?.name || 'Archivo') + (d.text ? ': ' + d.text : '');
+  return (d.type === 'ask' ? 'Pide una receta: ' : '') + (d.text || '');
+}
+async function chatTarget(other) { const o = (await q('SELECT username FROM users WHERE id=$1', [other])).rows[0]; return o && o.username; }
 api.post('/chats/:other/messages', needProfile, async (req, res, next) => {
   try {
+    if (!(await chatTarget(req.params.other))) return res.status(404).json({ error: 'Esa persona no existe.' });
+    const b = { ...(req.body || {}) }; if (['image', 'file'].includes(b.type)) b.type = 'text';
+    res.json({ ok: true, ...(await saveMessage(req.user.id, req.params.other, b)) });
+  } catch (e) { if (e.status === 400) return res.status(400).json({ error: e.message }); next(e); }
+});
+// Fotos y archivos en el chat (hasta 10 MB)
+api.post('/chats/:other/attach', needProfile, express.raw({ type: () => true, limit: '10mb' }), async (req, res, next) => {
+  try {
     const me = req.user.id, other = req.params.other;
-    const o = (await q('SELECT username FROM users WHERE id=$1', [other])).rows[0];
-    if (!o || !o.username) return res.status(404).json({ error: 'Esa persona no existe.' });
-    const key = pairKey(me, other), ts = now(), b = req.body || {};
-    const type = ['text', 'ask', 'recipe', 'folder'].includes(b.type) ? b.type : 'text';
-    const data = { type, text: String(b.text || '').slice(0, 2000) };
-    if (b.purpose) data.purpose = String(b.purpose).slice(0, 20);
-    if (b.ref && idOk(b.ref.id)) data.ref = { owner: String(b.ref.owner || '').slice(0, 60), id: b.ref.id };
-    if (b.snap) data.snap = { title: String(b.snap.title || '').slice(0, 160), time: String(b.snap.time || '').slice(0, 40), servings: String(b.snap.servings || '').slice(0, 20), n: Number(b.snap.n) || 0 };
-    if (type === 'text' && !data.text) return res.status(400).json({ error: 'Mensaje vacío' });
-    await q('INSERT INTO messages(id,chat_id,from_id,ts,data) VALUES($1,$2,$3,$4,$5)', [gid(), key, me, ts, data]);
-    const preview = type === 'recipe' ? `Receta: ${data.snap?.title || ''}` : type === 'folder' ? `Recetario: ${data.snap?.title || ''}` : (type === 'ask' ? 'Pide una receta: ' : '') + data.text;
-    const [a, bb] = [me, other].sort();
-    await q(`INSERT INTO chats(id,a,b,ts,last) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET ts=$4, last=$5`, [key, a, bb, ts, { from: me, text: preview.slice(0, 140) }]);
-    res.json({ ok: true, ts });
+    if (!(await chatTarget(other))) return res.status(404).json({ error: 'Esa persona no existe.' });
+    if (!req.body || !req.body.length) return res.status(400).json({ error: 'No ha llegado el archivo. Vuelve a intentarlo.' });
+    const type = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].slice(0, 100);
+    const name = String(req.query.name || 'archivo').replace(/[\\/\r\n"]/g, '_').slice(0, 140) || 'archivo';
+    const id = gid();
+    await q('INSERT INTO attachments(id,chat_id,owner,name,type,size,data,created) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, pairKey(me, other), me, name, type, req.body.length, req.body, now()]);
+    const isImg = /^image\/(jpeg|png|gif|webp)$/.test(type);
+    const out = await saveMessage(me, other, { type: isImg ? 'image' : 'file', text: req.query.text || '', reply: req.query.reply ? { id: String(req.query.reply) } : null },
+      { id, name, type, size: req.body.length, ...(isImg && req.query.w ? { w: Number(req.query.w) || 0, h: Number(req.query.h) || 0 } : {}) });
+    res.json({ ok: true, ...out });
+  } catch (e) { if (e.type === 'entity.too.large') return res.status(413).json({ error: 'El archivo es demasiado grande. El máximo son 10 MB.' }); next(e); }
+});
+api.get('/files/:id', needProfile, async (req, res, next) => {
+  try {
+    const f = (await q('SELECT chat_id,name,type,data FROM attachments WHERE id=$1', [req.params.id])).rows[0];
+    if (!f || !f.chat_id.split('+').includes(req.user.id)) return res.status(404).json({ error: 'Ese archivo ya no existe.' });
+    const safeType = /^image\/(jpeg|png|gif|webp)$/.test(f.type) || f.type === 'application/pdf' ? f.type : 'application/octet-stream';
+    res.setHeader('Content-Type', safeType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    const inline = !req.query.dl && /^image\//.test(safeType);
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(f.name).replace(/%20/g, ' ')}"; filename*=UTF-8''${encodeURIComponent(f.name)}`);
+    res.end(f.data);
   } catch (e) { next(e); }
 });
 api.post('/chats/:other/read', needProfile, async (req, res, next) => {
@@ -661,9 +711,10 @@ async function tiktokSelfTest() {
   try {
     for (const d of ['receta-facil', 'recetas-faciles', 'receta-tarta-de-queso']) {
       const r = await jarFetch('https://www.tiktok.com/discover/' + d, {}, { Accept: 'text/html' });
-      const h = await r.text();
-      const links = [...new Set([...h.matchAll(/https?:\/\/www\.tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => m[0]))];
-      console.log('VDBG discover', d, r.status, h.length, links.slice(0, 3).join(' '));
+      const h = (await r.text()).replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
+      let links = [...new Set([...h.matchAll(/tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => 'https://www.' + m[0]))];
+      if (!links.length) links = [...new Set([...h.matchAll(/"(?:id|itemId|videoId)":"(\d{18,20})"/g)].map(m => 'https://www.tiktok.com/@/video/' + m[1]))];
+      const ix = h.indexOf('/video/'); console.log('VDBG discover', d, r.status, h.length, links.slice(0, 3).join(' '), ix > 0 ? h.slice(ix - 80, ix + 40) : 'sin /video/', (h.match(/<title>[^<]*/) || [''])[0]);
       for (const l of links.slice(0, 2)) {
         const v = await videoText(l).catch(e => ({ how: ['ERR ' + e.message], text: '' }));
         console.log('VDBG video', l, JSON.stringify(v.how), 'chars', v.text.length, '|', v.text.slice(0, 400).replace(/\n/g, ' / '));
@@ -1386,7 +1437,8 @@ adm.get('/notices', async (req, res, next) => {
       (SELECT count(*)::int FROM notice_reads r WHERE r.notice_id=n.id AND r.dismissed) quitadas,
       CASE WHEN n.audience='admins' THEN (SELECT count(*)::int FROM users WHERE role IN ('admin','superadmin') AND username IS NOT NULL)
            WHEN n.audience='users' THEN jsonb_array_length(n.recipients) END destinatarios,
-      CASE WHEN n.audience='users' THEN (SELECT string_agg('@'||username, ', ') FROM users WHERE n.recipients ? id) END para
+      CASE WHEN n.audience='users' THEN (SELECT string_agg('@'||username, ', ') FROM users WHERE n.recipients ? id) END para,
+      CASE WHEN n.audience='users' THEN (SELECT json_agg(json_build_object('id',id,'username',username,'display',display)) FROM users WHERE n.recipients ? id) END para_list
       FROM notices n LEFT JOIN users u ON u.id=n.created_by ORDER BY n.created DESC LIMIT 100`)).rows;
     res.json(rows.map(n => ({ ...n, created: Number(n.created) })));
   } catch (e) { next(e); }
@@ -1402,7 +1454,18 @@ adm.post('/notices', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 adm.put('/notices/:id', async (req, res, next) => {
-  try { await q('UPDATE notices SET active=$1 WHERE id=$2', [!!req.body.active, req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+  try {
+    if (!req.body.edit) { await q('UPDATE notices SET active=$1 WHERE id=$2', [!!req.body.active, req.params.id]); return res.json({ ok: true }); }
+    // editar el aviso entero, incluidos los destinatarios
+    const n = cleanNotice(req.body);
+    if (!n.title && !n.body && !n.image) return res.status(400).json({ error: 'Pon al menos un título, un texto o una imagen.' });
+    if (n.audience === 'users' && !n.recipients.length) return res.status(400).json({ error: 'Elige al menos una persona.' });
+    const r = await q(`UPDATE notices SET title=$1, body=$2, image=$3, url=$4, url_label=$5, dismissible=$6, popup=$7, audience=$8, recipients=$9 WHERE id=$10`,
+      [n.title || null, n.body || null, n.image, n.url, n.url_label, n.dismissible, n.popup, n.audience, JSON.stringify(n.audience === 'users' ? n.recipients : []), req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: 'Ese aviso ya no existe.' });
+    if (req.body.renew) await q('DELETE FROM notice_reads WHERE notice_id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 adm.delete('/notices/:id', async (req, res, next) => {
   try { await q('DELETE FROM notices WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }

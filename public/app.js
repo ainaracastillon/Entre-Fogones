@@ -1603,8 +1603,9 @@ function showNoticePopup(n){
 
 /* Avisos en el panel de administración */
 function admNotices(list){
+  S.admNtList=list;
   return `<form id="ntForm" class="card nt-form">
-      <h2>Nuevo aviso</h2>
+      <h2 id="ntH">Nuevo aviso</h2>
       <div class="field"><label for="ntTitle">Título</label><input id="ntTitle" class="inp" maxlength="120" placeholder="Por ejemplo: ¡Ya podéis subir recetas desde vídeos!"></div>
       <div class="field"><div class="lblrow"><label for="ntBody">Texto</label>${fmtBar('ntBody')}</div><textarea id="ntBody" class="inp" rows="4" maxlength="2000"></textarea></div>
       <div class="field"><label>Imagen (opcional)</label><div class="imgbox"><span id="ntPrev"></span><label class="btn sm" for="ntFile">${ico('camera')}Subir imagen</label><input id="ntFile" type="file" accept="image/*" hidden><button type="button" class="btn sm ghost" id="ntImgDel" hidden>Quitar</button></div>
@@ -1626,8 +1627,9 @@ function admNotices(list){
       <fieldset class="nt-opts"><legend>En la campanita</legend>
         <label class="opt-line"><input type="radio" name="ntKeep" value="dis" checked> Cada persona lo puede quitar</label>
         <label class="opt-line"><input type="radio" name="ntKeep" value="fix"> Se queda fijo, no se puede quitar</label></fieldset>
+      <label class="opt-line" id="ntRenewL" hidden><input type="checkbox" id="ntRenew"> Volver a mostrarlo como nuevo a todo el mundo (se borra quién lo ha leído)</label>
       <div id="ntSt"></div>
-      <div><button class="btn pri" id="ntGo">${ico('send')}Enviar aviso</button></div>
+      <div class="row"><button class="btn pri" id="ntGo">${ico('send')}Enviar aviso</button><button type="button" class="btn ghost" id="ntCancel" hidden>Cancelar</button></div>
     </form>
     <h2 class="below-h">Avisos enviados</h2>
     ${list.length?`<div class="adm-rows">${list.map(n=>`<div class="adm-row ${n.active?'':'blocked'}">
@@ -1635,7 +1637,7 @@ function admNotices(list){
       <div class="ar-main"><div class="ar-t">${esc(n.title||(n.body||'').slice(0,60)||'Aviso con imagen')} ${n.popup?'<span class="role r-admin">Ventana al abrir</span>':''} ${n.dismissible?'':'<span class="role">Fijo</span>'} ${n.active?'':'<span class="role">Desactivado</span>'}</div>
         <div class="ar-s">Para ${n.audience==='admins'?'administradores':n.audience==='users'?esc(n.para||'personas concretas'):'todo el mundo'} · ${fmtDate(n.created)}${n.autor?' · por @'+esc(n.autor):''}</div>
         <div class="ar-s">Leído por <b>${n.leidas_cuentas}</b>${n.destinatarios!=null?` de ${n.destinatarios}`:''} ${(n.destinatarios??n.leidas_cuentas)===1?'cuenta':'cuentas'}${n.audience==='all'?` y ${n.leidas_anonimas} sin cuenta`:''}${n.quitadas?` · ${n.quitadas} lo quitaron`:''}</div></div>
-      <div class="ar-act"><button class="btn sm" data-act="admNtReads" data-id="${esc(n.id)}">${ico('users')}Quién lo ha leído</button>
+      <div class="ar-act"><button class="btn sm" data-act="admNtEdit" data-id="${esc(n.id)}">${ico('edit')}Editar</button><button class="btn sm" data-act="admNtReads" data-id="${esc(n.id)}">${ico('users')}Quién lo ha leído</button>
         <button class="btn sm" data-act="admNtToggle" data-id="${esc(n.id)}" data-a="${n.active?0:1}">${n.active?'Desactivar':'Activar'}</button>
         <button class="btn sm danger" data-act="admNtDel" data-id="${esc(n.id)}">Borrar</button></div></div>`).join('')}</div>`:'<p class="muted">Todavía no has enviado avisos.</p>'}`;
 }
@@ -1651,16 +1653,34 @@ function bindAdmNotices(){
   enableRichPaste($('#ntBody'));
   $('#ntFile').onchange=async e=>{ const file=e.target.files[0]; if(!file) return; try{ image=await toDataUrl(file,1200,.82,290000); $('#ntPrev').innerHTML=`<img src="${image}" alt="">`; $('#ntImgDel').hidden=false; $('#ntImgUrl').value=''; }catch{ toast('No se ha podido leer esa imagen'); } };
   $('#ntImgDel').onclick=()=>{ image=''; $('#ntPrev').innerHTML=''; $('#ntImgDel').hidden=true; };
+  let editId=null;
+  const setRadio=(name,val)=>{ const r=f.querySelector(`input[name=${name}][value="${val}"]`); if(r) r.checked=true; };
+  // Editar un aviso ya enviado: se cargan todos sus datos en el formulario
+  f._load=n=>{
+    editId=n.id; $('#ntH').textContent='Editar aviso';
+    $('#ntTitle').value=n.title||''; $('#ntBody').value=n.body||''; $('#ntUrl').value=n.url||''; $('#ntUrlLbl').value=n.url_label||'';
+    image=''; $('#ntImgUrl').value=''; $('#ntPrev').innerHTML=''; $('#ntImgDel').hidden=true;
+    if(n.image){ if(/^data:/.test(n.image)){ image=n.image; $('#ntPrev').innerHTML=`<img src="${esc(n.image)}" alt="">`; $('#ntImgDel').hidden=false; } else $('#ntImgUrl').value=n.image; }
+    setRadio('ntWho',n.audience||'all'); setRadio('ntWhere',n.popup?'popup':'bell'); setRadio('ntKeep',n.dismissible?'dis':'fix');
+    sel.clear(); (n.para_list||[]).forEach(u=>{ sel.set(u.id,u); S.profiles[u.id]=S.profiles[u.id]||u; }); drawSel();
+    $('#ntPeople').hidden=n.audience!=='users'; if(!$('#ntPeople').hidden) searchP();
+    $('#ntGo').innerHTML=`${ico('save')}Guardar cambios`; $('#ntCancel').hidden=false; $('#ntRenewL').hidden=false; $('#ntRenew').checked=false; $('#ntSt').innerHTML='';
+    f.scrollIntoView({behavior:'smooth',block:'start'}); $('#ntTitle').focus({preventScroll:true});
+  };
+  $('#ntCancel').onclick=()=>adminLoad();
   f.onsubmit=async e=>{ e.preventDefault(); const b=$('#ntGo'); b.disabled=true;
     try{
-      await api('POST','/admin/notices',{ title:$('#ntTitle').value, body:$('#ntBody').value, image:image||$('#ntImgUrl').value.trim(), url:$('#ntUrl').value.trim(), url_label:$('#ntUrlLbl').value,
+      const body={ title:$('#ntTitle').value, body:$('#ntBody').value, image:image||$('#ntImgUrl').value.trim(), url:$('#ntUrl').value.trim(), url_label:$('#ntUrlLbl').value,
         popup:f.querySelector('input[name=ntWhere]:checked').value==='popup', dismissible:f.querySelector('input[name=ntKeep]:checked').value==='dis',
-        audience:f.querySelector('input[name=ntWho]:checked').value, recipients:[...sel.keys()] });
-      toast('Aviso enviado'); adminLoad(); loadNotices();
+        audience:f.querySelector('input[name=ntWho]:checked').value, recipients:[...sel.keys()] };
+      if(editId) await api('PUT','/admin/notices/'+editId,{...body, edit:true, renew:$('#ntRenew').checked});
+      else await api('POST','/admin/notices',body);
+      toast(editId?'Aviso guardado':'Aviso enviado'); adminLoad(); loadNotices();
     }catch(err){ b.disabled=false; $('#ntSt').innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
 Object.assign(ADM_ACT,{
+  admNtEdit:el=>{ const n=(S.admNtList||[]).find(x=>x.id===el.dataset.id); const f=$('#ntForm'); if(n&&f&&f._load) f._load(n); },
   admNtToggle:el=>admDo(()=>api('PUT','/admin/notices/'+el.dataset.id,{active:el.dataset.a==='1'}), el.dataset.a==='1'?'Aviso activado':'Aviso desactivado'),
   admNtDel:async el=>{ if(await confirmBox('Se borrará el aviso para todo el mundo, con su registro de lecturas.')) admDo(()=>api('DELETE','/admin/notices/'+el.dataset.id),'Aviso borrado'); },
   admNtReads:async el=>{
