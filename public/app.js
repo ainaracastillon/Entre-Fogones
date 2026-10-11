@@ -468,9 +468,9 @@ function viewLibrary(){
     <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="famous">Ver todas las recetas recomendadas ${ico('next')}</button></div>
   </section>
   <section class="recent sugg">
-    <div class="sugg-h"><h2>Recetas de la comunidad</h2><p class="muted">Las que otras personas han creado y compartido con todo el mundo.</p></div>
+    <div class="sugg-h"><h2>Recetas preferidas por los usuarios</h2><p class="muted">Las que otras personas han creado y compartido con todo el mundo.</p></div>
     <div class="cards" id="comPrev">${communityPreviewHtml()}</div>
-    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="community">Ver todas las recetas de la comunidad ${ico('next')}</button></div>
+    <div class="row" style="margin-top:12px"><button class="btn" data-act="go" data-v="community">Ver todas las recetas preferidas por los usuarios ${ico('next')}</button></div>
   </section>`;
 }
 /* Buscador de la biblioteca */
@@ -1181,7 +1181,7 @@ function editorModal(d){
     <div class="field"><label for="esrc">Enlace de origen (opcional)</label><input id="esrc" class="inp" type="url" value="${esc(r.source)}"></div>
     ${S.profile?`<fieldset class="nt-opts"><legend>¿Quién puede verla?</legend>
       <label class="opt-line"><input type="radio" name="epub" value="0" ${r.public?'':'checked'}> Privada: solo tú y a quien se la mandes</label>
-      <label class="opt-line"><input type="radio" name="epub" value="1" ${r.public?'checked':''}> Pública: sale en «Recetas de la comunidad» para todo el mundo</label></fieldset>`:''}
+      <label class="opt-line"><input type="radio" name="epub" value="1" ${r.public?'checked':''}> Pública: sale en «Recetas preferidas por los usuarios» para todo el mundo</label></fieldset>`:''}
     <p class="muted" style="margin:0;font-size:13px">Selecciona palabras y pulsa N (negrita), C (cursiva) o el enlace. Si nombras otra receta tuya, se enlaza sola. También puedes dictar con el micrófono del teclado.</p>
     <div id="estatus"></div>
     <div class="row" style="justify-content:space-between">${S.ai&&S.profile?`<button type="button" class="btn" id="eask">${ico('sparkle')}Pedir cambios a ${esc(aiName())}</button>`:'<span></span>'}<div class="row"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="esave">${ico('save')}Guardar</button></div></div>
@@ -1943,7 +1943,7 @@ function admBulkHtml(){
         <label class="opt-line"><input type="radio" name="bkDest" value="sugg" checked> En «Recetas recomendadas», para todo el mundo</label>
         <label class="opt-line"><input type="radio" name="bkDest" value="user"> En el recetario de una o varias personas</label>
         <div class="grid2" id="bkUser" hidden><div class="field"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="@lourdessalguero, @entrefogones"></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
-          <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas de la comunidad)</label></div></fieldset>
+          <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas preferidas por los usuarios)</label></div></fieldset>
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
       <div><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
       <ol class="bk-log" id="bkLog"></ol>
@@ -2177,7 +2177,7 @@ function viewSuspended(){
   </div>`;
 }
 
-/* ===== Recetas de la comunidad (las que la gente hace públicas) ===== */
+/* ===== Recetas preferidas por los usuarios (las que la gente hace públicas) ===== */
 function communityCard(r){
   return `<div class="rcard sg"><button class="sg-open" data-act="openCommunity" data-id="${esc(r.id)}">
       <span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
@@ -2192,9 +2192,9 @@ function communityPreviewHtml(){
   return l.slice(0,6).map(communityCard).join('');
 }
 function viewCommunity(){
-  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas de la comunidad</h1></div>
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="library" aria-label="Biblioteca">${ico('back')}<span class="lbl">Biblioteca</span></button><h1>Recetas preferidas por los usuarios</h1></div>
     <p class="muted" style="margin:0 0 12px">Recetas que otras personas han creado y han querido compartir con todo el mundo. Ábrelas y guárdate las que te gusten.</p>
-    ${S.profile?`<div class="fam-tools"><input id="comQ" class="inp" type="search" placeholder="Buscar en las recetas de la comunidad" value="${esc(S.comQ||'')}" aria-label="Buscar"></div>`
+    ${S.profile?`<div class="fam-tools"><input id="comQ" class="inp" type="search" placeholder="Buscar en las recetas preferidas por los usuarios" value="${esc(S.comQ||'')}" aria-label="Buscar"></div>`
       :`<div class="banner">${ico('lock')}<span style="flex:1;min-width:200px">Sin cuenta solo se ven las 6 últimas recetas publicadas. Inicia sesión o crea una cuenta gratis para verlas todas y buscar entre ellas.</span><button class="btn sm pri" data-act="login">Iniciar sesión</button></div>`}
     <div class="cards fam-grid" id="comList"><p class="muted">Cargando…</p></div>`;
 }
@@ -2248,10 +2248,10 @@ function viewHelp(){
   const sec=(t,ic,body)=>`<section class="card help-sec"><h2>${ico(ic)}${t}</h2>${body}</section>`;
   return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Manual de uso</h1></div></div>
   <div class="help">
-    ${sec('La biblioteca','book',`<p>Cada recetario es un libro de tu estantería. Ábrelo para ver el índice y pasa las páginas como en un libro de verdad. Debajo del libro tienes la lista de recetas y, cuando abres una, los ingredientes y la preparación en grande.</p><ul><li>Usa el buscador de arriba para encontrar cualquier receta tuya.</li><li>«Todas» reúne todas tus recetas; «Sin recetario», las que aún no has guardado en ninguno.</li><li>Las <b>Recetas recomendadas</b> cambian cada día; las que ya has guardado no vuelven a salir.</li><li>En <b>Recetas de la comunidad</b> están las que otras personas han hecho públicas.</li></ul>`)}
+    ${sec('La biblioteca','book',`<p>Cada recetario es un libro de tu estantería. Ábrelo para ver el índice y pasa las páginas como en un libro de verdad. Debajo del libro tienes la lista de recetas y, cuando abres una, los ingredientes y la preparación en grande.</p><ul><li>Usa el buscador de arriba para encontrar cualquier receta tuya.</li><li>«Todas» reúne todas tus recetas; «Sin recetario», las que aún no has guardado en ninguno.</li><li>Las <b>Recetas recomendadas</b> cambian cada día; las que ya has guardado no vuelven a salir.</li><li>En <b>Recetas preferidas por los usuarios</b> están las que otras personas han hecho públicas.</li></ul>`)}
     ${sec('Añadir recetas','plus',`<p>Pulsa <b>Nueva receta</b> y elige cómo:</p><ul><li><b>Desde un enlace</b>: pega el enlace de una web de cocina.</li><li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo. Puedes escribir qué receta es o algún detalle para ayudar a la IA.</li><li><b>Desde una foto</b>: hazle una foto a una receta de un libro, una revista o un papel; la IA la copia y redacta bien los pasos.</li><li><b>Con IA</b>: pide la receta que quieras y pide cambios hasta que te guste; luego apruébala.</li><li><b>A mano</b>: escríbela tú.</li></ul><p>Todas las recetas tienen foto: si no le pones una, la IA crea una. También se calcula sola su tabla nutricional.</p>`)}
     ${sec('Dictar en vez de escribir','mic',`<p>Puedes dictar las recetas: toca cualquier casilla de texto, pulsa el <b>micrófono del teclado</b> del móvil y habla. Por ejemplo: «doscientos gramos de harina, tres huevos…». Sirve para escribir la receta a mano, para el chat de la IA, para pedir cambios y para el chat con tus amigos.</p>`)}
-    ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas de la comunidad, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
+    ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas preferidas por los usuarios, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
     ${sec('Raciones, letra y alérgenos','user',`<ul><li>Cambia las raciones con el desplegable y las cantidades se recalculan.</li><li>En <b>Mi cuenta</b> eliges el tamaño de la letra de las recetas.</li><li>Apunta tus <b>alérgenos</b> y si tienes <b>diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li></ul>`)}
     ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con desayuno, comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
     ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li></ul>`)}
