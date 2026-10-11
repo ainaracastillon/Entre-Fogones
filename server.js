@@ -1036,7 +1036,11 @@ Usa los ingredientes para saber qué plato es. Devuelve SOLO un objeto JSON {"ti
 ${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
         names = (out && out.titulos) || {};
       } catch (e) { console.error('titulos', e.message); }
-      if (PROVIDER && !Object.keys(names).length) break;
+      if (PROVIDER && !Object.keys(names).length) {
+        // sin IA ahora mismo: se limpian ya los títulos y se vuelve a probar en un minuto
+        for (const r of rows) { const t = cleanTitle(r.title); if (t !== r.title) await q("UPDATE suggestions SET title=$1, data=jsonb_set(data, '{title}', to_jsonb($1::text)) WHERE id=$2", [t, r.id]); }
+        await sleep(65000); continue;
+      }
       for (const r of rows) {
         const t = cleanTitle(names[r.id] || r.title);
         await q("UPDATE suggestions SET title=$1, data=jsonb_set(data, '{title}', to_jsonb($1::text)), title_ok=true WHERE id=$2", [t, r.id]);
