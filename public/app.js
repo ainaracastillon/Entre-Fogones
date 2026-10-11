@@ -667,7 +667,6 @@ function belowHtml(){
   const f=scaleOf(r);
   const from = r.fromUid && r.fromUid!==S.uid && S.profiles[r.fromUid] ? `<p class="src">Compartida por ${esc(pname(r.fromUid))}</p>`:'';
   return `<article class="recipe-read">
-    ${r.image?`<div class="rr-img"><img src="${esc(r.image)}" alt="${esc(r.title||'')}" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></div>`:''}
     <header><h2>${esc(r.title||'Sin título')}</h2>
       <div class="meta">${servSelect(r)}${r.time?`<span>${ico('clock')}${esc(r.time)}</span>`:''}${r.difficulty?`<span>${esc(r.difficulty)}</span>`:''}</div></header>
     <div class="rr-cols">
@@ -679,16 +678,19 @@ function belowHtml(){
     </div>${nutritionHtml(r)}</article>`;
 }
 /* Tabla nutricional por ración (la calcula la IA al guardar la receta) */
+/* Información nutricional como en las etiquetas (Reglamento UE 1169/2011): por 100 g, por ración y % de la ingesta de referencia */
+const NUTRI_ROWS=[['Valor energético','kcal',1,2000],['Grasas','fat',1,70],['de las cuales saturadas','satfat',0,20],['Hidratos de carbono','carbs',1,260],['de los cuales azúcares','sugars',0,90],['Fibra alimentaria','fiber',1,null],['Proteínas','protein',1,50],['Sal','salt',1,6]];
 function nutritionHtml(r){
   const n=r.nutrition;
   if(!n||!n.kcal) return (S.recipes.some(x=>x.id===r.id) && S.ai) ? `<section class="nutri"><h3>Información nutricional</h3><p class="muted" style="margin:0">Calculándola… aparecerá en unos segundos.</p></section>` : '';
-  const per=n.grams?100/n.grams:null, plate=n.grams?250/n.grams:null;
-  const g=(v,u=' g')=>v==null?'—':(Math.round(v*10)/10).toLocaleString('es-ES')+u;
-  const rows=[['Energía','kcal',1],['Hidratos de carbono','carbs',1],['Azúcares','sugars',0],['Grasas','fat',1],['Saturadas','satfat',0],['Proteínas','protein',1],['Fibra','fiber',1],['Sal','salt',1]];
-  const cell=(k,f)=>k==='kcal'?`${Math.round(n.kcal*f)} kcal`:g(n[k]==null?null:n[k]*f);
-  return `<section class="nutri"><h3>Información nutricional <small class="muted">aproximada</small></h3>
-    <div class="nutri-w"><table class="nutri-t"><thead><tr><th></th><th>Ración${n.grams?`<small>${Math.round(n.grams)} g</small>`:''}</th>${per?'<th>Por<small>100 g</small></th><th>Plato<small>250 g</small></th>':''}</tr></thead>
-    <tbody>${rows.map(([a,k,main])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th><td>${cell(k,1)}</td>${per?`<td>${cell(k,per)}</td><td>${cell(k,plate)}</td>`:''}</tr>`).join('')}</tbody></table></div></section>`;
+  const per=n.grams?100/n.grams:null;
+  const num=v=>(Math.round(v*10)/10).toLocaleString('es-ES');
+  const val=(k,f)=>{ if(k==='kcal'){ const kc=n.kcal*f; return `${Math.round(kc*4.184).toLocaleString('es-ES')} kJ<br>${Math.round(kc).toLocaleString('es-ES')} kcal`; } return n[k]==null?'—':num(n[k]*f)+' g'; };
+  const ir=(k,ref)=>{ if(!ref||n[k]==null) return ''; return Math.round(n[k]/ref*100)+' %'; };
+  return `<section class="nutri"><h3>Información nutricional</h3>
+    <div class="nutri-w"><table class="nutri-t"><thead><tr><th></th>${per?'<th>Por 100 g</th>':''}<th>Por ración${n.grams?`<small>${Math.round(n.grams)} g</small>`:''}</th><th>% IR*<small>por ración</small></th></tr></thead>
+    <tbody>${NUTRI_ROWS.map(([a,k,main,ref])=>`<tr class="${main?'':'sub'}"><th scope="row">${a}</th>${per?`<td>${val(k,per)}</td>`:''}<td>${val(k,1)}</td><td>${ir(k,ref)}</td></tr>`).join('')}</tbody></table></div>
+    <p class="nutri-note">*Ingesta de referencia de un adulto medio (8.400 kJ / 2.000 kcal). Valores aproximados: los calcula la IA a partir de los ingredientes y las cantidades de la receta, con tablas de composición de alimentos; no son un análisis de laboratorio.</p></section>`;
 }
 function pageHtml(p,num){
   const b=S.book; if(!p) return '';
@@ -2220,7 +2222,7 @@ function viewMenu(){
       <button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div>
     <div id="menuBox" class="menu-box"><div class="status"><span class="spin"></span>Preparando tu menú…</div></div></div>`;
 }
-const MEALS=[['desayuno','Desayuno','☕'],['comida','Comida','🍲'],['cena','Cena','🌙']];
+const MEALS=[['comida','Comida','🍲'],['cena','Cena','🌙']];
 function menuHtml(m){
   const today=(new Date().getDay()+6)%7;
   const mon=new Date(); mon.setDate(mon.getDate()-today);
@@ -2253,7 +2255,7 @@ function viewHelp(){
     ${sec('Dictar en vez de escribir','mic',`<p>Puedes dictar las recetas: toca cualquier casilla de texto, pulsa el <b>micrófono del teclado</b> del móvil y habla. Por ejemplo: «doscientos gramos de harina, tres huevos…». Sirve para escribir la receta a mano, para el chat de la IA, para pedir cambios y para el chat con tus amigos.</p>`)}
     ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas preferidas por los usuarios, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
     ${sec('Raciones, letra y alérgenos','user',`<ul><li>Cambia las raciones con el desplegable y las cantidades se recalculan.</li><li>En <b>Mi cuenta</b> eliges el tamaño de la letra de las recetas.</li><li>Apunta tus <b>alérgenos</b> y si tienes <b>diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li></ul>`)}
-    ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con desayuno, comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
+    ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
     ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li></ul>`)}
     ${sec('Moverte por la app','next',`<p>Desliza desde el borde izquierdo de la pantalla hacia el centro para volver a la página anterior, y desde el borde derecho para ir a la siguiente. El botón de atrás del móvil también funciona.</p>`)}
     ${sec('¿Más dudas?','mail',`<p>Escríbenos desde <a href="/legal/contacto">Contacto</a>.</p>`)}

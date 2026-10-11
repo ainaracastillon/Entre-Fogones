@@ -334,6 +334,7 @@ api.delete('/me', needProfile, async (req, res, next) => {
     if (req.user.role === 'superadmin') return res.status(400).json({ error: 'La cuenta del Superadministrador no se puede borrar.' });
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
     const me = req.user.id;
+    await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [me])).rows);
     await q('DELETE FROM messages WHERE from_id=$1', [me]);
     await q('DELETE FROM attachments WHERE owner=$1', [me]);
     await q('DELETE FROM chats WHERE a=$1 OR b=$1', [me]);
@@ -444,8 +445,29 @@ api.put('/recipes/:id', async (req, res, next) => {
     queueRecipeWork(id);
   } catch (e) { next(e); }
 });
+/* Las recetas que alguien borra no se pierden: pasan a Recetas recomendadas (sin el nombre de quien la hizo) */
+async function recipesToSuggestions(rows) {
+  for (const r of rows) {
+    try {
+      const d = r.data || {};
+      if (d.fromSugg || !(d.ingredients || []).length || !(d.steps || []).length) continue;
+      const title = cleanTitle(d.title || '');
+      if ((await q('SELECT 1 FROM suggestions WHERE lower(title)=lower($1) AND data IS NOT NULL', [title])).rows[0]) continue;
+      const img = (await q('SELECT img, type FROM recipe_imgs WHERE recipe_id=$1', [r.id])).rows[0];
+      const pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
+      const { fromUid, public: _p, credit, folderId, source, ...rest } = d;
+      await q('INSERT INTO suggestions(id,url,title,position,created,data,rewritten,img,img_type) VALUES($1,$2,$3,$4,$5,$6,false,$7,$8)',
+        [gid(), 'usuario:' + r.id, title, pos, now(), { ...rest, title, image: '', source: '' }, img ? img.img : null, img ? img.type : null]);
+    } catch (e) { console.error('a recomendadas', e.message); }
+  }
+}
 api.delete('/recipes/:id', async (req, res, next) => {
-  try { await q('DELETE FROM recipes WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]); await q('DELETE FROM recipe_imgs WHERE recipe_id=$1 AND NOT EXISTS (SELECT 1 FROM recipes WHERE id=$1)', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
+  try {
+    const rows = (await q('SELECT id, data FROM recipes WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id])).rows;
+    await recipesToSuggestions(rows);
+    await q('DELETE FROM recipes WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]); await q('DELETE FROM recipe_imgs WHERE recipe_id=$1 AND NOT EXISTS (SELECT 1 FROM recipes WHERE id=$1)', [req.params.id]); res.json({ ok: true });
+    processSuggestionArt().catch(() => {});
+  } catch (e) { next(e); }
 });
 /* Trabajo en segundo plano para cada receta guardada: foto generada si no tiene, y tabla nutricional */
 const recipeQueue = new Set(); let recipeBusy = false, imgPauseUntil = 0;
@@ -1434,19 +1456,19 @@ async function makeMenu(u, week) {
   const mine = (await q("SELECT id, data->>'title' t FROM recipes WHERE user_id=$1 ORDER BY random() LIMIT 60", [u.id])).rows;
   const sugg = (await q("SELECT id, title t, category FROM suggestions WHERE data IS NOT NULL AND hidden IS NOT TRUE ORDER BY random() LIMIT 120")).rows;
   const prev = (await q('SELECT data FROM menus WHERE user_id=$1 AND week<>$2 ORDER BY week DESC LIMIT 1', [u.id, week])).rows[0];
-  const before = prev ? prev.data.days.flatMap(d => ['desayuno', 'comida', 'cena'].map(k => d[k] && d[k].name)).filter(Boolean) : [];
+  const before = prev ? prev.data.days.flatMap(d => ['comida', 'cena'].map(k => d[k] && d[k].name)).filter(Boolean) : [];
   const h = healthCtx(u);
   countAi();
-  const out = parseJson(await llm({ maxTokens: 3500, messages: [{ role: 'user', text: `Prepara un menú semanal casero, variado y equilibrado (dieta mediterránea, cocina de España) de lunes a domingo, con desayuno, comida y cena cada día.
-${h ? 'MUY IMPORTANTE: ' + h + '\n' : ''}Usa sobre todo platos de estas listas cuando encajen, indicando su referencia; si no hay uno adecuado, propón un plato sencillo tú (sin referencia). No repitas platos en la semana${before.length ? ' y evita los de la semana pasada: ' + before.slice(0, 21).join(', ') : ''}. Desayunos ligeros, comidas completas y cenas más suaves.
+  const out = parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Prepara un menú semanal casero, variado y equilibrado (dieta mediterránea, cocina de España) de lunes a domingo, con comida y cena cada día.
+${h ? 'MUY IMPORTANTE: ' + h + '\n' : ''}Usa sobre todo platos de estas listas cuando encajen, indicando su referencia; si no hay uno adecuado, propón un plato sencillo tú (sin referencia). No repitas platos en la semana${before.length ? ' y evita los de la semana pasada: ' + before.slice(0, 14).join(', ') : ''}. Comidas completas y cenas más suaves.
 Recetas de la persona (ref r:id): ${mine.map(r => `r:${r.id}=${r.t}`).join('; ') || 'ninguna'}
 Recetas recomendadas (ref s:id): ${sugg.map(r => `s:${r.id}=${r.t}`).join('; ')}
-Devuelve SOLO un objeto JSON: {"days":[{"desayuno":{"name":string,"ref":string o null},"comida":{"name":string,"ref":string o null},"cena":{"name":string,"ref":string o null}}, ... 7 días]}` }] }));
+Devuelve SOLO un objeto JSON: {"days":[{"comida":{"name":string,"ref":string o null},"cena":{"name":string,"ref":string o null}}, ... 7 días]}` }] }));
   const ok = new Set([...mine.map(r => 'r:' + r.id), ...sugg.map(r => 's:' + r.id)]);
   const names = Object.fromEntries([...mine.map(r => ['r:' + r.id, r.t]), ...sugg.map(r => ['s:' + r.id, r.t])]);
   const days = (out && Array.isArray(out.days) ? out.days : []).slice(0, 7).map((d, i) => {
     const o = { day: DAYS[i] };
-    for (const k of ['desayuno', 'comida', 'cena']) { const m = d && d[k] || {}; const ref = ok.has(m.ref) ? m.ref : null; o[k] = { name: String((ref && names[ref]) || m.name || '').slice(0, 120), ref }; }
+    for (const k of ['comida', 'cena']) { const m = d && d[k] || {}; const ref = ok.has(m.ref) ? m.ref : null; o[k] = { name: String((ref && names[ref]) || m.name || '').slice(0, 120), ref }; }
     return o;
   });
   if (days.length < 7) throw new Error('menú incompleto');
@@ -1508,23 +1530,26 @@ function ornament(doc, y) {
 }
 function NUTRI_PDF(doc, n) {
   const x0 = doc.page.margins.left, w = doc.page.width - x0 - doc.page.margins.right;
-  if (doc.y > doc.page.height - 230) doc.addPage();
+  if (doc.y > doc.page.height - 260) doc.addPage();
   doc.moveDown(0.8).font('Times-Bold').fontSize(14).fillColor(PARCH.red).text('Información nutricional', x0, doc.y, { width: w });
   const per = n.grams ? 100 / n.grams : null;
-  const f = (v, u) => v == null ? '–' : (Math.round(v * 10) / 10).toLocaleString('es-ES') + u;
-  const rows = [['Energía', 'kcal', ' kcal'], ['Hidratos de carbono', 'carbs', ' g'], ['   de los cuales azúcares', 'sugars', ' g'], ['Grasas', 'fat', ' g'], ['   de las cuales saturadas', 'satfat', ' g'], ['Proteínas', 'protein', ' g'], ['Fibra', 'fiber', ' g'], ['Sal', 'salt', ' g']];
-  let y = doc.y + 6; const c1 = x0 + w - 270, c2 = x0 + w - 180, c3 = x0 + w - 90;
-  doc.font('Times-Italic').fontSize(10).fillColor(PARCH.muted).text(`Ración${n.grams ? ` (${Math.round(n.grams)} g)` : ''}`, c1, y, { width: 90, align: 'right' }).text('Por 100 g', c2, y, { width: 90, align: 'right' }).text('Plato 250 g', c3, y, { width: 90, align: 'right' });
+  const num = v => (Math.round(v * 10) / 10).toLocaleString('es-ES');
+  const rows = [['Valor energético', 'kcal', 2000], ['Grasas', 'fat', 70], ['   de las cuales saturadas', 'satfat', 20], ['Hidratos de carbono', 'carbs', 260], ['   de los cuales azúcares', 'sugars', 90], ['Fibra alimentaria', 'fiber', null], ['Proteínas', 'protein', 50], ['Sal', 'salt', 6]];
+  const val = (k, f) => k === 'kcal' ? `${Math.round(n.kcal * f * 4.184)} kJ / ${Math.round(n.kcal * f)} kcal` : (n[k] == null ? '–' : num(n[k] * f) + ' g');
+  let y = doc.y + 6; const c1 = x0 + w - 330, c2 = x0 + w - 190, c3 = x0 + w - 60;
+  doc.font('Times-Italic').fontSize(10).fillColor(PARCH.muted);
+  if (per) doc.text('Por 100 g', c1, y, { width: 130, align: 'right' });
+  doc.text(`Por ración${n.grams ? ` (${Math.round(n.grams)} g)` : ''}`, c2, y, { width: 130, align: 'right' }).text('% IR*', c3, y, { width: 60, align: 'right' });
   y += 16;
-  for (const [label, k, u] of rows) {
-    doc.font(label.startsWith(' ') ? 'Times-Italic' : 'Times-Roman').fontSize(11).fillColor(PARCH.ink).text(label, x0 + 6, y, { width: 200 });
-    const val = m => k === 'kcal' ? Math.round(n.kcal * m) : (n[k] == null ? null : n[k] * m);
-    doc.text(f(val(1), u), c1, y, { width: 90, align: 'right' });
-    doc.text(per ? f(val(per), u) : '–', c2, y, { width: 90, align: 'right' });
-    doc.text(per ? f(val(per * 2.5), u) : '–', c3, y, { width: 90, align: 'right' });
+  for (const [label, k, ref] of rows) {
+    doc.font(label.startsWith(' ') ? 'Times-Italic' : 'Times-Roman').fontSize(11).fillColor(PARCH.ink).text(label, x0 + 6, y, { width: 170 });
+    if (per) doc.text(val(k, per), c1, y, { width: 130, align: 'right' });
+    doc.text(val(k, 1), c2, y, { width: 130, align: 'right' });
+    doc.text(ref && n[k] != null ? Math.round(n[k] / ref * 100) + ' %' : '', c3, y, { width: 60, align: 'right' });
     y += 16; doc.save().lineWidth(0.4).strokeColor(PARCH.line).moveTo(x0, y - 3).lineTo(x0 + w, y - 3).stroke().restore();
   }
-  doc.y = y + 4; doc.x = x0;
+  doc.font('Times-Italic').fontSize(8.5).fillColor(PARCH.muted).text('*Ingesta de referencia de un adulto medio (8.400 kJ / 2.000 kcal). Valores aproximados calculados a partir de los ingredientes.', x0, y + 2, { width: w });
+  doc.x = x0;
 }
 async function buildPdf(title, recipes, res) {
   let PDFDocument;
@@ -1707,6 +1732,7 @@ adm.put('/users/:id/suggest-delete', async (req, res, next) => {
 adm.delete('/users/:id', needSuper, async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [req.params.id])).rows);
     await q('DELETE FROM attachments WHERE owner=$1', [req.params.id]);
     await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);
     await q('DELETE FROM chats WHERE a=$1 OR b=$1', [req.params.id]);
