@@ -241,12 +241,13 @@ function render(){
   const m=$('#main');
   if(S.view!=='famous') S.suggView=null;
   if(S.view==='library'){ m.innerHTML = viewLibrary(); fitSpines(); loadSuggestions(); }
-  else if(S.view==='book'){ renderBook(); return; }
+  else if(S.view==='book'){ renderBook(); }
   else if(S.view==='chat'){ m.innerHTML = viewChat(); afterChat(); }
   else if(S.view==='friends'){ m.innerHTML = viewFriends(); afterFriends(); }
   else if(S.view==='account'){ m.innerHTML = viewAccount(); bindAccount(m); }
   else if(S.view==='admin'){ m.innerHTML = viewAdmin(); adminLoad(); }
   else if(S.view==='famous'){ m.innerHTML = viewFamous(); afterFamous(); }
+  navTrack();
 }
 let refreshQueued=false;
 function refresh(){
@@ -262,6 +263,73 @@ function refresh(){
     /* Mi cuenta y el panel no se repintan solos para no perder lo que se está escribiendo */
   });
 }
+/* ===== Historial: atrás y adelante (botón del móvil, navegador y deslizar desde los bordes) ===== */
+const NAV={i:0, top:0, snaps:[], restoring:false, lastPop:0};
+const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'');
+const navSnap=()=>({view:S.view, book:S.book, page:S.page, chatWith:S.chatWith, key:navKey(S)});
+function navTrack(){
+  if(NAV.restoring || !S.booted) return;
+  const cur=NAV.snaps[NAV.i], s=navSnap();
+  if(!cur){ NAV.snaps[NAV.i]=s; try{ history.replaceState({ef:NAV.i},''); }catch{} return; }
+  if(cur.key===s.key){ NAV.snaps[NAV.i]=s; return; }
+  NAV.i++; NAV.top=NAV.i; NAV.snaps.length=NAV.i; NAV.snaps[NAV.i]=s;
+  try{ history.pushState({ef:NAV.i},''); }catch{}
+}
+function navRestore(s){
+  closeModal();
+  if(S.view==='chat') stopChat();
+  let view=s.view, book=s.book;
+  if(view==='book' && book && !book.visiting){ book=ownBook(book.id); if(!book) view='library'; }
+  if(view==='book' && !book) view='library';
+  const prev=NAV.snaps[NAV.i-1];
+  S.prevView = prev && prev.view!=='book' ? prev.view : 'library';
+  S.book = view==='book' ? book : null;
+  if(view==='book') S.page=Math.max(0, Math.min(s.page||0, pages().length-2));
+  if(view==='chat'){ S.chatWith=s.chatWith; S.msgs=[]; S.askMode=false; }
+  NAV.restoring=true; S.view=view;
+  try{ render(); } finally { NAV.restoring=false; }
+  window.scrollTo(0,0);
+}
+addEventListener('popstate',e=>{
+  const i=e.state && e.state.ef; if(typeof i!=='number' || !NAV.snaps[i]) return;
+  NAV.lastPop=Date.now();
+  const cur=NAV.snaps[NAV.i]; if(cur && cur.key===navKey(S)) NAV.snaps[NAV.i]=navSnap();
+  NAV.i=i; navRestore(NAV.snaps[i]);
+});
+/* Deslizar desde el borde izquierdo hacia el centro: página anterior. Desde el derecho: la siguiente. */
+(()=>{
+  let sx=0, sy=0, edge=0, t0=0, hint=null;
+  const EDGE=28;
+  const showHint=(dir,dx)=>{
+    if(!hint){ hint=document.createElement('div'); hint.className='swipe-hint'; document.body.appendChild(hint); }
+    const p=Math.min(1, Math.abs(dx)/90);
+    hint.className='swipe-hint '+(dir===1?'l':'r')+(p>=1?' go':'');
+    hint.innerHTML=dir===1?'&#8249;':'&#8250;';
+    hint.style.opacity=String(p);
+    hint.style.transform=`translate(${dir===1?Math.min(dx,90)-50:Math.max(dx,-90)+50}px,-50%)`;
+  };
+  const hideHint=()=>{ if(hint){ hint.remove(); hint=null; } };
+  addEventListener('touchstart',e=>{
+    edge=0; if(e.touches.length!==1 || $('#modal-root')?.children.length) return;
+    const t=e.touches[0]; sx=t.clientX; sy=t.clientY; t0=Date.now();
+    if(sx<=EDGE && NAV.i>0) edge=1; else if(sx>=innerWidth-EDGE && NAV.i<NAV.top) edge=-1;
+  },{passive:true});
+  addEventListener('touchmove',e=>{
+    if(!edge || e.touches.length!==1) return;
+    const t=e.touches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(Math.abs(dy)>40 && Math.abs(dy)>Math.abs(dx)){ edge=0; hideHint(); return; }
+    if(dx*edge>8) showHint(edge,dx);
+  },{passive:true});
+  addEventListener('touchcancel',()=>{ edge=0; hideHint(); },{passive:true});
+  addEventListener('touchend',e=>{
+    const dir=edge; edge=0; hideHint(); if(!dir) return;
+    const t=e.changedTouches[0], dx=t.clientX-sx, dy=t.clientY-sy;
+    if(dx*dir<70 || Math.abs(dy)>Math.abs(dx)*0.8 || Date.now()-t0>1200) return;
+    const start=t0;
+    // si el navegador ya ha hecho su propio gesto de volver, no se repite
+    setTimeout(()=>{ if(NAV.lastPop>=start) return; if(dir===1) history.back(); else history.forward(); },350);
+  },{passive:true});
+})();
 function go(v){
   if(S.view==='chat' && v!=='chat') stopChat();
   if(S.view!=='book') S.prevView=S.view;
@@ -289,7 +357,6 @@ function fitSpines(){
   });
 }
 function viewLibrary(){
-  const name = S.profile?.display || 'tu cocina';
   const none = S.recipes.filter(r=>!r.folderId || !S.folders.some(f=>f.id===r.folderId));
   const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, usar la IA, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const slot = b => `<div class="slot">${b}</div>`;
@@ -301,8 +368,7 @@ function viewLibrary(){
   ].join('');
   const recent = S.recipes.slice(0,3);
   return `${banner}
-  <div class="lib-head">
-    <div><p class="eyebrow">Biblioteca</p><h1>La estantería de ${esc(name)}</h1></div>
+  <div class="lib-head lib-actions">
     <div class="row nowrap">
       <button class="btn pri" data-act="newRecipe">${ico('plus')}Nueva receta</button>
       <button class="btn" data-act="openLink" title="Abre una receta o un recetario que alguien te ha compartido con un enlace">${ico('link')}<span class="lbl-long">Abrir enlace compartido</span><span class="lbl-short">Abrir enlace</span></button>
@@ -515,6 +581,7 @@ function renderBook(){
   document.body.classList.add('in-book');
   $('#main').innerHTML=viewBook();
   layoutBook();
+  navTrack();
 }
 /* Tamaño del libro: cabe en la pantalla y deja ver lo de debajo */
 function layoutBook(){

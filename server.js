@@ -17,7 +17,15 @@ const GROQ_KEY = process.env.GROQ_API_KEY || '';
 const GROQ_MODEL = process.env.GROQ_MODEL || 'openai/gpt-oss-120b';
 const GROQ_FALLBACK = process.env.GROQ_FALLBACK_MODEL || 'openai/gpt-oss-20b';
 const GROQ_VISION_MODEL = process.env.GROQ_VISION_MODEL || 'qwen/qwen3.8-27b';
-const PROVIDER = GROQ_KEY ? 'groq' : OPENAI_KEY ? 'openai' : (AI_KEY ? 'claude' : null);
+const CF_ACCOUNT = process.env.CF_ACCOUNT_ID || '', CF_TOKEN = process.env.CF_API_TOKEN || '', POLL_TOKEN = process.env.POLLINATIONS_TOKEN || '';
+const HAS_CF = !!(CF_ACCOUNT && CF_TOKEN);
+const CF_MODEL = process.env.CF_MODEL || '@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+const CF_VISION_MODEL = process.env.CF_VISION_MODEL || '@cf/meta/llama-4-scout-17b-16e-instruct';
+const CF_WHISPER_MODEL = process.env.CF_WHISPER_MODEL || '@cf/openai/whisper-large-v3-turbo';
+// Proveedores de IA en orden: si uno falla o llega a su límite, se prueba el siguiente
+const PROVIDERS = [GROQ_KEY && 'groq', HAS_CF && 'cloudflare', OPENAI_KEY && 'openai', AI_KEY && 'claude'].filter(Boolean);
+const PROVIDER = PROVIDERS[0] || null;
+const CAN_HEAR = !!(GROQ_KEY || HAS_CF);
 const PROD = process.env.NODE_ENV === 'production';
 
 if (!DATABASE_URL) { console.error('Falta DATABASE_URL'); process.exit(1); }
@@ -73,6 +81,7 @@ async function migrate() {
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_type TEXT;
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS img_tries INT;
   ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS rewritten BOOLEAN;
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS title_ok BOOLEAN;
   CREATE TABLE IF NOT EXISTS notices(
     id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
     popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
@@ -165,7 +174,7 @@ app.use(express.static(path.join(__dirname, 'public'), { index: 'index.html', se
 const api = express.Router();
 api.use(auth);
 
-api.get('/config', (req, res) => res.json({ mail: mailReady(), ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA' }));
+api.get('/config', (req, res) => res.json({ mail: mailReady(), ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : PROVIDER === 'openai' ? 'ChatGPT' : 'la IA', canHear: CAN_HEAR }));
 
 api.get('/state', async (req, res, next) => {
   try {
@@ -577,19 +586,15 @@ async function importVideo(url, res) {
 }
 // Subir el vídeo: se transcribe lo que se dice (Groq Whisper) y se saca la receta
 api.post('/import/video-file', needProfile, express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
-  if (PROVIDER !== 'groq') return noAi(res);
+  if (!CAN_HEAR) return noAi(res);
   if (!req.body || !req.body.length) return res.status(400).json({ error: 'No ha llegado el vídeo. Vuelve a intentarlo.' });
   try {
     const type = String(req.headers['content-type'] || 'video/mp4').split(';')[0];
-    const ext = (type.split('/')[1] || 'mp4').replace('quicktime', 'mov').replace(/[^a-z0-9]/g, '');
-    const fd = new FormData();
-    fd.append('file', new Blob([req.body], { type }), 'video.' + ext);
-    fd.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
-    fd.append('response_format', 'json');
-    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', body: fd, signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${GROQ_KEY}` } });
-    if (!r.ok) { const t = await r.text(); console.error('whisper', r.status, t.slice(0, 300)); return res.status(502).json({ error: r.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido escuchar el vídeo. Prueba con otro formato o un vídeo más corto.' }); }
-    const text = String((await r.json()).text || '').trim();
-    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir.' });
+    let text = '', quota = false;
+    try { text = await transcribe(req.body, type); }
+    catch (e) { quota = e.status === 429; }
+    if (!text && quota) return res.status(502).json({ error: 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' });
+    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir, o no he podido escucharlo. Prueba con otro formato o un vídeo más corto.' });
     const rec = await aiFromVideo(String(req.query.title || ''), 'Lo que se dice en el vídeo: ' + text);
     if (!rec) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado una receta.', needText: true, text });
     res.json({ recipe: rec });
@@ -614,21 +619,70 @@ api.post('/import', async (req, res) => {
 const SCHEMA = `{"title":string,"servings":string (solo el número de raciones),"time":string (p. ej. "45 min"),"difficulty":"Fácil"|"Media"|"Difícil"|"","ingredients":[string],"steps":[string],"notes":string}`;
 // messages: [{ role: 'user'|'assistant', text, image?: { media, data } }]
 // API compatible con OpenAI (Groq y OpenAI)
-async function openaiCompat({ url, key, model, system, messages, maxTokens }) {
+// Transcribe el audio de un vídeo: primero Groq Whisper y, si falla, Cloudflare Whisper
+async function transcribe(buf, type) {
+  let last;
+  if (GROQ_KEY) try {
+    const ext = (type.split('/')[1] || 'mp4').replace('quicktime', 'mov').replace(/[^a-z0-9]/g, '');
+    const fd = new FormData();
+    fd.append('file', new Blob([buf], { type }), 'video.' + ext);
+    fd.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
+    fd.append('response_format', 'json');
+    const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', body: fd, signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${GROQ_KEY}` } });
+    if (!r.ok) { const e = new Error('whisper groq ' + r.status + ' ' + (await r.text()).slice(0, 200)); e.status = r.status; throw e; }
+    const t = String((await r.json()).text || '').trim(); if (t) return t;
+  } catch (e) { console.error(e.message); last = e; }
+  if (HAS_CF) try {
+    const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/${CF_WHISPER_MODEL}`, {
+      method: 'POST', signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ audio: Buffer.from(buf).toString('base64') }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) { const e = new Error('whisper cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200)); e.status = r.status; throw e; }
+    const t = String(j.result?.text || '').trim(); if (t) return t;
+  } catch (e) { console.error(e.message); last = e; }
+  if (last) throw last;
+  return '';
+}
+async function openaiCompat({ url, key, model, system, messages, maxTokens, plain }) {
   const msgs = system ? [{ role: 'system', content: system }] : [];
   for (const m of messages) msgs.push({ role: m.role, content: m.image
     ? [{ type: 'text', text: m.text }, { type: 'image_url', image_url: { url: `data:${m.image.media};base64,${m.image.data}` } }] : m.text });
   const r = await fetch(url, {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
-    body: JSON.stringify({ model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
+    body: JSON.stringify(plain
+      ? { model, messages: msgs, max_tokens: maxTokens, temperature: 0.6 }
+      : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
   });
   if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
   const j = await r.json();
   return j.choices?.[0]?.message?.content || '';
 }
-async function llm({ system = '', messages, maxTokens = 3000 }) {
-  if (PROVIDER === 'groq') {
+// Un proveedor que llega a su límite descansa un rato y mientras tanto se usa el siguiente
+const aiRest = {};
+async function llm(opts) {
+  let last;
+  const live = PROVIDERS.filter(p => !(aiRest[p] > Date.now()));
+  for (const p of live.length ? live : PROVIDERS) {
+    try {
+      const t = await llmWith(p, opts);
+      if (String(t || '').trim()) return t;
+      last = new Error(p + ' sin respuesta');
+    } catch (e) {
+      console.error('IA', p, String(e.message).slice(0, 200));
+      if (e.status === 429) aiRest[p] = Date.now() + 90e3;
+      last = e;
+    }
+  }
+  throw last || new Error('IA no disponible');
+}
+async function llmWith(provider, { system = '', messages, maxTokens = 3000 }) {
+  if (provider === 'cloudflare') {
+    const hasImage = messages.some(m => m.image);
+    return await openaiCompat({ url: `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/v1/chat/completions`, key: CF_TOKEN,
+      model: hasImage ? CF_VISION_MODEL : CF_MODEL, system: (system ? system + '\n\n' : '') + 'Responde siempre solo con un objeto JSON válido, sin texto antes ni después.', messages, maxTokens, plain: true });
+  }
+  if (provider === 'groq') {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
     const hasImage = messages.some(m => m.image);
     const model = hasImage ? GROQ_VISION_MODEL : GROQ_MODEL;
@@ -639,7 +693,7 @@ async function llm({ system = '', messages, maxTokens = 3000 }) {
       return await openaiCompat({ url, key: GROQ_KEY, model: GROQ_FALLBACK, system, messages, maxTokens });
     }
   }
-  if (PROVIDER === 'openai') {
+  if (provider === 'openai') {
     const msgs = system ? [{ role: 'system', content: system }] : [];
     for (const m of messages) msgs.push({ role: m.role, content: m.image
       ? [{ type: 'text', text: m.text }, { type: 'image_url', image_url: { url: `data:${m.image.media};base64,${m.image.data}` } }] : m.text });
@@ -648,7 +702,7 @@ async function llm({ system = '', messages, maxTokens = 3000 }) {
       headers: { 'content-type': 'application/json', authorization: `Bearer ${OPENAI_KEY}` },
       body: JSON.stringify({ model: OPENAI_MODEL, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens })
     });
-    if (!r.ok) throw new Error('openai ' + r.status + ' ' + (await r.text()).slice(0, 300));
+    if (!r.ok) { const e = new Error('openai ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
     const j = await r.json();
     return j.choices?.[0]?.message?.content || '';
   }
@@ -658,7 +712,7 @@ async function llm({ system = '', messages, maxTokens = 3000 }) {
     body: JSON.stringify({ model: AI_MODEL, max_tokens: maxTokens, ...(system ? { system } : {}), messages: messages.map(m => ({ role: m.role, content: m.image
       ? [{ type: 'image', source: { type: 'base64', media_type: m.image.media, data: m.image.data } }, { type: 'text', text: m.text }] : m.text })) })
   });
-  if (!r.ok) throw new Error('claude ' + r.status + ' ' + (await r.text()).slice(0, 300));
+  if (!r.ok) { const e = new Error('claude ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
   const j = await r.json();
   return (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
 }
@@ -681,6 +735,16 @@ const noAi = res => res.status(503).json({ error: 'La IA no está activada en es
 let lastAiCheck = 0;
 api.get('/ai/check', async (req, res) => {
   if (!PROVIDER) return res.json({ provider: null });
+  if (req.query.all) {
+    if (Date.now() - lastAiCheck < 20000) return res.status(429).json({ error: 'Espera unos segundos.' });
+    lastAiCheck = Date.now();
+    const out = { providers: PROVIDERS };
+    for (const p of PROVIDERS) {
+      try { const t = await llmWith(p, { messages: [{ role: 'user', text: 'Devuelve solo este JSON: {"ok":true}' }], maxTokens: 60 }); out[p] = parseJson(t) ? 'ok' : 'respuesta rara: ' + String(t).slice(0, 80); }
+      catch (e) { out[p] = 'error ' + String(e.message).slice(0, 160); }
+    }
+    return res.json(out);
+  }
   if (Date.now() - lastAiCheck < 20000) return res.status(429).json({ error: 'Espera unos segundos.' });
   lastAiCheck = Date.now();
   const out = { provider: PROVIDER };
@@ -853,15 +917,40 @@ async function crawlSuggestions() {
   if (added) console.log('Sugerencias nuevas:', added);
 }
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+/* Título limpio y entendible: sin emojis, sin «TikTok trending:», sin la traducción repetida tras «//», sin paréntesis ni etiquetas */
+function cleanTitle(t) {
+  const orig = String(t || '').trim();
+  let s = orig;
+  if (/\s(\/\/|\|)\s/.test(s)) {
+    const parts = s.split(/\s(?:\/\/|\|)\s/).map(x => x.trim()).filter(Boolean);
+    s = parts.find(x => /[áéíóúñ¿¡]|\b(de|del|con|y|al|a la|en|sin|para)\b/i.test(x)) || parts[parts.length - 1];
+  }
+  s = s.replace(/[\p{Extended_Pictographic}\u{1F1E6}-\u{1F1FF}\u{1F3FB}-\u{1F3FF}\uFE0F\u200D\u20E3]/gu, ' ')
+    .replace(/#[\p{L}\p{N}_]+/gu, ' ')
+    .replace(/^\s*(?:(?:tik\s?tok|instagram|insta|youtube|reels?)\s*)?(?:trending|viral|tendencia|famos[oa])\s*[:\-–—|]\s*/iu, '')
+    .replace(/\b(?:tik\s?tok|instagram|youtube|trending|viral|virales|del momento)\b/giu, ' ')
+    .replace(/[\[(（][^\])）]*[\])）]/g, ' ')
+    .replace(/\s*&\s*/g, ' y ')
+    .replace(/^\s*(?:la\s+)?receta\s+(?:de\s+|del\s+)?/iu, '')
+    .replace(/\s+(?:estilo|al estilo de|de la abuela de|by)\s+[A-ZÁÉÍÓÚÑ][\p{L}.]*(?:\s+[A-ZÁÉÍÓÚÑ][\p{L}.]*)*\s*$/u, '')
+    .replace(/[!¡?¿]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s:\-–—|.,·*]+|[\s:\-–—|,·*]+$/g, '')
+    .trim();
+  if (s.length < 3) s = orig.replace(/[\p{Extended_Pictographic}\uFE0F\u200D]/gu, '').trim();
+  if (s === s.toUpperCase() && /[A-ZÁÉÍÓÚÑ]{4}/.test(s)) s = s.toLowerCase();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+const TITLE_RULES = `El título debe ser el nombre del plato en español de España, corto y claro (de 2 a 7 palabras), como aparecería en un recetario de casa. Por ejemplo: "Tarta de queso al horno", "Barritas de chocolate y arándanos", "Pollo al curry con arroz". Nunca pongas emojis, hashtags, signos de exclamación, mayúsculas de grito, ni palabras como TikTok, Instagram, viral, trending, famosa o "la mejor". Nada de nombres de personas, cocineros, restaurantes ni webs, nada entre paréntesis y nunca el mismo nombre repetido en dos idiomas: si viene en inglés, tradúcelo.`;
 async function rewriteRecipe(r) {
   if (!PROVIDER) return r;
   try {
     countAi();
-    const out = cleanAi(parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Reescribe esta receta con tus propias palabras para un recetario casero en español de España. Mantén los mismos ingredientes y cantidades, y los mismos pasos, pero redactados de nuevo, claros y directos. El título debe ser el nombre del plato, sin nombres de personas, cocineros, restaurantes ni webs, y sin emojis. En "notes" pon un consejo breve propio. Devuelve SOLO un objeto JSON con esta forma:
+    const out = cleanAi(parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Reescribe esta receta con tus propias palabras para un recetario casero en español de España. Mantén los mismos ingredientes y cantidades, y los mismos pasos, pero redactados de nuevo, claros y directos. ${TITLE_RULES} En "notes" pon un consejo breve propio. Devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
 Receta:
 ${JSON.stringify({ title: r.title, servings: r.servings, time: r.time, ingredients: r.ingredients, steps: r.steps }).slice(0, 20000)}` }] })));
-    return out ? { ...out, image: r.image } : r;
+    return out ? { ...out, title: cleanTitle(out.title), image: r.image } : r;
   } catch (e) { console.error('rewrite', e.message); return r; }
 }
 let suggBusy = false;
@@ -899,7 +988,6 @@ ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join('
 }
 /* Foto generada con IA para no usar fotos de otras personas.
    Con CF_ACCOUNT_ID y CF_API_TOKEN usa Cloudflare Workers AI (gratis con cuenta); si no, Pollinations. */
-const CF_ACCOUNT = process.env.CF_ACCOUNT_ID || '', CF_TOKEN = process.env.CF_API_TOKEN || '', POLL_TOKEN = process.env.POLLINATIONS_TOKEN || '';
 async function aiImage(title) {
   const prompt = `appetizing homemade food photography of ${title}, spanish home cooking, natural window light, rustic wooden table, shallow depth of field, no text, no people`;
   if (CF_ACCOUNT && CF_TOKEN) {
@@ -935,6 +1023,25 @@ async function processSuggestionArt() {
       } else if (out !== r.data) await q('UPDATE suggestions SET rewritten=true WHERE id=$1', [r.id]);
       else break;
       await sleep(3000);
+    }
+    // títulos entendibles para todas (una vez), de 20 en 20
+    for (let k = 0; k < 20; k++) {
+      const rows = (await q("SELECT id, title, data FROM suggestions WHERE data IS NOT NULL AND title_ok IS NOT TRUE ORDER BY position LIMIT 20")).rows;
+      if (!rows.length) break;
+      let names = {};
+      if (PROVIDER) try {
+        countAi();
+        const out = parseJson(await llm({ maxTokens: 1500, messages: [{ role: 'user', text: `Pon a cada receta un título entendible. ${TITLE_RULES}
+Usa los ingredientes para saber qué plato es. Devuelve SOLO un objeto JSON {"titulos": {"<id>": "<título>"}}.
+${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
+        names = (out && out.titulos) || {};
+      } catch (e) { console.error('titulos', e.message); }
+      if (PROVIDER && !Object.keys(names).length) break;
+      for (const r of rows) {
+        const t = cleanTitle(names[r.id] || r.title);
+        await q("UPDATE suggestions SET title=$1, data=jsonb_set(data, '{title}', to_jsonb($1::text)), title_ok=true WHERE id=$2", [t, r.id]);
+      }
+      await sleep(2500);
     }
     // tipos que falten, de 20 en 20
     for (let k = 0; k < 20; k++) {

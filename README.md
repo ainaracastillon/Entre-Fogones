@@ -6,6 +6,7 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 
 - **Biblioteca en forma de estantería**: cada carpeta es un libro. Al abrirlo ves el índice y cada receta a doble página, con foto, ingredientes y preparación.
 - **Nueva receta** desde un enlace de cualquier web de cocina (el servidor lee la página y saca los datos), desde una foto (se lee entera), en un chat con IA (Groq, gratis) donde pides la receta, pides cambios y la apruebas, o escribiéndola a mano.
+- **Atrás y adelante**: el botón de atrás del móvil y deslizar desde el borde izquierdo (atrás) o derecho (adelante) hacia el centro.
 - **Raciones ajustables**: las cantidades de los ingredientes se recalculan.
 - **Compartir** recetas y carpetas con un enlace público o por el chat. Quien la recibe puede guardarse una copia.
 - **Recetas desde vídeos** de TikTok, Instagram, Facebook y YouTube (título, descripción y subtítulos), o subiendo el vídeo para que se transcriba.
@@ -30,7 +31,8 @@ Recetario para guardar tus recetas en carpetas que se ven como libros, compartir
 | `OPENAI_MODEL` | No | Modelo de ChatGPT (por defecto `gpt-4o-mini`) |
 | `ANTHROPIC_API_KEY` | No | Alternativa: la misma IA con Claude (se usa si no hay clave de OpenAI) |
 | `ANTHROPIC_MODEL` | No | Modelo de Claude (por defecto `claude-sonnet-5-5`) |
-| `CF_ACCOUNT_ID` y `CF_API_TOKEN` | No | Fotos generadas con IA para las recetas famosas con Cloudflare Workers AI (gratis con cuenta). Sin ellas se usa Pollinations, que tiene un límite muy bajo |
+| `CF_ACCOUNT_ID` y `CF_API_TOKEN` | No | Cloudflare Workers AI (gratis con cuenta): segunda IA de reserva si Groq falla o llega a su límite (texto, fotos y vídeos) y fotos generadas para las recetas famosas. Sin ellas las fotos usan Pollinations, que tiene un límite muy bajo |
+| `CF_MODEL`, `CF_VISION_MODEL`, `CF_WHISPER_MODEL` | No | Modelos de Cloudflare (por defecto `@cf/meta/llama-3.3-70b-instruct-fp8-fast`, `@cf/meta/llama-4-scout-17b-16e-instruct` y `@cf/openai/whisper-large-v3-turbo`) |
 | `BREVO_API_KEY` o `RESEND_API_KEY` | No | Envío de correos para recuperar la contraseña |
 | `MAIL_FROM` | Con correo | Remitente, p. ej. `Entre Fogones <tu-correo@gmail.com>` (en Brevo, un remitente verificado) |
 | `LEGAL_NAME` | No | Titular que aparece en los textos legales (por defecto `Ainara Castillón`) |

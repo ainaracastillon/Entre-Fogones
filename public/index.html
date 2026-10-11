@@ -75,6 +75,10 @@ main{padding-block:24px 64px}
 /* library */
 .lib-head{display:flex;justify-content:space-between;align-items:flex-end;gap:16px;flex-wrap:wrap;margin-bottom:22px}
 .lib-head h1{font-size:clamp(26px,4vw,36px);font-weight:800;letter-spacing:-.5px}
+.lib-actions{margin-bottom:18px}
+.swipe-hint{position:fixed;top:50%;z-index:90;width:44px;height:44px;border-radius:50%;background:var(--surface,#fff);color:var(--ink,#2a1d14);box-shadow:0 4px 16px rgba(0,0,0,.18);display:flex;align-items:center;justify-content:center;font-size:30px;line-height:1;pointer-events:none;transition:background .15s,color .15s}
+.swipe-hint.l{left:0}.swipe-hint.r{right:0}
+.swipe-hint.go{background:var(--accent);color:var(--accent-ink)}
 .shelf-wrap{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px 20px 0;overflow:hidden}
 .shelf{display:flex;align-items:flex-end;gap:10px;flex-wrap:wrap;min-height:230px;padding:0 6px}
 .shelf-board{height:16px;margin:0 -20px;background:var(--shelf);border-top:4px solid var(--shelf-edge)}
@@ -527,6 +531,6 @@ textarea.inp{resize:vertical;line-height:1.5}
 <footer class="legal-foot"><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=7"></script>
+<script src="/app.js?v=13"></script>
 </body>
 </html>
