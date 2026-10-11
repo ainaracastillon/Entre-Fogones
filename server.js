@@ -657,6 +657,21 @@ api.get('/_vdbg/k7Q2xw9Lm4', async (req, res) => {
     res.json({ how: v.how, title: v.title, image: !!v.image, text: v.text.slice(0, 3000) });
   } catch (e) { res.json({ error: e.message }); }
 });
+async function tiktokSelfTest() {
+  try {
+    for (const d of ['receta-facil', 'recetas-faciles', 'receta-tarta-de-queso']) {
+      const r = await jarFetch('https://www.tiktok.com/discover/' + d, {}, { Accept: 'text/html' });
+      const h = await r.text();
+      const links = [...new Set([...h.matchAll(/https?:\/\/www\.tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => m[0]))];
+      console.log('VDBG discover', d, r.status, h.length, links.slice(0, 3).join(' '));
+      for (const l of links.slice(0, 2)) {
+        const v = await videoText(l).catch(e => ({ how: ['ERR ' + e.message], text: '' }));
+        console.log('VDBG video', l, JSON.stringify(v.how), 'chars', v.text.length, '|', v.text.slice(0, 400).replace(/\n/g, ' / '));
+      }
+      if (links.length) break;
+    }
+  } catch (e) { console.log('VDBG error', e.message); }
+}
 async function importVideo(url, res) {
   let v;
   try { v = await videoText(url); }
@@ -1414,5 +1429,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(tiktokSelfTest, 8000); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });
