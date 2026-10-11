@@ -13,7 +13,7 @@ const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
 const PROD = process.env.NODE_ENV === 'production';
 
 if (!DATABASE_URL) { console.error('Falta DATABASE_URL'); process.exit(1); }
-const needsSsl = /\.render\.com|sslmode=require/.test(DATABASE_URL) || process.env.PGSSL === '1';
+const needsSsl = /\.render\.com|neon\.tech|sslmode=require/.test(DATABASE_URL) || process.env.PGSSL === '1';
 const pool = new Pool({ connectionString: DATABASE_URL, ssl: needsSsl ? { rejectUnauthorized: false } : false, max: 8 });
 const q = (text, params) => pool.query(text, params);
 
