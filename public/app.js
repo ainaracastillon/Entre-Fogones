@@ -2016,7 +2016,7 @@ function admBulkHtml(){
         <div class="grid2" id="bkUser" hidden><div class="field to-wrap"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="Escribe un nombre o @usuario" autocomplete="off" role="combobox" aria-controls="bkSug" aria-expanded="false"><div id="bkSug" class="to-sug" role="listbox" hidden></div></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
           <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas preferidas por los usuarios)</label></div></fieldset>
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
-      <div><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
+      <div class="row"><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button><button type="button" class="btn danger" id="bkStop" hidden>${ico('x')}Cancelar</button><span class="muted" id="bkProg" style="font-size:13px"></span></div>
       <ol class="bk-log" id="bkLog"></ol>
     </form></details>`;
 }
@@ -2036,24 +2036,35 @@ function bindAdmBulk(){
     const dest=f.querySelector('input[name=bkDest]:checked').value==='user'?{type:'user', username:$('#bkU').value.trim(), folder:$('#bkFo').value.trim(), public:$('#bkPub').checked}:{type:'sugg'};
     if(dest.type==='user' && !dest.username.replace(/[,\s@]/g,'')){ toast('Escribe al menos un usuario'); return; }
     const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML='';
-    const raw=async(path,blob,type)=>{ const r=await fetch(path,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/octet-stream'},body:blob}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; return jj; };
-    let ok=0;
+    // se puede cancelar en cualquier momento: corta lo que se esté leyendo y no sigue
+    let ctl=new AbortController(), stopped=false;
+    const stop=$('#bkStop'), prog=$('#bkProg'); stop.hidden=false;
+    stop.onclick=()=>{ stopped=true; ctl.abort(); stop.disabled=true; prog.textContent='Cancelando…'; };
+    const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; return jj; };
+    const raw=(path,blob)=>call(path,{method:'POST',headers:{'content-type':'application/octet-stream'},body:blob});
+    const post=(path,body)=>call('/api'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+    let ok=0, done=0;
     for(const j of jobs){
+      if(stopped) break;
+      prog.textContent=`${done+1} de ${jobs.length}`;
       const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — leyendo…`; log.append(li);
       try{
         let out;
-        if(j.k==='url') out=await api('POST','/admin/bulk/url',{url:j.v});
-        else if(j.k==='photo'){ const big=await toDataUrl(j.v,1800,.85,3000000); out=await api('POST','/admin/bulk/photo',{image:big}); }
-        else if(j.k==='video') out=await raw('/api/admin/bulk/video?type='+encodeURIComponent(j.v.type||'video/mp4'), j.v);
+        if(j.k==='url') out=await post('/admin/bulk/url',{url:j.v});
+        else if(j.k==='photo'){ const big=await toDataUrl(j.v,1800,.85,3000000); out=await post('/admin/bulk/photo',{image:big}); }
+        else if(j.k==='video') out=await raw('/api/admin/bulk/video?type='+encodeURIComponent(j.v.type||'video/mp4')+'&title='+encodeURIComponent(j.v.name.replace(/\.[^.]+$/,'')), j.v);
         else if(j.k==='text') out=await raw('/api/admin/bulk/file?name=texto.txt&type=text/plain', new Blob([j.v],{type:'text/plain'}));
         else out=await raw('/api/admin/bulk/file?name='+encodeURIComponent(j.v.name)+'&type='+encodeURIComponent(j.v.type||''), j.v);
         const recs=out.recipes||[]; let n=0;
         li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — ${recs.length} ${recs.length===1?'receta encontrada':'recetas encontradas'}, guardando…`;
-        for(const rec of recs){ try{ await api('POST','/admin/bulk/save',{recipe:rec, dest, credit}); n++; ok++; }catch{} }
-        li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(recs.slice(0,8).map(x=>x.title).join(', '))}${recs.length>8?'…':''}`; li.className='ok';
-      }catch(err){ li.innerHTML=`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
+        for(const rec of recs){ if(stopped) break; try{ await post('/admin/bulk/save',{recipe:rec, dest, credit}); n++; ok++; }catch(e){ if(stopped) break; } }
+        li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(recs.slice(0,8).map(x=>x.title).join(', '))}${recs.length>8?'…':''}${stopped&&n<recs.length?' (cancelado)':''}`; li.className='ok';
+      }catch(err){ li.innerHTML=stopped?`${ico('x')} ${esc(j.l)} — cancelado`:`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
+      done++;
     }
-    b.disabled=false; toast(`${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null;
+    if(stopped){ jobs.slice(done+1).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); }); }
+    stop.hidden=true; stop.disabled=false; prog.textContent=stopped?'Subida cancelada':'';
+    b.disabled=false; toast(`${stopped?'Cancelado. ':''}${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null;
   };
 }
 const admDo = async (fn,msg) => { try{ await fn(); toast(msg); adminLoad(); }catch(err){ toast(err.error||'No se ha podido hacer'); } };

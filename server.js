@@ -1790,7 +1790,7 @@ function jsonRecipes(t) {
   walk(j);
   return out.filter(Boolean);
 }
-async function extractMany(text) {
+async function extractMany(text, hint = '') {
   const clean = String(text || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   if (clean.length < 30) return [];
   const chunks = []; let cur = '';
@@ -1799,7 +1799,7 @@ async function extractMany(text) {
   const all = [];
   for (const ch of chunks.slice(0, 25)) {
     countAi();
-    const out = parseJson(await llm({ maxTokens: 7000, messages: [{ role: 'user', text: `En el texto que va entre las marcas puede haber una o varias recetas. Extrae TODAS, completas, sin inventar nada, en español (traduce si hace falta). Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si una receta queda cortada al principio o al final del texto, inclúyela con lo que haya.
+    const out = parseJson(await llm({ maxTokens: 7000, messages: [{ role: 'user', text: `En el texto que va entre las marcas puede haber una o varias recetas. Extrae TODAS, completas, sin inventar nada, en español (traduce si hace falta). Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si una receta queda cortada al principio o al final del texto, inclúyela con lo que haya.${hint ? '\n' + hint : ''}
 Devuelve SOLO un objeto JSON: {"recipes": [${SCHEMA}, ...]}. Si no hay ninguna receta, {"recipes": []}.
 <<<TEXTO
 ${ch}
@@ -1832,14 +1832,22 @@ function parseJsonLdAll(html) {
   return out.map(rec => parseJsonLd(`<script type="application/ld+json">${JSON.stringify(rec)}</script>`)).filter(r => r && r.ingredients.length);
 }
 const bulkErr = (res, e) => { console.error(e); res.status(e.status === 429 ? 429 : 502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : (e.userMsg || 'No he podido procesar esto.') }); };
+/* Vídeos en la subida masiva: igual que al crear una receta desde vídeo (descripción, subtítulos y audio),
+   y además se separan si en el vídeo hay varias recetas */
+const VIDEO_HINT = 'Es el texto de un vídeo de cocina de redes sociales (título, descripción y lo que se dice). Si no se dice una cantidad, pon el ingrediente sin cantidad. Ignora hashtags, menciones, promociones y frases tipo "sígueme".';
+async function videoRecipes(title, text) {
+  let recipes = await extractMany((title ? 'Título: ' + title + '\n' : '') + text, VIDEO_HINT);
+  if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
+  return recipes;
+}
 // Enlace (web o vídeo): todas las recetas que tenga
 adm.post('/bulk/url', async (req, res) => {
   try {
     const url = String(req.body.url || '').trim();
     if (isVideoUrl(url)) {
-      const v = await videoText(url);
-      if (!v.text) return res.status(422).json({ error: 'Ese vídeo no trae texto ni se ha podido escuchar.' });
-      const recipes = await extractMany((v.title ? 'Título: ' + v.title + '\n' : '') + v.text);
+      let v; try { v = await videoText(url); } catch { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer.' }); }
+      if (!v.text) return res.status(422).json({ error: 'Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.' });
+      const recipes = await videoRecipes(v.title, v.text);
       if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en ese vídeo.' });
       return res.json({ recipes: recipes.map(r => ({ ...r, image: '', source: url })) });
     }
@@ -1871,7 +1879,8 @@ adm.post('/bulk/video', express.raw({ type: () => true, limit: '25mb' }), async 
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'El archivo está vacío.' });
     const text = await transcribe(req.body, String(req.query.type || 'video/mp4'));
     if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir.' });
-    const recipes = await extractMany('Lo que se dice en el vídeo: ' + text);
+    const note = String(req.query.title || '').slice(0, 200);
+    const recipes = await videoRecipes(note, 'Lo que se dice en el vídeo: ' + text);
     if (!recipes.length) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado recetas.' });
     res.json({ recipes });
   } catch (e) { bulkErr(res, e); }
