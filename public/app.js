@@ -48,7 +48,7 @@ function avatar(id, cls=''){
   const p = S.profiles[id]||{};
   const name = p.display||p.username||'?';
   const ini = name.trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
-  return `<span class="av ${cls}" style="background:${esc(p.color||'#7A5C4C')}">${esc(ini)}</span>`;
+  return `<span class="av ${cls}" style="background:${esc(p.color||'#7A5C4C')};color:${inkOn(p.color||'#7A5C4C')}">${esc(ini)}</span>`;
 }
 const pname = id => S.profiles[id]?.display || (S.profiles[id]?.username ? '@'+S.profiles[id].username : 'Alguien');
 const puser = id => S.profiles[id]?.username ? '@'+S.profiles[id].username : '';
@@ -157,7 +157,7 @@ async function boot(){
   renderTop();
   try{
     const [cfg] = await Promise.all([api('GET','/config'), loadState()]);
-    S.ai = !!cfg.ai;
+    S.ai = !!cfg.ai; S.aiName = cfg.aiName || 'ChatGPT';
   }catch(e){
     $('#main').innerHTML = `<div class="splash"><div>${spoon(60)}<p>No se ha podido conectar con el servidor. Recarga la página en unos segundos.</p></div></div>`;
     return;
@@ -228,10 +228,10 @@ function spineH(id){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>
 function viewLibrary(){
   const name = S.profile?.display || 'tu cocina';
   const none = S.recipes.filter(r=>!r.folderId || !S.folders.some(f=>f.id===r.folderId));
-  const banner = !S.profile ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin perfil: tus recetas se guardan en este dispositivo. Crea un perfil para tenerlas en todos tus dispositivos, añadir amigos y chatear.</span><button class="btn sm" data-act="register">Crear perfil</button><button class="btn sm ghost" data-act="login">Ya tengo cuenta</button></div>` : '';
+  const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin perfil: tus recetas se guardan en este dispositivo. Crea un perfil para tenerlas en todos tus dispositivos, añadir amigos y chatear.</span><button class="btn sm" data-act="register">Crear perfil</button><button class="btn sm ghost" data-act="login">Ya tengo cuenta</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const books = [
     `<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`,
-    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return `<button class="spine" style="--cloth:${esc(f.color)};height:${spineH(f.id)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`}),
+    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return `<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`}),
     none.length?`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin carpeta, ${none.length}"><span class="st">Sin carpeta</span><span class="sc">${none.length}</span></button>`:'',
     `<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nueva carpeta">${ico('plus')}<span class="st">Nueva carpeta</span></button>`
   ].join('');
@@ -248,7 +248,7 @@ function viewLibrary(){
   <section class="recent">
     <h2>Últimas recetas</h2>
     ${recent.length?`<div class="cards">${recent.map(cardHtml).join('')}</div>`:
-      `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina${S.ai?', haz una foto a una receta, pídesela a Claude':''} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
+      `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
   </section>`;
 }
 function cardHtml(r){
@@ -488,21 +488,23 @@ function folderModal(f){
   const m=openModal(`${mHead(isNew?'Nueva carpeta':'Editar carpeta')}
     <form id="ff" style="display:grid;gap:16px">
       <div class="field"><label for="fname">Nombre</label><input id="fname" class="inp" required maxlength="40" value="${esc(f.name)}" placeholder="Postres, Cenas rápidas, De la abuela…"></div>
-      <div class="field"><label>Color de la tela</label><div class="swatches">${CLOTHS.map(([c,n])=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="${n}" aria-pressed="${c===color}"></button>`).join('')}</div></div>
+      <div class="field"><label>Color de la tela</label>${colorField('fcolor', color, CLOTHS)}</div>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri">${isNew?'Crear carpeta':'Guardar'}</button></div>
     </form>`);
-  m.querySelectorAll('.sw').forEach(b=>b.onclick=()=>{color=b.dataset.c;m.querySelectorAll('.sw').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+  initColorField(m,'fcolor',c=>{color=c});
   $('#ff',m).onsubmit=async e=>{e.preventDefault();const name=$('#fname',m).value.trim();if(!name)return;
     try{ await store.saveFolder({...f,name,color}); closeModal(); toast(isNew?'Carpeta creada':'Carpeta guardada'); }catch(err){ toast(err.error||'No se pudo guardar la carpeta'); }};
 }
 
 /* ===== Nueva receta ===== */
+const aiName = () => S.aiName || 'ChatGPT';
+const noAiHtml = what => `<div class="empty" style="padding:22px">${ico('sparkle')}<p style="margin:0;max-width:440px">${what} usa inteligencia artificial y todavía no está activada en el servidor. Mientras tanto puedes importar desde un enlace o escribir la receta a mano.</p></div>`;
 function newRecipeModal(folderId){
-  const ai=S.ai;
   const m=openModal(`${mHead('Nueva receta')}
     <div class="tabs" role="tablist">
       <button role="tab" aria-selected="true" data-tab="url">${ico('link')}Desde enlace</button>
-      ${ai?`<button role="tab" aria-selected="false" data-tab="ai">${ico('sparkle')}Con Claude</button><button role="tab" aria-selected="false" data-tab="photo">${ico('camera')}Desde foto</button>`:''}
+      <button role="tab" aria-selected="false" data-tab="photo">${ico('camera')}Desde foto</button>
+      <button role="tab" aria-selected="false" data-tab="ai">${ico('sparkle')}Con ${esc(aiName())}</button>
       <button role="tab" aria-selected="false" data-tab="hand">${ico('edit')}A mano</button>
     </div>
     <div id="tabBody"></div>`,{wide:true});
@@ -523,7 +525,7 @@ function newRecipeModal(folderId){
         const st=$('#ustatus',m), btn=$('#ugo',m); btn.disabled=true;
         try{
           if(pasted){
-            if(S.ai){ busy(st,'Claude está leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); editorModal({...recipe, source:url, folderId}); }
+            if(S.ai){ busy(st,'Leyendo la receta…'); const {recipe}=await api('POST','/ai/extract',{text:pasted}); closeModal(); editorModal({...recipe, source:url, folderId}); }
             else { closeModal(); editorModal({...roughParse(pasted), source:url, folderId}); }
             return;
           }
@@ -540,38 +542,148 @@ function newRecipeModal(folderId){
         } finally{ btn.disabled=false; }
       };
     },
-    ai:()=>{
-      body.innerHTML=`<form id="fa" style="display:grid;gap:12px">
-        <div class="field"><label for="aip">¿Qué te apetece cocinar?</label>
-        <textarea id="aip" class="inp" rows="3" required placeholder="Una tortilla de patatas jugosa para 4, con cebolla"></textarea></div>
-        <p class="muted" style="margin:0;font-size:14px">Claude escribe la receta completa y luego puedes cambiar lo que quieras antes de guardarla.</p>
-        <div id="astatus"></div>
-        <div class="row" style="justify-content:flex-end"><button class="btn pri" id="ago">${ico('sparkle')}Crear receta</button></div></form>`;
-      $('#fa',m).onsubmit=async e=>{e.preventDefault();const q=$('#aip',m).value.trim();if(!q)return;
-        const st=$('#astatus',m),btn=$('#ago',m);btn.disabled=true;busy(st,'Claude está escribiendo la receta…');
-        try{ const {recipe}=await api('POST','/ai/create',{prompt:q}); closeModal(); editorModal({...recipe, folderId, byClaude:true}); }
-        catch(err){ st.innerHTML=`<p class="err">${esc(err.error)}</p>`; } finally{btn.disabled=false}
-      };
-    },
     photo:()=>{
-      body.innerHTML=`<form id="fp" style="display:grid;gap:12px">
-        <div class="field"><label for="pfile">Foto de la receta (libro, revista o papel escrito a mano)</label><input id="pfile" class="inp" type="file" accept="image/*" required></div>
+      if(!S.ai){ body.innerHTML=noAiHtml('Leer recetas de fotos'); return; }
+      body.innerHTML=`<div style="display:grid;gap:14px">
+        <p style="margin:0">Haz una foto a la receta de un libro, una revista, una pantalla o un papel escrito a mano. Se lee entera y después la apruebas o pides cambios.</p>
+        <div class="row">
+          <label class="btn pri" for="pcam">${ico('camera')}Hacer una foto</label><input id="pcam" type="file" accept="image/*" capture="environment" hidden>
+          <label class="btn" for="pgal">${ico('book')}Elegir de la galería</label><input id="pgal" type="file" accept="image/*" hidden>
+        </div>
         <label class="row" style="font-size:14px"><input type="checkbox" id="puse"> Usar también la foto como imagen del plato</label>
         <div id="pstatus"></div>
-        <div class="row" style="justify-content:flex-end"><button class="btn pri" id="pgo">${ico('camera')}Leer la foto</button></div></form>`;
-      $('#fp',m).onsubmit=async e=>{e.preventDefault();const file=$('#pfile',m).files[0];if(!file)return;
-        const st=$('#pstatus',m),btn=$('#pgo',m);btn.disabled=true;busy(st,'Claude está leyendo la foto…');
+      </div>`;
+      const go=async file=>{ if(!file) return;
+        const st=$('#pstatus',m); busy(st,'Leyendo la receta de la foto…');
         try{ const big=await toDataUrl(file,1600,.85,3500000); const {recipe}=await api('POST','/ai/photo',{image:big});
           let image=''; if($('#puse',m).checked) image=await compressImage(file);
-          closeModal(); editorModal({...recipe, image, folderId});
-        }catch(err){ st.innerHTML=`<p class="err">${esc(err.error||'No se pudo leer la foto.')}</p>`; } finally{btn.disabled=false}
+          closeModal(); aiChatModal({folderId, seed:{recipe:{...recipe, image}, reply:'He leído la receta de la foto. Revísala: si está bien, apruébala; si quieres, pídeme cambios.'}});
+        }catch(err){ st.innerHTML=`<p class="err">${esc(err.error||'No se pudo leer la foto.')}</p>`; }
       };
+      $('#pcam',m).onchange=e=>go(e.target.files[0]);
+      $('#pgal',m).onchange=e=>go(e.target.files[0]);
+    },
+    ai:()=>{
+      if(!S.ai){ body.innerHTML=noAiHtml(`Pedir recetas a ${esc(aiName())}`); return; }
+      closeModal(); aiChatModal({folderId});
     },
     hand:()=>{ closeModal(); editorModal({folderId}); }
   };
   m.querySelectorAll('[data-tab]').forEach(t=>t.onclick=()=>{m.querySelectorAll('[data-tab]').forEach(x=>x.setAttribute('aria-selected',x===t));tabs[t.dataset.tab]()});
   tabs.url();
 }
+function recipePreview(r){
+  return `<div class="rprev"><div class="rp-col">
+      <div class="rp-t">${esc(r.title)}</div>
+      <div class="rp-m">${esc([r.servings?r.servings+' raciones':'', r.time, r.difficulty].filter(Boolean).join(' · '))}</div>
+      ${r.image?`<img src="${esc(r.image)}" alt="" class="rp-img">`:''}
+      <div class="rp-h">Ingredientes</div><ul class="ing">${(r.ingredients||[]).map(i=>`<li>${fmt(i)}</li>`).join('')}</ul>
+    </div><div class="rp-col">
+      <div class="rp-h">Preparación</div><ol class="steps">${(r.steps||[]).map(s=>`<li><span>${fmt(s)}</span></li>`).join('')}</ol>
+      ${r.notes?`<p class="note">${fmt(r.notes)}</p>`:''}
+    </div></div>`;
+}
+/* Chat con la IA: pides una receta, la revisas, pides cambios y la apruebas */
+function aiChatModal({folderId, seed}={}){
+  const st={msgs:[], recipe:null, busy:false};
+  if(folderId===undefined||folderId==='') folderId = S.book && !S.book.visiting && S.book.folder ? S.book.id : (S.folders[0]?.id||'');
+  if(seed){ st.recipe=seed.recipe; st.msgs.push({role:'assistant', text:seed.reply, raw:JSON.stringify({reply:seed.reply, recipe:seed.recipe})}); }
+  const m=openModal(`${mHead(seed?'Receta de la foto':'Receta con '+aiName())}
+    <div class="aichat" id="aichat"></div>
+    <div id="aiprev"></div>
+    <form id="aiform" class="aiform">
+      <textarea id="aiin" class="inp" rows="2" aria-label="Mensaje"></textarea>
+      <button class="btn pri" id="aigo"></button>
+    </form>
+    <div id="aierr"></div>`,{wide:true});
+  const log=$('#aichat',m), prev=$('#aiprev',m), inp=$('#aiin',m), go=$('#aigo',m);
+  const drawLog=()=>{
+    log.innerHTML = (st.msgs.length?'':`<p class="muted" style="margin:0">Dile a ${esc(aiName())} qué te apetece y te propone una receta. Luego puedes pedirle cambios hasta que te guste.</p>`)
+      + st.msgs.map(x=>`<div class="aimsg ${x.role}">${fmt(x.text)}</div>`).join('')
+      + (st.busy?`<div class="aimsg assistant"><span class="spin"></span> Pensando…</div>`:'');
+    log.scrollTop=log.scrollHeight;
+    inp.placeholder = st.recipe ? '¿Quieres cambiar algo? Ej.: sin lactosa, para 6 personas, más picante' : 'Ej.: una lasaña de verduras para 4, fácil';
+    go.innerHTML = `${ico('send')}${st.recipe?'Pedir cambios':'Pedir receta'}`;
+    go.disabled = st.busy;
+  };
+  const drawPrev=()=>{
+    if(!st.recipe){ prev.innerHTML=''; return; }
+    prev.innerHTML = recipePreview(st.recipe) + `<div class="approve">
+      <label for="aifold" class="muted" style="font-size:14px">Guardar en</label>
+      <select id="aifold" class="inp" style="width:auto;min-width:160px">${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===folderId?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!folderId?'selected':''}>Sin carpeta</option></select>
+      <span style="flex:1"></span>
+      <button type="button" class="btn" id="aiedit">${ico('edit')}Retocar a mano</button>
+      <button type="button" class="btn pri" id="aiok">${ico('save')}Aprobar</button>
+    </div>`;
+    $('#aifold',m).onchange=e=>{folderId=e.target.value};
+    $('#aiedit',m).onclick=()=>{ const r=st.recipe; closeModal(); editorModal({...r, folderId:$('#aifold',m)?.value||folderId}); };
+    $('#aiok',m).onclick=async()=>{
+      const b=$('#aiok',m); b.disabled=true;
+      const r={...st.recipe, id:gid(), folderId:folderId||null, created:now()};
+      try{ S.pendingFocus=r.id; await store.saveRecipe(r); closeModal(); toast('Receta aprobada y guardada'); openBook(r.folderId||'none', r.id); }
+      catch(err){ b.disabled=false; $('#aierr',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+    };
+  };
+  const send=async()=>{
+    const t=inp.value.trim(); if(!t||st.busy) return;
+    inp.value=''; $('#aierr',m).innerHTML='';
+    st.msgs.push({role:'user', text:t, raw:t}); st.busy=true; drawLog();
+    try{
+      const out=await api('POST','/ai/chat',{messages:st.msgs.map(x=>({role:x.role, content:x.raw}))});
+      if(out.recipe){ const keep=st.recipe?.image; st.recipe={...out.recipe, ...(keep?{image:keep}:{})}; }
+      st.msgs.push({role:'assistant', text:out.reply||(out.recipe?'Aquí la tienes.':''), raw:JSON.stringify({reply:out.reply, recipe:out.recipe})});
+    }catch(err){ st.msgs.pop(); inp.value=t; $('#aierr',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+    st.busy=false; drawLog(); drawPrev();
+  };
+  $('#aiform',m).onsubmit=e=>{e.preventDefault(); send();};
+  inp.addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); send(); } });
+  drawLog(); drawPrev();
+}
+
+/* ===== Color: muestras rápidas y ruleta para cualquier color ===== */
+function hexToRgb(h){h=String(h||'#000').replace('#','');if(h.length===3)h=[...h].map(c=>c+c).join('');const n=parseInt(h,16)||0;return [n>>16&255,n>>8&255,n&255]}
+function rgbToHex(r,g,b){return '#'+[r,g,b].map(x=>Math.max(0,Math.min(255,Math.round(x))).toString(16).padStart(2,'0')).join('').toUpperCase()}
+function hsvToRgb(h,s,v){const f=n=>{const k=(n+h/60)%6;return v-v*s*Math.max(0,Math.min(k,4-k,1))};return [f(5)*255,f(3)*255,f(1)*255]}
+function rgbToHsv(r,g,b){r/=255;g/=255;b/=255;const mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn;let h=0;if(d){if(mx===r)h=((g-b)/d)%6;else if(mx===g)h=(b-r)/d+2;else h=(r-g)/d+4;h*=60;if(h<0)h+=360}return [h,mx?d/mx:0,mx]}
+function inkOn(hex){ const [r,g,b]=hexToRgb(hex).map(x=>{x/=255;return x<=.03928?x/12.92:((x+.055)/1.055)**2.4}); return (.2126*r+.7152*g+.0722*b)>.42?'#2E1A11':'#FBF3E8'; }
+function colorField(id, value, presets){
+  return `<div class="cfield" id="${id}" data-value="${esc(value)}">
+    <div class="swatches">${presets.map(([c,n])=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="${esc(n)}"></button>`).join('')}
+      <button type="button" class="sw wheelbtn" aria-label="Elegir otro color con la ruleta" aria-expanded="false"></button></div>
+    <div class="wheelbox" hidden>
+      <div class="wheel"><canvas width="360" height="360" aria-label="Ruleta de color"></canvas><span class="knob"></span></div>
+      <div class="wheelside">
+        <label class="field"><span class="muted" style="font-size:13px">Brillo</span><input type="range" min="12" max="100" class="vslider" aria-label="Brillo"></label>
+        <div class="row"><span class="cprev"></span><input class="inp hexin" maxlength="7" aria-label="Código del color" style="width:110px"></div>
+      </div>
+    </div></div>`;
+}
+function initColorField(root, id, onChange){
+  const el=root.querySelector('#'+id); let [h,s,v]=rgbToHsv(...hexToRgb(el.dataset.value));
+  const cv=el.querySelector('canvas'), ctx=cv.getContext('2d'), knob=el.querySelector('.knob'), sl=el.querySelector('.vslider'),
+        hex=el.querySelector('.hexin'), prev=el.querySelector('.cprev'), box=el.querySelector('.wheelbox'), wb=el.querySelector('.wheelbtn');
+  const R=180;
+  const draw=()=>{ const img=ctx.createImageData(360,360), d=img.data;
+    for(let y=0;y<360;y++) for(let x=0;x<360;x++){ const dx=x-R+.5, dy=y-R+.5, r=Math.hypot(dx,dy), i=(y*360+x)*4;
+      if(r>R){ d[i+3]=0; continue; }
+      const [cr,cg,cb]=hsvToRgb((Math.atan2(dy,dx)*180/Math.PI+360)%360, r/R, v);
+      d[i]=cr; d[i+1]=cg; d[i+2]=cb; d[i+3]=r>R-1.5?Math.round(Math.max(0,(R-r)/1.5)*255):255; }
+    ctx.putImageData(img,0,0); };
+  const sync=from=>{ const c=rgbToHex(...hsvToRgb(h,s,v)); el.dataset.value=c; prev.style.background=c; if(from!=='hex') hex.value=c; sl.value=Math.round(v*100);
+    const a=h*Math.PI/180; knob.style.left=(50+Math.cos(a)*s*50)+'%'; knob.style.top=(50+Math.sin(a)*s*50)+'%'; knob.style.background=c;
+    let preset=false; el.querySelectorAll('.sw[data-c]').forEach(b=>{ const on=b.dataset.c.toUpperCase()===c; preset=preset||on; b.setAttribute('aria-pressed',on); });
+    wb.setAttribute('aria-pressed',!preset); onChange?.(c); };
+  el.querySelectorAll('.sw[data-c]').forEach(b=>b.onclick=()=>{ [h,s,v]=rgbToHsv(...hexToRgb(b.dataset.c)); if(!box.hidden) draw(); sync(); });
+  wb.onclick=()=>{ box.hidden=!box.hidden; wb.setAttribute('aria-expanded',!box.hidden); if(!box.hidden){ if(v<.75) v=.85; draw(); sync(); } };
+  const pick=e=>{ const r=cv.getBoundingClientRect(); const x=(e.clientX-r.left)/r.width*2-1, y=(e.clientY-r.top)/r.height*2-1;
+    h=(Math.atan2(y,x)*180/Math.PI+360)%360; s=Math.min(1,Math.hypot(x,y)); if(v<.15) v=.85; sync(); };
+  cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); pick(e); cv.onpointermove=pick; });
+  cv.addEventListener('pointerup',()=>{ cv.onpointermove=null; });
+  sl.oninput=()=>{ v=sl.value/100; draw(); sync(); };
+  hex.oninput=()=>{ const t=hex.value.trim(); if(/^#?[0-9a-f]{6}$/i.test(t)){ [h,s,v]=rgbToHsv(...hexToRgb(t)); if(!box.hidden) draw(); sync('hex'); } };
+  sync();
+}
+
 function roughParse(text){
   const lines=text.split('\n').map(s=>s.trim()).filter(Boolean);
   const title=lines.shift()||'';
@@ -711,12 +823,12 @@ function registerModal(){
         <span class="muted" style="font-size:13px">De 3 a 20 letras minúsculas, números o _. Tus amigos te buscan por este nombre.</span></div>
       <div class="field"><label for="rpass">Contraseña</label><input id="rpass" class="inp" type="password" required minlength="6" autocomplete="new-password">
         <span class="muted" style="font-size:13px">Al menos 6 caracteres. La necesitarás para entrar desde otro dispositivo.</span></div>
-      <div class="field"><label>Color</label><div class="swatches">${AVCOLORS.map(c=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="Color ${c}" aria-pressed="${c===color}"></button>`).join('')}</div></div>
+      <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
       <div id="rstatus"></div>
       <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" data-act="login">Ya tengo cuenta</button><button class="btn pri" id="rgo">Crear perfil</button></div>
     </form>`);
   $('#ruser',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
-  m.querySelectorAll('.sw').forEach(b=>b.onclick=()=>{color=b.dataset.c;m.querySelectorAll('.sw').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+  initColorField(m,'pcolor',c=>{color=c});
   $('#fr',m).onsubmit=async e=>{e.preventDefault(); const st=$('#rstatus',m); $('#rgo',m).disabled=true;
     try{ await api('POST','/register',{display:$('#rname',m).value.trim(), username:$('#ruser',m).value.trim(), password:$('#rpass',m).value, color});
       await loadState(); closeModal(); toast('Perfil creado. Ya puedes añadir amigos'); }
@@ -743,11 +855,11 @@ function accountModal(){
     <form id="fa" style="display:grid;gap:14px">
       <div class="row">${avatar(S.uid,'lg')}<div><div style="font-weight:700">${esc(p.display)}</div><div class="muted">@${esc(p.username)}</div></div></div>
       <div class="field"><label for="aname">Tu nombre</label><input id="aname" class="inp" required maxlength="40" value="${esc(p.display||'')}"></div>
-      <div class="field"><label>Color</label><div class="swatches">${AVCOLORS.map(c=>`<button type="button" class="sw" style="background:${c}" data-c="${c}" aria-label="Color ${c}" aria-pressed="${c===color}"></button>`).join('')}</div></div>
+      <div class="field"><label>Tu color</label>${colorField('pcolor', color, AVCOLORS.map(c=>[c,'Color '+c]))}</div>
       <div id="astatus"></div>
       <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost sm" id="aout">${ico('out')}Cerrar sesión</button><button class="btn pri" id="ago">Guardar</button></div>
     </form>`);
-  m.querySelectorAll('.sw').forEach(b=>b.onclick=()=>{color=b.dataset.c;m.querySelectorAll('.sw').forEach(x=>x.setAttribute('aria-pressed',x===b))});
+  initColorField(m,'pcolor',c=>{color=c});
   $('#aout',m).onclick=async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); closeModal(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); };
   $('#fa',m).onsubmit=async e=>{e.preventDefault();
     try{ await api('PUT','/me',{display:$('#aname',m).value.trim(), color}); await loadState(); closeModal(); toast('Perfil guardado'); }
@@ -916,6 +1028,7 @@ function recipePicker(title, cb){
 /* ===== Acciones ===== */
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
+  hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   go:el=>go(el.dataset.v),
   closeModal:()=>closeModal(),
   register:()=>{ closeModal(); registerModal(); },

@@ -10,6 +10,9 @@ const PORT = process.env.PORT || 3000;
 const DATABASE_URL = process.env.DATABASE_URL;
 const AI_KEY = process.env.ANTHROPIC_API_KEY || '';
 const AI_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
+const OPENAI_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const PROVIDER = OPENAI_KEY ? 'openai' : (AI_KEY ? 'claude' : null);
 const PROD = process.env.NODE_ENV === 'production';
 
 if (!DATABASE_URL) { console.error('Falta DATABASE_URL'); process.exit(1); }
@@ -116,7 +119,7 @@ app.use(express.static(path.join(__dirname, 'public'), { maxAge: '1h', index: 'i
 const api = express.Router();
 api.use(auth);
 
-api.get('/config', (req, res) => res.json({ ai: !!AI_KEY }));
+api.get('/config', (req, res) => res.json({ ai: !!PROVIDER, aiName: PROVIDER === 'claude' ? 'Claude' : 'ChatGPT' }));
 
 api.get('/state', async (req, res, next) => {
   try {
@@ -372,69 +375,88 @@ api.post('/import', async (req, res) => {
   catch (e) { return res.status(422).json({ error: 'No he podido abrir esa web. Pega el texto de la receta y la saco de ahí.', needText: true }); }
   const ld = parseJsonLd(html);
   if (ld && ld.ingredients.length) return res.json({ recipe: { ...ld, source: url } });
-  if (AI_KEY) {
+  if (PROVIDER) {
     try { const r = await aiExtract(htmlToText(html)); if (r) return res.json({ recipe: { ...r, image: ogImage(html), source: url } }); } catch (e) { console.error(e); }
   }
   res.status(422).json({ error: 'No he encontrado la receta en esa página. Pega el texto de la receta y la saco de ahí.', needText: true });
 });
 
-/* ---------- Claude (opcional) ---------- */
-const SCHEMA = `{"title":string,"servings":string (solo el número de raciones si aparece),"time":string (p. ej. "45 min"),"difficulty":"Fácil"|"Media"|"Difícil"|"","ingredients":[string],"steps":[string],"notes":string}`;
-async function claude(content, maxTokens = 3000) {
+/* ---------- IA (opcional): ChatGPT (OPENAI_API_KEY) o Claude (ANTHROPIC_API_KEY) ---------- */
+const SCHEMA = `{"title":string,"servings":string (solo el número de raciones),"time":string (p. ej. "45 min"),"difficulty":"Fácil"|"Media"|"Difícil"|"","ingredients":[string],"steps":[string],"notes":string}`;
+// messages: [{ role: 'user'|'assistant', text, image?: { media, data } }]
+async function llm({ system = '', messages, maxTokens = 3000 }) {
+  if (PROVIDER === 'openai') {
+    const msgs = system ? [{ role: 'system', content: system }] : [];
+    for (const m of messages) msgs.push({ role: m.role, content: m.image
+      ? [{ type: 'text', text: m.text }, { type: 'image_url', image_url: { url: `data:${m.image.media};base64,${m.image.data}` } }] : m.text });
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST', signal: AbortSignal.timeout(90000),
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${OPENAI_KEY}` },
+      body: JSON.stringify({ model: OPENAI_MODEL, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens })
+    });
+    if (!r.ok) throw new Error('openai ' + r.status + ' ' + (await r.text()).slice(0, 300));
+    const j = await r.json();
+    return j.choices?.[0]?.message?.content || '';
+  }
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'content-type': 'application/json', 'x-api-key': AI_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: AI_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content }] })
+    body: JSON.stringify({ model: AI_MODEL, max_tokens: maxTokens, ...(system ? { system } : {}), messages: messages.map(m => ({ role: m.role, content: m.image
+      ? [{ type: 'image', source: { type: 'base64', media_type: m.image.media, data: m.image.data } }, { type: 'text', text: m.text }] : m.text })) })
   });
   if (!r.ok) throw new Error('claude ' + r.status + ' ' + (await r.text()).slice(0, 300));
   const j = await r.json();
-  const t = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
-  const m = t.match(/\{[\s\S]*\}/); if (!m) return null;
-  return JSON.parse(m[0]);
+  return (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
 }
+function parseJson(t) { const m = String(t || '').match(/\{[\s\S]*\}/); if (!m) return null; try { return JSON.parse(m[0]); } catch { return null; } }
 function cleanAi(r) {
   if (!r || r.error || !r.title) return null;
-  return { title: String(r.title), servings: String(r.servings || ''), time: String(r.time || ''), difficulty: String(r.difficulty || ''),
+  return { title: String(r.title), servings: String(r.servings || '').match(/\d+/)?.[0] || String(r.servings || ''), time: String(r.time || ''), difficulty: String(r.difficulty || ''),
     ingredients: (r.ingredients || []).map(String).filter(Boolean), steps: (r.steps || []).map(s => String(s).replace(/^\s*\d+[.)]\s*/, '')).filter(Boolean), notes: String(r.notes || '') };
 }
 async function aiExtract(text) {
-  return cleanAi(await claude(`Extrae la receta del texto de una página web que va entre las marcas. Devuelve SOLO un objeto JSON con esta forma:
+  return cleanAi(parseJson(await llm({ messages: [{ role: 'user', text: `Extrae la receta del texto de una página web que va entre las marcas. Devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
 Reglas: usa solo lo que aparece en el texto, sin inventar nada. Escribe en español (traduce si hace falta). Un ingrediente por elemento, con su cantidad delante. Un paso por elemento, sin numerar. Si alguna palabra o frase está en negrita escríbela como **texto**, y si está en cursiva como *texto*; no añadas formato que no esté. Ignora comentarios, anuncios y menús de la web. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.
 <<<TEXTO
 ${String(text).slice(0, 45000)}
-TEXTO>>>`));
+TEXTO>>>` }] })));
 }
-const noAi = res => res.status(503).json({ error: 'Las funciones con Claude no están activadas en este servidor.' });
+const noAi = res => res.status(503).json({ error: 'La IA no está activada en este servidor todavía.' });
 api.post('/ai/extract', async (req, res) => {
-  if (!AI_KEY) return noAi(res);
+  if (!PROVIDER) return noAi(res);
   try { const r = await aiExtract(req.body.text || ''); if (!r) return res.status(422).json({ error: 'No he encontrado una receta en ese texto. Revisa que hayas copiado la página entera.' }); res.json({ recipe: r }); }
-  catch (e) { console.error(e); res.status(502).json({ error: 'Claude no ha podido leer el texto. Vuelve a intentarlo.' }); }
+  catch (e) { console.error(e); res.status(502).json({ error: 'No he podido leer el texto. Vuelve a intentarlo.' }); }
 });
-api.post('/ai/create', async (req, res) => {
-  if (!AI_KEY) return noAi(res);
+const CHEF = `Eres el asistente de cocina de Entre Fogones, una app de recetas. Ayudas a crear recetas caseras en español de España.
+Responde SIEMPRE con un único objeto JSON con esta forma: {"reply": string, "recipe": ${SCHEMA} o null}.
+- "reply": una o dos frases cercanas que digan qué receta propones o qué has cambiado.
+- Cuando te pidan una receta, devuelve la receta completa en "recipe".
+- Cuando te pidan cambios, devuelve en "recipe" la receta completa ya modificada, no solo lo que cambia.
+- Si te preguntan algo que no es una receta, contesta en "reply" y pon "recipe": null.
+Usa cantidades métricas (g, ml, cucharadas), un ingrediente por elemento con su cantidad delante, pasos claros sin numerar, y en "notes" un consejo breve de cocinero. Puedes marcar con **texto** lo más importante de un paso.`;
+api.post('/ai/chat', async (req, res) => {
+  if (!PROVIDER) return noAi(res);
+  const msgs = (Array.isArray(req.body.messages) ? req.body.messages : []).slice(-20)
+    .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', text: String(m.content || '').slice(0, 12000) })).filter(m => m.text);
+  if (!msgs.length || msgs[msgs.length - 1].role !== 'user') return res.status(400).json({ error: 'Escribe qué receta quieres.' });
   try {
-    const r = cleanAi(await claude(`Escribe una receta de cocina casera en español de España para esta petición: "${String(req.body.prompt || '').slice(0, 600)}".
-Devuelve SOLO un objeto JSON con esta forma:
-${SCHEMA}
-Usa cantidades métricas (g, ml, cucharadas), pasos claros y concretos, marca en negrita con **texto** lo más importante de cada paso solo si ayuda, y en "notes" un consejo breve de cocinero.`));
-    if (!r) return res.status(502).json({ error: 'Claude no devolvió una receta legible. Vuelve a intentarlo.' });
-    res.json({ recipe: r });
-  } catch (e) { console.error(e); res.status(502).json({ error: 'Claude no ha podido escribir la receta. Vuelve a intentarlo.' }); }
+    const out = parseJson(await llm({ system: CHEF, messages: msgs, maxTokens: 3500 }));
+    if (!out) return res.status(502).json({ error: 'No he entendido la respuesta. Vuelve a intentarlo.' });
+    res.json({ reply: String(out.reply || ''), recipe: cleanAi(out.recipe) });
+  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
 api.post('/ai/photo', async (req, res) => {
-  if (!AI_KEY) return noAi(res);
+  if (!PROVIDER) return noAi(res);
   const m = String(req.body.image || '').match(/^data:(image\/(?:jpeg|png|webp|gif));base64,(.+)$/);
   if (!m) return res.status(400).json({ error: 'Esa imagen no se puede leer.' });
   try {
-    const r = cleanAi(await claude([
-      { type: 'image', source: { type: 'base64', media_type: m[1], data: m[2] } },
-      { type: 'text', text: `La imagen es una foto de una receta (de un libro, revista o papel escrito a mano). Transcribe la receta y devuelve SOLO un objeto JSON con esta forma:
+    const r = cleanAi(parseJson(await llm({ messages: [{ role: 'user', image: { media: m[1], data: m[2] }, text: `La imagen es una foto de una receta (de un libro, revista, pantalla o papel escrito a mano). Transcribe la receta completa y devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Reglas: usa solo lo que se lee en la foto, sin inventar. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Escribe en español. Un ingrediente por elemento, un paso por elemento sin numerar. Si no hay receta, devuelve {"error":"no_recipe"}.` }]));
-    if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida y recta.' });
+Reglas: usa solo lo que se lee en la foto, sin inventar. Escribe en español. Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.` }] })));
+    if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida, recta y con buena luz.' });
     res.json({ recipe: r });
-  } catch (e) { console.error(e); res.status(502).json({ error: 'Claude no ha podido leer la foto. Vuelve a intentarlo.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido leer la foto. Vuelve a intentarlo.' }); }
 });
 
 app.use('/api', api);
