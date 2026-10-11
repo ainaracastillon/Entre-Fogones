@@ -708,20 +708,14 @@ api.get('/_vdbg/k7Q2xw9Lm4', async (req, res) => {
   } catch (e) { res.json({ error: e.message }); }
 });
 async function tiktokSelfTest() {
-  try {
-    for (const d of ['receta-facil', 'recetas-faciles', 'receta-tarta-de-queso']) {
-      const r = await jarFetch('https://www.tiktok.com/discover/' + d, {}, { Accept: 'text/html' });
-      const h = (await r.text()).replace(/\\u002F/gi, '/').replace(/\\\//g, '/');
-      let links = [...new Set([...h.matchAll(/tiktok\.com\/@[\w.-]+\/video\/\d+/g)].map(m => 'https://www.' + m[0]))];
-      if (!links.length) links = [...new Set([...h.matchAll(/"(?:id|itemId|videoId)":"(\d{18,20})"/g)].map(m => 'https://www.tiktok.com/@/video/' + m[1]))];
-      const ix = h.indexOf('/video/'); console.log('VDBG discover', d, r.status, h.length, links.slice(0, 3).join(' '), ix > 0 ? h.slice(ix - 80, ix + 40) : 'sin /video/', (h.match(/<title>[^<]*/) || [''])[0]);
-      for (const l of links.slice(0, 2)) {
-        const v = await videoText(l).catch(e => ({ how: ['ERR ' + e.message], text: '' }));
-        console.log('VDBG video', l, JSON.stringify(v.how), 'chars', v.text.length, '|', v.text.slice(0, 400).replace(/\n/g, ' / '));
-      }
-      if (links.length) break;
-    }
-  } catch (e) { console.log('VDBG error', e.message); }
+  for (const l of ['https://www.tiktok.com/@scout2015/video/6718335390845095173']) {
+    try {
+      const jar = {}; const r = await jarFetch(l, jar, { Accept: 'text/html' }); const h = await r.text();
+      console.log('VDBG page', r.status, h.length, /__UNIVERSAL_DATA_FOR_REHYDRATION__/.test(h), /SIGI_STATE/.test(h), /webapp.video-detail/.test(h), (h.match(/<title>[^<]*/) || [''])[0], Object.keys(jar).join(','));
+      const v = await videoText(l);
+      console.log('VDBG video', JSON.stringify(v.how), 'chars', v.text.length, '|', v.text.slice(0, 300).replace(/\n/g, ' / '));
+    } catch (e) { console.log('VDBG error', e.message); }
+  }
 }
 async function importVideo(url, res) {
   let v;
