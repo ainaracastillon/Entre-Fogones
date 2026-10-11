@@ -864,7 +864,7 @@ async function processSuggestions() {
   if (suggBusy) return; suggBusy = true;
   try {
     await crawlSuggestions().catch(e => console.error('crawl', e.message));
-    const rows = (await q("SELECT id,url FROM suggestions WHERE data IS NULL AND coalesce(tries,0)<3 ORDER BY position LIMIT 40")).rows;
+    const rows = (await q("SELECT id,url FROM suggestions WHERE data IS NULL AND coalesce(tries,0)<3 ORDER BY position LIMIT 200")).rows;
     for (const s of rows) {
       try {
         const r = await safeFetch(s.url); const html = await r.text();
