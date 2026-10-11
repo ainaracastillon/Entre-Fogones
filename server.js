@@ -1760,6 +1760,70 @@ adm.delete('/users/:id', needSuper, async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+/* Subida masiva de archivos de cualquier tipo: se saca el texto y la IA encuentra TODAS las recetas que haya */
+async function fileText(buf, name, type) {
+  const ext = (String(name).toLowerCase().match(/\.([a-z0-9]+)$/) || [])[1] || '';
+  if (ext === 'pdf' || /pdf/.test(type)) {
+    try { const pdf = require('pdf-parse/lib/pdf-parse.js'); return (await pdf(buf)).text || ''; }
+    catch (e) { console.error('pdf', e.message); return ''; }
+  }
+  if (ext === 'docx' || /officedocument\.wordprocessingml/.test(type)) {
+    try { const mammoth = require('mammoth'); return (await mammoth.extractRawText({ buffer: buf })).value || ''; }
+    catch (e) { console.error('docx', e.message); return ''; }
+  }
+  if (['odt', 'pages', 'epub'].includes(ext)) return '';
+  let t = buf.toString('utf8');
+  if (ext === 'doc' || /msword/.test(type)) t = buf.toString('latin1').replace(/[^\x20-\x7E\xA0-\xFF\n\r\t]+/g, ' ').replace(/\s{3,}/g, '\n');
+  else if (ext === 'rtf' || /rtf/.test(type)) t = t.replace(/\\'([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))).replace(/\\par[d]?/g, '\n').replace(/\{\\\*[^}]*\}|\\[a-z]+-?\d* ?|[{}]/gi, '');
+  else if (['html', 'htm', 'xml'].includes(ext) || /html|xml/.test(type)) t = htmlToText(t);
+  return t;
+}
+function jsonRecipes(t) {
+  let j; try { j = JSON.parse(t); } catch { return null; }
+  const out = [];
+  const walk = o => { if (!o || typeof o !== 'object') return; if (Array.isArray(o)) return o.forEach(walk);
+    const ing = o.ingredients || o.ingredientes || o.recipeIngredient, st = o.steps || o.pasos || o.preparacion || o.preparación || o.instructions || o.recipeInstructions;
+    if ((o.title || o.titulo || o.título || o.name || o.nombre) && (ing || st)) {
+      const arr = v => Array.isArray(v) ? v.map(x => typeof x === 'string' ? x : (x && (x.text || x.name)) || '').filter(Boolean) : String(v || '').split(/\n+/).filter(Boolean);
+      out.push(cleanAi({ title: o.title || o.titulo || o.título || o.name || o.nombre, servings: o.servings || o.raciones || o.recipeYield || '', time: o.time || o.tiempo || '', difficulty: o.difficulty || o.dificultad || '', ingredients: arr(ing), steps: arr(st), notes: o.notes || o.notas || '' }));
+    } else Object.values(o).forEach(walk); };
+  walk(j);
+  return out.filter(Boolean);
+}
+async function extractMany(text) {
+  const clean = String(text || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+  if (clean.length < 30) return [];
+  const chunks = []; let cur = '';
+  for (const para of clean.split(/\n(?=\s*\S)/)) { if ((cur + '\n' + para).length > 14000 && cur) { chunks.push(cur); cur = para; } else cur += (cur ? '\n' : '') + para; }
+  if (cur) chunks.push(cur);
+  const all = [];
+  for (const ch of chunks.slice(0, 25)) {
+    countAi();
+    const out = parseJson(await llm({ maxTokens: 7000, messages: [{ role: 'user', text: `En el texto que va entre las marcas puede haber una o varias recetas. Extrae TODAS, completas, sin inventar nada, en español (traduce si hace falta). Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si una receta queda cortada al principio o al final del texto, inclúyela con lo que haya.
+Devuelve SOLO un objeto JSON: {"recipes": [${SCHEMA}, ...]}. Si no hay ninguna receta, {"recipes": []}.
+<<<TEXTO
+${ch}
+TEXTO>>>` }] }));
+    for (const r of (out && Array.isArray(out.recipes) ? out.recipes : [])) { const c = cleanAi(r); if (c && (c.ingredients.length || c.steps.length)) all.push(c); }
+  }
+  // quita repetidas (recetas cortadas entre dos trozos)
+  const seen = new Map();
+  for (const r of all) { const k = r.title.toLowerCase().trim(); const p = seen.get(k); if (!p || (r.ingredients.length + r.steps.length) > (p.ingredients.length + p.steps.length)) seen.set(k, r); }
+  return [...seen.values()];
+}
+adm.post('/bulk/file', express.raw({ type: () => true, limit: '40mb' }), async (req, res) => {
+  try {
+    if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'El archivo está vacío.' });
+    const name = String(req.query.name || 'archivo'), type = String(req.query.type || req.headers['content-type'] || '');
+    const text = await fileText(req.body, name, type);
+    if (/\.json$/i.test(name) || /json/.test(type)) { const js = jsonRecipes(text); if (js && js.length) return res.json({ recipes: js }); }
+    if (!text || text.trim().length < 30) return res.status(422).json({ error: /\.pdf$/i.test(name) ? 'Este PDF no tiene texto (parece escaneado). Súbelo como fotos.' : 'No he podido leer texto en este archivo.' });
+    if (!PROVIDER) return noAi(res);
+    const recipes = await extractMany(text);
+    if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en este archivo.' });
+    res.json({ recipes });
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : 'No he podido procesar el archivo.' }); }
+});
 // Subida masiva: cada receta ya leída (de enlace, vídeo, foto o texto) se guarda donde diga el administrador
 adm.post('/bulk/save', async (req, res, next) => {
   try {
