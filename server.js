@@ -67,12 +67,15 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS suggestions(
     id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL, author TEXT, image TEXT, position INT NOT NULL DEFAULT 0, hidden BOOLEAN, tries INT, created BIGINT NOT NULL);
   CREATE TABLE IF NOT EXISTS ai_usage(day TEXT PRIMARY KEY, n INT NOT NULL DEFAULT 0);
+  ALTER TABLE suggestions ADD COLUMN IF NOT EXISTS data JSONB;
   CREATE TABLE IF NOT EXISTS notices(
     id TEXT PRIMARY KEY, title TEXT, body TEXT, image TEXT, url TEXT, url_label TEXT, dismissible BOOLEAN NOT NULL DEFAULT true,
     popup BOOLEAN NOT NULL DEFAULT false, active BOOLEAN NOT NULL DEFAULT true, created BIGINT NOT NULL, created_by TEXT);
   CREATE TABLE IF NOT EXISTS notice_reads(
     notice_id TEXT NOT NULL REFERENCES notices(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     read_at BIGINT NOT NULL, dismissed BOOLEAN NOT NULL DEFAULT false, PRIMARY KEY(notice_id,user_id));
+  ALTER TABLE notices ADD COLUMN IF NOT EXISTS audience TEXT NOT NULL DEFAULT 'all';
+  ALTER TABLE notices ADD COLUMN IF NOT EXISTS recipients JSONB NOT NULL DEFAULT '[]'::jsonb;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_at BIGINT;
   CREATE UNIQUE INDEX IF NOT EXISTS users_email ON users(lower(email)) WHERE email IS NOT NULL;
   CREATE TABLE IF NOT EXISTS password_resets(
@@ -138,7 +141,7 @@ function cleanRecipe(b) {
   return {
     title: s(b.title, 160) || 'Sin título', image, servings: s(b.servings, 20), time: s(b.time, 40), difficulty: s(b.difficulty, 20),
     ingredients: arr(b.ingredients, 120, 300), steps: arr(b.steps, 80, 2000), notes: s(b.notes, 2000),
-    source: /^https?:\/\//.test(b.source || '') ? s(b.source, 600) : '', fromUid: b.fromUid ? s(b.fromUid, 60) : null
+    source: /^https?:\/\//.test(b.source || '') ? s(b.source, 600) : '', fromUid: b.fromUid ? s(b.fromUid, 60) : null, fromSugg: b.fromSugg ? s(b.fromSugg, 60) : null
   };
 }
 const idOk = id => /^[A-Za-z0-9]{6,40}$/.test(id || '');
@@ -812,26 +815,84 @@ const SEED_SUGGESTIONS = [
   ['Huevos fritos en queso feta, receta viral de TikTok', 'https://cookpad.com/es/recetas/17113916', 'Josemi CilantroYHierbabuena'],
   ['Tiramisú versionado del original de Jamie Oliver', 'https://cookpad.com/es/recetas/17062654', 'Cocina con Celi'],
 ];
+/* ---------- Recetas famosas (sugerencias) ----------
+   Se buscan en las búsquedas de recetas famosas, se guardan completas en nuestra base de datos
+   y, si hay IA, se reescriben con palabras propias. En la app se abren como cualquier otra receta. */
+const SUGG_SEARCHES = (process.env.SUGG_SEARCHES || 'famosas,virales,tiktok,arguiñano,jordi cruz,dabiz muñoz,clásicas,tradicionales,de la abuela').split(',').map(x => x.trim()).filter(Boolean);
+const SUGG_TARGET = Number(process.env.SUGG_TARGET || 120);
 async function seedSuggestions() {
   const n = (await q('SELECT count(*)::int n FROM suggestions')).rows[0].n;
   if (n) return;
   let i = 0;
-  for (const [title, url, author] of SEED_SUGGESTIONS) await q('INSERT INTO suggestions(id,title,url,author,image,position,created) VALUES($1,$2,$3,$4,NULL,$5,$6)', [gid(), title, url, author, i++, now()]);
+  for (const [title, url] of SEED_SUGGESTIONS) await q('INSERT INTO suggestions(id,title,url,image,position,created) VALUES($1,$2,$3,NULL,$4,$5) ON CONFLICT DO NOTHING', [gid(), title, url, i++, now()]);
 }
-async function enrichSuggestions() {
-  const rows = (await q("SELECT id,url FROM suggestions WHERE image IS NULL AND (tries IS NULL OR tries<3) LIMIT 30")).rows;
-  for (const s of rows) {
-    try {
-      const r = await safeFetch(s.url); const html = await r.text();
-      const ld = parseJsonLd(html); const img = (ld && ld.image) || metaTag(html, 'og:image');
-      if (img) await q('UPDATE suggestions SET image=$1 WHERE id=$2', [String(img).slice(0, 800), s.id]);
-      else await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]);
-    } catch { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]).catch(() => {}); }
+async function crawlSuggestions() {
+  const have = (await q('SELECT count(*)::int n FROM suggestions')).rows[0].n;
+  if (have >= SUGG_TARGET) return;
+  const known = new Set((await q('SELECT url FROM suggestions')).rows.map(r => r.url));
+  let pos = (await q('SELECT coalesce(max(position),0) p FROM suggestions')).rows[0].p;
+  let added = 0;
+  outer: for (const term of SUGG_SEARCHES) for (let page = 1; page <= 3; page++) {
+    let html = '';
+    try { const r = await safeFetch(`https://cookpad.com/es/buscar/${encodeURIComponent(term)}?page=${page}`); if (!r.ok) break; html = await r.text(); } catch { break; }
+    const ids = [...new Set([...html.matchAll(/\/es\/recetas\/(\d{5,})/g)].map(m => m[1]))];
+    if (!ids.length) break;
+    for (const id of ids) {
+      const url = `https://cookpad.com/es/recetas/${id}`;
+      if (known.has(url)) continue; known.add(url);
+      await q('INSERT INTO suggestions(id,title,url,position,created) VALUES($1,$2,$3,$4,$5)', [gid(), 'Receta', url, ++pos, now()]);
+      if (have + ++added >= SUGG_TARGET) break outer;
+    }
+    await sleep(1500);
   }
+  if (added) console.log('Sugerencias nuevas:', added);
+}
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function rewriteRecipe(r) {
+  if (!PROVIDER) return r;
+  try {
+    countAi();
+    const out = cleanAi(parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Reescribe esta receta con tus propias palabras para un recetario casero en español de España. Mantén los mismos ingredientes y cantidades, y los mismos pasos, pero redactados de nuevo, claros y directos. El título debe ser el nombre del plato, sin nombres de personas, cocineros, restaurantes ni webs, y sin emojis. En "notes" pon un consejo breve propio. Devuelve SOLO un objeto JSON con esta forma:
+${SCHEMA}
+Receta:
+${JSON.stringify({ title: r.title, servings: r.servings, time: r.time, ingredients: r.ingredients, steps: r.steps }).slice(0, 20000)}` }] })));
+    return out ? { ...out, image: r.image } : r;
+  } catch (e) { console.error('rewrite', e.message); return r; }
+}
+let suggBusy = false;
+async function processSuggestions() {
+  if (suggBusy) return; suggBusy = true;
+  try {
+    await crawlSuggestions().catch(e => console.error('crawl', e.message));
+    const rows = (await q("SELECT id,url FROM suggestions WHERE data IS NULL AND coalesce(tries,0)<3 ORDER BY position LIMIT 40")).rows;
+    for (const s of rows) {
+      try {
+        const r = await safeFetch(s.url); const html = await r.text();
+        const ld = parseJsonLd(html);
+        if (!ld || !ld.ingredients.length || !ld.steps.length) { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]); continue; }
+        ld.image = ld.image || metaTag(html, 'og:image') || '';
+        const rec = await rewriteRecipe(ld);
+        const data = cleanRecipe({ ...rec, source: '' });
+        await q('UPDATE suggestions SET data=$1, title=$2, image=$3 WHERE id=$4', [data, data.title, data.image || null, s.id]);
+      } catch { await q('UPDATE suggestions SET tries=coalesce(tries,0)+1 WHERE id=$1', [s.id]).catch(() => {}); }
+      await sleep(PROVIDER ? 2500 : 800);
+    }
+  } finally { suggBusy = false; }
 }
 api.get('/suggestions', async (req, res, next) => {
-  try { res.json((await q('SELECT id,title,url,author,image FROM suggestions WHERE hidden IS NOT TRUE ORDER BY position, created')).rows); } catch (e) { next(e); }
+  try {
+    const rows = (await q("SELECT id,title,image,data->>'time' t FROM suggestions WHERE data IS NOT NULL AND hidden IS NOT TRUE ORDER BY position, created")).rows;
+    res.json(rows.map(x => ({ id: x.id, title: x.title, image: x.image, time: x.t || '' })));
+  } catch (e) { next(e); }
 });
+api.get('/suggestions/:id', async (req, res, next) => {
+  try {
+    const r = (await q('SELECT id,data FROM suggestions WHERE id=$1 AND data IS NOT NULL AND hidden IS NOT TRUE', [req.params.id])).rows[0];
+    if (!r) return res.status(404).json({ error: 'Esta receta ya no está disponible.' });
+    res.json({ ...r.data, id: 'sg' + r.id.slice(0, 30), suggId: r.id, source: '' });
+  } catch (e) { next(e); }
+});
+
 
 /* ---------- Alérgenos: la IA mira si la receta tiene algo que el usuario no puede tomar ---------- */
 api.post('/ai/allergens', needProfile, async (req, res) => {
@@ -958,7 +1019,7 @@ adm.delete('/contact/:id', async (req, res, next) => {
   try { await q('DELETE FROM contact_messages WHERE id=$1', [req.params.id]); res.json({ ok: true }); } catch (e) { next(e); }
 });
 adm.get('/suggestions', async (req, res, next) => {
-  try { res.json((await q('SELECT id,title,url,author,image,hidden,position FROM suggestions ORDER BY position, created')).rows); } catch (e) { next(e); }
+  try { res.json((await q('SELECT id,title,url,author,image,hidden,position,(data IS NOT NULL) lista, coalesce(tries,0) tries FROM suggestions ORDER BY (data IS NOT NULL) DESC, position, created')).rows); } catch (e) { next(e); }
 });
 adm.post('/suggestions', async (req, res, next) => {
   try {
@@ -969,6 +1030,7 @@ adm.post('/suggestions', async (req, res, next) => {
     if (!title) return res.status(422).json({ error: 'No he podido leer esa receta. Escribe el título.' });
     const pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
     await q('INSERT INTO suggestions(id,title,url,author,image,position,created) VALUES($1,$2,$3,$4,$5,$6,$7)', [gid(), title.slice(0, 160), url, author || null, image, pos, now()]);
+    setTimeout(() => processSuggestions().catch(() => {}), 500);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -985,13 +1047,17 @@ function cleanNotice(b) {
   if (image && !/^data:image\/(jpeg|png|webp|gif);base64,/.test(image) && !/^https?:\/\//.test(image)) image = '';
   const url = /^https?:\/\//.test(b.url || '') ? s(b.url, 800) : '';
   return { title: s(b.title, 120), body: s(b.body, 2000), image: image || null, url: url || null, url_label: s(b.url_label, 40) || null,
-    dismissible: b.dismissible !== false, popup: !!b.popup };
+    dismissible: b.dismissible !== false, popup: !!b.popup,
+    audience: ['all', 'admins', 'users'].includes(b.audience) ? b.audience : 'all',
+    recipients: (Array.isArray(b.recipients) ? b.recipients : []).map(x => s(x, 60)).filter(Boolean).slice(0, 500) };
 }
 api.get('/notices', async (req, res, next) => {
   try {
     const rows = (await q(`SELECT n.id,n.title,n.body,n.image,n.url,n.url_label,n.dismissible,n.popup,n.created, r.read_at, coalesce(r.dismissed,false) dismissed
       FROM notices n LEFT JOIN notice_reads r ON r.notice_id=n.id AND r.user_id=$1
-      WHERE n.active AND NOT (coalesce(r.dismissed,false) AND n.dismissible) ORDER BY n.created DESC LIMIT 50`, [req.user.id])).rows;
+      WHERE n.active AND NOT (coalesce(r.dismissed,false) AND n.dismissible)
+        AND (n.audience='all' OR (n.audience='admins' AND $2) OR (n.audience='users' AND n.recipients ? $1))
+      ORDER BY n.created DESC LIMIT 50`, [req.user.id, !!isAdmin(req.user)])).rows;
     res.json(rows.map(n => ({ ...n, created: Number(n.created), read: !!n.read_at, read_at: undefined })));
   } catch (e) { next(e); }
 });
@@ -1013,7 +1079,10 @@ adm.get('/notices', async (req, res, next) => {
     const rows = (await q(`SELECT n.*, u.username autor,
       (SELECT count(*)::int FROM notice_reads r JOIN users x ON x.id=r.user_id WHERE r.notice_id=n.id AND x.username IS NOT NULL) leidas_cuentas,
       (SELECT count(*)::int FROM notice_reads r JOIN users x ON x.id=r.user_id WHERE r.notice_id=n.id AND x.username IS NULL) leidas_anonimas,
-      (SELECT count(*)::int FROM notice_reads r WHERE r.notice_id=n.id AND r.dismissed) quitadas
+      (SELECT count(*)::int FROM notice_reads r WHERE r.notice_id=n.id AND r.dismissed) quitadas,
+      CASE WHEN n.audience='admins' THEN (SELECT count(*)::int FROM users WHERE role IN ('admin','superadmin') AND username IS NOT NULL)
+           WHEN n.audience='users' THEN jsonb_array_length(n.recipients) END destinatarios,
+      CASE WHEN n.audience='users' THEN (SELECT string_agg('@'||username, ', ') FROM users WHERE n.recipients ? id) END para
       FROM notices n LEFT JOIN users u ON u.id=n.created_by ORDER BY n.created DESC LIMIT 100`)).rows;
     res.json(rows.map(n => ({ ...n, created: Number(n.created) })));
   } catch (e) { next(e); }
@@ -1022,8 +1091,9 @@ adm.post('/notices', async (req, res, next) => {
   try {
     const n = cleanNotice(req.body);
     if (!n.title && !n.body && !n.image) return res.status(400).json({ error: 'Pon al menos un título, un texto o una imagen.' });
-    await q(`INSERT INTO notices(id,title,body,image,url,url_label,dismissible,popup,active,created,created_by) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10)`,
-      [gid(), n.title || null, n.body || null, n.image, n.url, n.url_label, n.dismissible, n.popup, now(), req.user.id]);
+    if (n.audience === 'users' && !n.recipients.length) return res.status(400).json({ error: 'Elige al menos una persona.' });
+    await q(`INSERT INTO notices(id,title,body,image,url,url_label,dismissible,popup,active,created,created_by,audience,recipients) VALUES($1,$2,$3,$4,$5,$6,$7,$8,true,$9,$10,$11,$12)`,
+      [gid(), n.title || null, n.body || null, n.image, n.url, n.url_label, n.dismissible, n.popup, now(), req.user.id, n.audience, JSON.stringify(n.audience === 'users' ? n.recipients : [])]);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -1055,5 +1125,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => enrichSuggestions().catch(e => console.error(e)), 5000); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });

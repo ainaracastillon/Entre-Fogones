@@ -312,7 +312,7 @@ function viewLibrary(){
       `<div class="empty">${spoon(54,'var(--muted)','var(--bg)')}<p style="margin:0">Aquí aparecerán tus recetas. Pega un enlace de una web de cocina o de un vídeo, haz una foto a una receta, pídesela a ${esc(aiName())} o escríbela tú.</p><button class="btn pri" data-act="newRecipe">${ico('plus')}Añadir la primera receta</button></div>`}
   </section>
   <section class="recent sugg">
-    <div class="sugg-h"><h2>Recetas famosas</h2><p class="muted">Ideas de Cookpad para guardar en tus recetarios.</p></div>
+    <div class="sugg-h"><h2>Recetas famosas</h2><p class="muted">Ábrelas y guarda las que te gusten en tus recetarios.</p></div>
     <div class="cards" id="suggList">${suggHtml()}</div>
   </section>`;
 }
@@ -326,12 +326,13 @@ function cardHtml(r){
 /* Sugerencias de recetas famosas */
 function suggHtml(){
   if(!S.sugg) return `<p class="muted" style="margin:0">Cargando ideas…</p>`;
-  if(!S.sugg.length) return `<p class="muted" style="margin:0">Ahora mismo no hay sugerencias.</p>`;
-  const saved=new Set(S.recipes.map(r=>r.source).filter(Boolean));
+  if(!S.sugg.length) return `<p class="muted" style="margin:0">Estamos preparando las recetas. Vuelve en un rato.</p>`;
+  const saved=new Set(S.recipes.map(r=>r.fromSugg).filter(Boolean));
   return S.sugg.map(s=>`<div class="rcard sg">
-    <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
-    <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span><span class="mm">${esc(s.author?'De '+s.author:'Cookpad')}</span></span>
-    ${saved.has(s.url)?`<span class="saved" title="Ya está en tus recetarios">${ico('check')}</span>`:`<button class="btn sm tbtn" data-act="addSugg" data-id="${esc(s.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button>`}
+    <button class="sg-open" data-act="openSugg" data-id="${esc(s.id)}">
+      <span class="thumb">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0;flex:1"><span class="tt">${esc(s.title)}</span>${s.time?`<span class="mm">${esc(s.time)}</span>`:''}</span></button>
+    ${saved.has(s.id)?`<span class="saved" title="Ya está en tus recetarios">${ico('check')}</span>`:`<button class="btn sm tbtn" data-act="addSugg" data-id="${esc(s.id)}" aria-label="Añadir a un recetario" title="Añadir a un recetario">${ico('plus')}<span class="lbl">Añadir</span></button>`}
   </div>`).join('');
 }
 function drawSuggestions(){ const el=$('#suggList'); if(el) el.innerHTML=suggHtml(); }
@@ -342,15 +343,19 @@ async function loadSuggestions(){
   drawSuggestions();
 }
 async function addSuggestion(id){
-  const s=(S.sugg||[]).find(x=>x.id===id); if(!s) return;
   folderPicker('Guardar en…', async fid=>{
-    toast('Trayendo la receta…');
     try{
-      const {recipe}=await api('POST','/import',{url:s.url});
-      let r={...recipe, id:gid(), folderId:fid, source:s.url, image:recipe.image||s.image||'', created:now()};
-      await store.saveRecipe(r); toast('Guardada en tu recetario');
-    }catch(err){ toast(err.error||'No se ha podido traer esa receta'); }
+      const r=await api('GET','/suggestions/'+id);
+      const {suggId, ...rest}=r;
+      await store.saveRecipe({...rest, id:gid(), folderId:fid, fromSugg:suggId, source:'', created:now()});
+      toast('Guardada en tu recetario');
+    }catch(err){ toast(err.error||'No se ha podido guardar esa receta'); }
   });
+}
+async function openSuggestion(id){
+  try{ const r=await api('GET','/suggestions/'+id);
+    showVisiting({id:'sg-'+id, name:r.title, color:'#6E4429', owner:null, ownerName:'', visiting:true, recipes:[r]}, 2);
+  }catch(err){ toast(err.error||'No se ha podido abrir'); }
 }
 
 /* ===== Libro =====
@@ -941,7 +946,8 @@ function showVisiting(book, page){
 }
 function copyToMine(r, folderId, check=true){
   const {id, folderId:_f, ...rest} = r;
-  return store.saveRecipe({...rest, id:gid(), folderId, fromUid:r.fromUid||null, created:now()}, {check});
+  const {suggId, ...clean} = rest;
+  return store.saveRecipe({...clean, id:gid(), folderId, fromUid:r.fromUid||null, fromSugg:suggId||r.fromSugg||null, created:now()}, {check});
 }
 
 /* ===== Cuenta: iniciar sesión, crear cuenta, recuperar contraseña ===== */
@@ -1418,11 +1424,12 @@ function admContact(list){
         <button class="btn sm danger" data-act="admDelMsg" data-id="${esc(c.id)}">Borrar</button></div></div>`).join('')}</div>`;
 }
 function admSugg(list){
-  return `<p class="muted" style="margin-top:0">Las recetas que aparecen en «Recetas famosas» en la biblioteca de todo el mundo.</p>
+  const ready=list.filter(s=>s.lista).length;
+  return `<p class="muted" style="margin-top:0">Las recetas que aparecen en «Recetas famosas» en la biblioteca de todo el mundo. ${ready} listas de ${list.length}; las demás se van preparando solas cada media hora.</p>
     <form id="admSuggForm" class="inline-form"><div class="field" style="flex:1"><label for="sgUrl">Enlace de la receta</label><input id="sgUrl" class="inp" type="url" required placeholder="https://cookpad.com/es/recetas/…"></div><button class="btn pri">${ico('plus')}Añadir sugerencia</button></form>
     <div class="adm-rows">${list.map(s=>`<div class="adm-row ${s.hidden?'blocked':''}">
       <span class="thumb sm">${s.image?`<img src="${esc(s.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
-      <div class="ar-main"><div class="ar-t">${esc(s.title)} ${s.hidden?'<span class="role">Oculta</span>':''}</div><div class="ar-s"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.author||s.url)}</a></div></div>
+      <div class="ar-main"><div class="ar-t">${esc(s.title)} ${s.lista?'':`<span class="role">${s.tries>=3?'No se pudo leer':'Preparando'}</span>`} ${s.hidden?'<span class="role">Oculta</span>':''}</div><div class="ar-s"><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a></div></div>
       <div class="ar-act"><button class="btn sm" data-act="admSuggHide" data-id="${esc(s.id)}" data-h="${s.hidden?0:1}">${s.hidden?'Mostrar':'Ocultar'}</button><button class="btn sm danger" data-act="admSuggDel" data-id="${esc(s.id)}">Borrar</button></div></div>`).join('')}</div>`;
 }
 function bindAdmSugg(){ const f=$('#admSuggForm'); if(!f) return; f.onsubmit=async e=>{ e.preventDefault(); const b=f.querySelector('button'); b.disabled=true;
@@ -1505,6 +1512,15 @@ function admNotices(list){
         <input id="ntImgUrl" class="inp" type="url" placeholder="o pega el enlace de una imagen"></div>
       <div class="grid2"><div class="field"><label for="ntUrl">Enlace (opcional)</label><input id="ntUrl" class="inp" type="url" placeholder="https://…"></div>
         <div class="field"><label for="ntUrlLbl">Texto del botón</label><input id="ntUrlLbl" class="inp" maxlength="40" placeholder="Abrir enlace"></div></div>
+      <fieldset class="nt-opts"><legend>A quién</legend>
+        <label class="opt-line"><input type="radio" name="ntWho" value="all" checked> A todo el mundo</label>
+        <label class="opt-line"><input type="radio" name="ntWho" value="admins"> Solo a administradores</label>
+        <label class="opt-line"><input type="radio" name="ntWho" value="users"> A personas concretas</label>
+        <div id="ntPeople" hidden class="nt-people">
+          <input id="ntPQ" class="inp" placeholder="Busca por nombre, usuario o correo" autocomplete="off" aria-label="Buscar personas">
+          <div id="ntPRes" class="pick"></div>
+          <div class="chips" id="ntPSel"></div>
+        </div></fieldset>
       <fieldset class="nt-opts"><legend>Dónde se ve</legend>
         <label class="opt-line"><input type="radio" name="ntWhere" value="bell" checked> Solo en la campanita</label>
         <label class="opt-line"><input type="radio" name="ntWhere" value="popup"> En la campanita y en una ventana al abrir la app</label></fieldset>
@@ -1512,26 +1528,35 @@ function admNotices(list){
         <label class="opt-line"><input type="radio" name="ntKeep" value="dis" checked> Cada persona lo puede quitar</label>
         <label class="opt-line"><input type="radio" name="ntKeep" value="fix"> Se queda fijo, no se puede quitar</label></fieldset>
       <div id="ntSt"></div>
-      <div><button class="btn pri" id="ntGo">${ico('send')}Enviar aviso a todos</button></div>
+      <div><button class="btn pri" id="ntGo">${ico('send')}Enviar aviso</button></div>
     </form>
     <h2 class="below-h">Avisos enviados</h2>
     ${list.length?`<div class="adm-rows">${list.map(n=>`<div class="adm-row ${n.active?'':'blocked'}">
       ${n.image?`<span class="thumb sm"><img src="${esc(n.image)}" alt="" referrerpolicy="no-referrer"></span>`:''}
       <div class="ar-main"><div class="ar-t">${esc(n.title||(n.body||'').slice(0,60)||'Aviso con imagen')} ${n.popup?'<span class="role r-admin">Ventana al abrir</span>':''} ${n.dismissible?'':'<span class="role">Fijo</span>'} ${n.active?'':'<span class="role">Desactivado</span>'}</div>
-        <div class="ar-s">${fmtDate(n.created)}${n.autor?' · por @'+esc(n.autor):''} · leído por <b>${n.leidas_cuentas}</b> ${n.leidas_cuentas===1?'cuenta':'cuentas'} y ${n.leidas_anonimas} sin cuenta${n.quitadas?` · ${n.quitadas} lo quitaron`:''}</div></div>
+        <div class="ar-s">Para ${n.audience==='admins'?'administradores':n.audience==='users'?esc(n.para||'personas concretas'):'todo el mundo'} · ${fmtDate(n.created)}${n.autor?' · por @'+esc(n.autor):''}</div>
+        <div class="ar-s">Leído por <b>${n.leidas_cuentas}</b>${n.destinatarios!=null?` de ${n.destinatarios}`:''} ${(n.destinatarios??n.leidas_cuentas)===1?'cuenta':'cuentas'}${n.audience==='all'?` y ${n.leidas_anonimas} sin cuenta`:''}${n.quitadas?` · ${n.quitadas} lo quitaron`:''}</div></div>
       <div class="ar-act"><button class="btn sm" data-act="admNtReads" data-id="${esc(n.id)}">${ico('users')}Quién lo ha leído</button>
         <button class="btn sm" data-act="admNtToggle" data-id="${esc(n.id)}" data-a="${n.active?0:1}">${n.active?'Desactivar':'Activar'}</button>
         <button class="btn sm danger" data-act="admNtDel" data-id="${esc(n.id)}">Borrar</button></div></div>`).join('')}</div>`:'<p class="muted">Todavía no has enviado avisos.</p>'}`;
 }
 function bindAdmNotices(){
-  const f=$('#ntForm'); if(!f) return; let image='';
+  const f=$('#ntForm'); if(!f) return; let image=''; const sel=new Map();
+  const drawSel=()=>{ $('#ntPSel').innerHTML=[...sel.values()].map(u=>`<button type="button" class="chip" aria-pressed="true" data-rm="${esc(u.id)}">${esc(u.display||u.username)} <span class="muted">@${esc(u.username)}</span> ✕</button>`).join(''); };
+  f.querySelectorAll('input[name=ntWho]').forEach(r=>r.onchange=()=>{ $('#ntPeople').hidden=f.querySelector('input[name=ntWho]:checked').value!=='users'; if(!$('#ntPeople').hidden) searchP(); });
+  let pt=null; const searchP=async()=>{ try{ const list=await api('GET','/admin/users?q='+encodeURIComponent($('#ntPQ').value.trim()));
+    $('#ntPRes').innerHTML=list.slice(0,8).map(u=>{ S.profiles[u.id]=S.profiles[u.id]||u; return `<div class="person">${avatar(u.id)}<div class="pb"><div class="pn">${esc(u.display||'')}</div><div class="pu">@${esc(u.username)}</div></div>${sel.has(u.id)?'<span class="muted" style="font-size:13px">Elegida</span>':`<button type="button" class="btn sm" data-pick="${esc(u.id)}">${ico('plus')}Elegir</button>`}</div>`; }).join('')||'<p class="muted" style="margin:0">Nadie con esa búsqueda.</p>';
+    $('#ntPRes').querySelectorAll('[data-pick]').forEach(b=>b.onclick=()=>{ const u=list.find(x=>x.id===b.dataset.pick); sel.set(u.id,u); drawSel(); searchP(); }); }catch{} };
+  $('#ntPQ').oninput=()=>{ clearTimeout(pt); pt=setTimeout(searchP,250); };
+  $('#ntPSel').onclick=e=>{ const b=e.target.closest('[data-rm]'); if(b){ sel.delete(b.dataset.rm); drawSel(); searchP(); } };
   enableRichPaste($('#ntBody'));
   $('#ntFile').onchange=async e=>{ const file=e.target.files[0]; if(!file) return; try{ image=await toDataUrl(file,1200,.82,290000); $('#ntPrev').innerHTML=`<img src="${image}" alt="">`; $('#ntImgDel').hidden=false; $('#ntImgUrl').value=''; }catch{ toast('No se ha podido leer esa imagen'); } };
   $('#ntImgDel').onclick=()=>{ image=''; $('#ntPrev').innerHTML=''; $('#ntImgDel').hidden=true; };
   f.onsubmit=async e=>{ e.preventDefault(); const b=$('#ntGo'); b.disabled=true;
     try{
       await api('POST','/admin/notices',{ title:$('#ntTitle').value, body:$('#ntBody').value, image:image||$('#ntImgUrl').value.trim(), url:$('#ntUrl').value.trim(), url_label:$('#ntUrlLbl').value,
-        popup:f.querySelector('input[name=ntWhere]:checked').value==='popup', dismissible:f.querySelector('input[name=ntKeep]:checked').value==='dis' });
+        popup:f.querySelector('input[name=ntWhere]:checked').value==='popup', dismissible:f.querySelector('input[name=ntKeep]:checked').value==='dis',
+        audience:f.querySelector('input[name=ntWho]:checked').value, recipients:[...sel.keys()] });
       toast('Aviso enviado'); adminLoad(); loadNotices();
     }catch(err){ b.disabled=false; $('#ntSt').innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
@@ -1553,6 +1578,7 @@ Object.assign(ADM_ACT,{
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
   addSugg:el=>addSuggestion(el.dataset.id),
+  openSugg:el=>openSuggestion(el.dataset.id),
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   go:el=>go(el.dataset.v),
