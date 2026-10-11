@@ -1367,7 +1367,7 @@ function authModal(mode='login'){
   const views={
     login:()=>{
       body.innerHTML=`<form id="fl" style="display:grid;gap:14px">
-        <div class="field"><label for="luser">Usuario o correo</label><input id="luser" class="inp" required autocomplete="username"></div>
+        <div class="field"><label for="luser">Usuario o correo</label><input id="luser" class="inp" required autocomplete="username" placeholder="@user983 o tu correo"></div>
         <div class="field"><label for="lpass">Contraseña</label><input id="lpass" class="inp" type="password" required autocomplete="current-password"></div>
         <p class="muted" style="margin:0;font-size:13px">Las recetas que hayas guardado sin cuenta en este dispositivo pasarán a tu cuenta.</p>
         <div id="lstatus"></div>
@@ -1384,7 +1384,7 @@ function authModal(mode='login'){
       body.innerHTML=`<form id="fr" style="display:grid;gap:14px">
         <p class="muted" style="margin:0">Con una cuenta tienes tus recetas en todos tus dispositivos, y tus amigos pueden encontrarte, mandarte recetas y chatear contigo. Las recetas que ya tienes se quedan.</p>
         <div class="field"><label for="rname">Tu nombre</label><input id="rname" class="inp" required maxlength="40" autocomplete="name"></div>
-        <div class="field"><label for="ruser">Nombre de usuario</label><input id="ruser" class="inp" required maxlength="20" placeholder="ainara_cocina" autocomplete="username">
+        <div class="field"><label for="ruser">Nombre de usuario</label><input id="ruser" class="inp" required maxlength="20" placeholder="@user983" autocomplete="username">
           <span class="muted" style="font-size:13px">De 3 a 20 letras minúsculas, números o _. Tus amigos te buscan por este nombre.</span></div>
         <div class="field"><label for="rmail">Correo electrónico</label><input id="rmail" class="inp" type="email" required maxlength="254" autocomplete="email">
           <span class="muted" style="font-size:13px">Te enviaremos un código para comprobar que es tuyo. Sirve también para recuperar la contraseña. Nadie más lo ve.</span></div>
@@ -2082,7 +2082,7 @@ const ADM_ACT = {
   },
   admNewUser:async()=>{
     const m=openModal(`${mHead('Crear cuenta')}<form id="nuF" style="display:grid;gap:12px">
-      <div class="field"><label for="nuU">Usuario</label><input id="nuU" class="inp" required maxlength="20" placeholder="ej. lourdes"></div>
+      <div class="field"><label for="nuU">Usuario</label><input id="nuU" class="inp" required maxlength="20" placeholder="@user983"></div>
       <div class="field"><label for="nuD">Nombre</label><input id="nuD" class="inp" maxlength="40"></div>
       <div class="field"><label for="nuE">Correo (opcional)</label><input id="nuE" class="inp" type="email" maxlength="254"></div>
       <div class="field"><label for="nuP">Contraseña</label><input id="nuP" class="inp" type="password" required minlength="6"></div>
