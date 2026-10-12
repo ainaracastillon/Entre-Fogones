@@ -84,6 +84,7 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS bulk_log(id TEXT PRIMARY KEY, created BIGINT NOT NULL, by_user TEXT, origin TEXT, kind TEXT, title TEXT, dest JSONB, sugg_id TEXT, recipe_ids JSONB);
   CREATE INDEX IF NOT EXISTS bulk_log_origin ON bulk_log(origin);
   CREATE TABLE IF NOT EXISTS bulk_queue(id TEXT PRIMARY KEY, created BIGINT NOT NULL, by_user TEXT, url TEXT NOT NULL, dest JSONB, credit TEXT, status TEXT NOT NULL, tries INT NOT NULL DEFAULT 0, error TEXT, done_at BIGINT, n INT);
+  ALTER TABLE bulk_queue ADD COLUMN IF NOT EXISTS next_at BIGINT;
   CREATE TABLE IF NOT EXISTS user_notifs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT, title TEXT, body TEXT, url TEXT, created BIGINT NOT NULL, read_at BIGINT);
   CREATE INDEX IF NOT EXISTS user_notifs_user ON user_notifs(user_id, created);
   ALTER TABLE folders ADD COLUMN IF NOT EXISTS position INT;
@@ -1084,25 +1085,26 @@ const SCHEMA = `{"title":string,"servings":string (solo el número de raciones),
 // Transcribe el audio de un vídeo: primero Groq Whisper y, si falla, Cloudflare Whisper
 async function transcribe(buf, type) {
   let last;
-  if (GROQ_KEY) try {
+  if (GROQ_KEY && !(aiRest.whisper > Date.now())) try {
     const ext = (type.split('/')[1] || 'mp4').replace('quicktime', 'mov').replace(/[^a-z0-9]/g, '');
     const fd = new FormData();
     fd.append('file', new Blob([buf], { type }), 'video.' + ext);
     fd.append('model', process.env.GROQ_WHISPER_MODEL || 'whisper-large-v3-turbo');
     fd.append('response_format', 'json');
     const r = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', { method: 'POST', body: fd, signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${GROQ_KEY}` } });
-    if (!r.ok) { const e = new Error('whisper groq ' + r.status + ' ' + (await r.text()).slice(0, 200)); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error('whisper groq ' + r.status + ' ' + (await r.text()).slice(0, 700)); e.status = r.status; e.wait = waitOf(e.message, r); if (r.status === 429) aiRest.whisper = Date.now() + (e.wait || 3600e3); throw e; }
     const t = String((await r.json()).text || '').trim(); if (t) return t;
   } catch (e) { console.error(e.message); last = e; }
-  if (HAS_CF) try {
+  if (HAS_CF && !(aiRest.cfwhisper > Date.now())) try {
     const r = await fetch(`https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/run/${CF_WHISPER_MODEL}`, {
       method: 'POST', signal: AbortSignal.timeout(120000), headers: { authorization: `Bearer ${CF_TOKEN}`, 'content-type': 'application/json' },
       body: JSON.stringify({ audio: Buffer.from(buf).toString('base64') }) });
     const j = await r.json().catch(() => ({}));
-    if (!r.ok) { const e = new Error('whisper cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200)); e.status = r.status; throw e; }
+    if (!r.ok) { const e = new Error('whisper cf ' + r.status + ' ' + JSON.stringify(j.errors || '').slice(0, 200)); e.status = r.status; if (r.status === 429) aiRest.cfwhisper = /daily/i.test(e.message) ? nextUtcMidnight() : Date.now() + 3600e3; throw e; }
     const t = String(j.result?.text || '').trim(); if (t) return t;
   } catch (e) { console.error(e.message); last = e; }
   if (last) throw last;
+  if (GROQ_KEY || HAS_CF) { const e = new Error('escucha: sin cupo'); e.status = 429; throw e; }
   return '';
 }
 async function openaiCompat({ url, key, model, system, messages, maxTokens, plain }) {
@@ -1116,7 +1118,7 @@ async function openaiCompat({ url, key, model, system, messages, maxTokens, plai
       ? { model, messages: msgs, max_tokens: maxTokens, temperature: 0.6 }
       : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
   });
-  if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
+  if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 700)); e.status = r.status; e.wait = waitOf(e.message, r); throw e; }
   const j = await r.json();
   return j.choices?.[0]?.message?.content || '';
 }
@@ -1128,11 +1130,40 @@ const uniq = a => [...new Set(a.filter(Boolean))];
 const GROQ_TEXT = uniq([GROQ_MODEL, 'llama-3.3-70b-versatile', 'qwen/qwen3.8-27b', 'minimaxai/minimax-m2.7', GROQ_FALLBACK, 'llama-3.1-8b-instant']);
 const GROQ_BG = uniq([GROQ_FALLBACK, 'llama-3.1-8b-instant']);
 const GROQ_VISION = uniq([GROQ_VISION_MODEL]);
+// Cuánto hay que esperar: Groq lo dice ("try again in 18m9.6s" o la cabecera retry-after); Cloudflare se renueva a las 00:00 UTC
+function waitOf(msg, r) {
+  const ra = Number(r?.headers?.get?.('retry-after')); if (ra > 0) return ra * 1000;
+  const m = String(msg || '').match(/try again in\s*(?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:([\d.]+)s)?\s*(?:([\d.]+)ms)?/i);
+  if (m && (m[1] || m[2] || m[3] || m[4])) return ((+m[1] || 0) * 3600 + (+m[2] || 0) * 60 + (+m[3] || 0)) * 1000 + (+m[4] || 0);
+  return 0;
+}
+function nextUtcMidnight() { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) + 60e3; }
 function restFor(e) {
   const m = String(e.message || '');
-  if (e.status === 429) return /per day|TPD|RPD|daily/i.test(m) ? 60 * 60e3 : 90e3;
-  if (e.status === 404 || /model_not_found|decommissioned|does not exist|not supported/i.test(m)) return 12 * 3600e3;
+  if (e.status === 429) return e.wait ? e.wait + 5e3 : /per day|TPD|RPD|daily/i.test(m) ? 60 * 60e3 : 90e3;
+  if (e.status === 404 || /model_not_found|decommissioned|does not exist|not supported/i.test(m)) return 365 * 864e5;
   return 0;
+}
+// Cuándo vuelve a estar libre la IA (lo antes que se pueda usar algún modelo)
+function aiFreeAt({ bg = false, hear = false } = {}) {
+  const t = Date.now(), cands = [];
+  if (hear) { if (GROQ_KEY) cands.push(aiRest.whisper || 0); if (HAS_CF) cands.push(aiRest.cfwhisper || 0); }
+  else for (const p of (bg ? PROVIDERS.filter(p => p !== 'cloudflare') : PROVIDERS)) {
+    if (p === 'groq') { const ms = (bg ? GROQ_BG : GROQ_TEXT).map(m => modelRest[m] || 0).filter(x => x - t < 300 * 864e5); cands.push(Math.max(aiRest.groq || 0, ms.length ? Math.min(...ms) : t + 864e5)); }
+    else cands.push(aiRest[p] || 0);
+  }
+  const at = cands.length ? Math.min(...cands) : t; return Math.max(at, t + 60e3);
+}
+function hhmm(ts) {
+  const o = { timeZone: 'Europe/Madrid' }, d = new Date(ts);
+  const day = x => x.toLocaleDateString('es-ES', o), tm = d.toLocaleTimeString('es-ES', { ...o, hour: '2-digit', minute: '2-digit' });
+  return day(d) === day(new Date()) ? `hoy a las ${tm}` : day(d) === day(new Date(Date.now() + 864e5)) ? `mañana a las ${tm}` : `el ${d.toLocaleDateString('es-ES', { ...o, day: 'numeric', month: 'long' })} a las ${tm}`;
+}
+// Aviso para la persona cuando se ha gastado el cupo gratis de la IA, con la hora en que vuelve
+function aiBusyMsg(e, extra = '') {
+  const at = e.retryAt || aiFreeAt({ hear: !!e.hear });
+  const long = at - Date.now() > 20 * 60e3;
+  return (long ? 'La IA gratuita ha llegado a su límite de uso por hoy. ' : 'La IA gratuita está al límite ahora mismo. ') + `Volverá a estar libre ${hhmm(at)} aproximadamente.` + (extra ? ' ' + extra : '');
 }
 async function llm(opts) {
   let last;
@@ -1145,10 +1176,11 @@ async function llm(opts) {
       last = new Error(p + ' sin respuesta');
     } catch (e) {
       console.error('IA', p, String(e.message).slice(0, 200));
-      if (e.status === 429) aiRest[p] = Date.now() + (p === 'cloudflare' && /daily/i.test(e.message) ? 60 * 60e3 : p === 'groq' ? 60e3 : 90e3);
+      if (e.status === 429) aiRest[p] = p === 'cloudflare' && /daily/i.test(e.message) ? nextUtcMidnight() : Date.now() + (p === 'groq' ? 60e3 : e.wait || 90e3);
       last = e;
     }
   }
+  if (last && last.status === 429) last.retryAt = aiFreeAt({ bg: opts.bg });
   throw last || new Error('IA no disponible');
 }
 async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }) {
@@ -1278,7 +1310,7 @@ api.post('/ai/chat', needProfile, async (req, res) => {
     let reply = String(out.reply || '');
     if (wantImg && (/no puedo|no es posible|no tengo la capacidad|lo siento/i.test(reply) || !reply)) reply = 'Hecho: al guardar la receta se creará una foto nueva del plato con IA.';
     res.json({ reply, recipe: cleanAi(out.recipe), newImage: wantImg });
-  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? aiBusyMsg(e) : 'No he podido contestar ahora. Vuelve a intentarlo en un momento.' }); }
 });
 api.post('/ai/photo', needProfile, async (req, res) => {
   countAi();
@@ -1291,7 +1323,7 @@ ${SCHEMA}
 Reglas: los ingredientes y cantidades, exactamente como se leen, sin inventar. La preparación redáctala tú mejor: pasos claros, completos y bien escritos en español de España, en orden, uno por elemento y sin numerar, sin cambiar lo que se hace ni añadir ingredientes. Corrige faltas y abreviaturas. Si se ve texto en negrita escríbelo como **texto**, y en cursiva como *texto*. Si no hay ninguna receta, devuelve {"error":"no_recipe"}.` }] })));
     if (!r) return res.status(422).json({ error: 'No he encontrado una receta en la foto. Prueba con una foto más nítida, recta y con buena luz.' });
     res.json({ recipe: r });
-  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' : 'No he podido leer la foto. Vuelve a intentarlo.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? aiBusyMsg(e) : 'No he podido leer la foto. Vuelve a intentarlo.' }); }
 });
 
 /* ---------- Mi cuenta (como Kairos) ---------- */
@@ -1700,7 +1732,7 @@ api.get('/menu', needProfile, async (req, res, next) => {
     if (r) return res.json(r.data);
     if (!PROVIDER) return noAi(res);
     res.json(await makeMenu(req.user, week));
-  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'La IA está ocupada ahora mismo. Prueba en un rato.' : 'No he podido preparar el menú ahora. Vuelve a intentarlo.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? aiBusyMsg(e) : 'No he podido preparar el menú ahora. Vuelve a intentarlo.' }); }
 });
 api.post('/menu/new', needProfile, async (req, res) => {
   if (!PROVIDER) return noAi(res);
@@ -2097,7 +2129,7 @@ adm.post('/bulk/file', express.raw({ type: () => true, limit: '40mb' }), async (
     const recipes = await extractMany(text);
     if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en este archivo.' });
     res.json({ recipes });
-  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : 'No he podido procesar el archivo.' }); }
+  } catch (e) { console.error(e); res.status(502).json({ error: e.status === 429 ? aiBusyMsg(e) : 'No he podido procesar el archivo.' }); }
 });
 function parseJsonLdAll(html) {
   const out = [];
@@ -2106,7 +2138,7 @@ function parseJsonLdAll(html) {
   for (const m of html.matchAll(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)) { try { walk(JSON.parse(m[1].trim())); } catch { } }
   return out.map(rec => parseJsonLd(`<script type="application/ld+json">${JSON.stringify(rec)}</script>`)).filter(r => r && r.ingredients.length);
 }
-const bulkErr = (res, e) => { console.error(e); res.status(e.status === 429 ? 429 : 502).json({ error: e.status === 429 ? 'La IA está ocupada. Prueba en un rato.' : (e.userMsg || 'No he podido procesar esto.') }); };
+const bulkErr = (res, e) => { console.error(String(e.message).slice(0, 200)); res.status(e.status === 429 ? 429 : 502).json({ retryAt: e.status === 429 ? (e.retryAt || aiFreeAt({ hear: !!e.hear })) : undefined, error: e.status === 429 ? aiBusyMsg(e) : (e.userMsg || 'No he podido procesar esto.') }); };
 /* Vídeos en la subida masiva: igual que al crear una receta desde vídeo (descripción, subtítulos y audio),
    y además se separan si en el vídeo hay varias recetas */
 const VIDEO_HINT = 'Es el texto de un vídeo de cocina de redes sociales (título, descripción y lo que se dice). Si no se dice una cantidad, pon el ingrediente sin cantidad. Ignora hashtags, menciones, promociones y frases tipo "sígueme".';
@@ -2122,7 +2154,7 @@ const DEAD_TT = 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda
 async function urlRecipes(url) {
   if (isVideoUrl(url)) {
     let v; try { v = await videoText(url); } catch (e) { throw bad(e.dead ? DEAD_TT : 'No he podido abrir ese vídeo. Si es privado no se puede leer.'); }
-    if (!v.text) throw v.busy ? bad('La IA está ocupada y no ha podido escuchar el vídeo.', 429) : bad('Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.');
+    if (!v.text) throw v.busy ? Object.assign(new Error('escucha sin cupo'), { status: 429, hear: true }) : bad('Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.');
     const recipes = await videoRecipes(v.title, v.text);
     if (!recipes.length) throw bad('No he encontrado recetas en ese vídeo.');
     return recipes.map(r => ({ ...r, image: '', source: url }));
@@ -2230,32 +2262,38 @@ adm.post('/bulk/save', async (req, res, next) => {
 adm.post('/bulk/queue', async (req, res, next) => {
   try {
     const urls = (Array.isArray(req.body.urls) ? req.body.urls : []).map(u => String(u).trim()).filter(u => /^https?:\/\//.test(u)).slice(0, 2000);
-    for (const u of urls) await q('INSERT INTO bulk_queue(id,created,by_user,url,dest,credit,status,tries) VALUES($1,$2,$3,$4,$5,$6,$7,0)', [gid(), now(), req.user.username, u.slice(0, 800), req.body.dest || {}, String(req.body.credit || '').slice(0, 120), 'pending']);
-    res.json({ ok: true, n: urls.length }); setTimeout(() => runBulkQueue().catch(() => {}), 2000);
+    const at = Number(req.body.retryAt) > now() ? Number(req.body.retryAt) : null;
+    for (const u of urls) await q('INSERT INTO bulk_queue(id,created,by_user,url,dest,credit,status,tries,next_at,error) VALUES($1,$2,$3,$4,$5,$6,$7,0,$8,$9)', [gid(), now(), req.user.username, u.slice(0, 800), req.body.dest || {}, String(req.body.credit || '').slice(0, 120), 'pending', at, at ? 'Esperando a la IA: se subirá a partir de ' + hhmm(at) : null]);
+    if (at) { clearTimeout(bulkQueueTimer); bulkQueueTimer = setTimeout(() => runBulkQueue().catch(() => {}), Math.min(at - now() + 30e3, 6 * 3600e3)); }
+    res.json({ ok: true, n: urls.length, when: at ? hhmm(at) : null }); setTimeout(() => runBulkQueue().catch(() => {}), 2000);
   } catch (e) { next(e); }
 });
 adm.get('/bulk/queue', async (req, res, next) => {
   try {
-    const rows = (await q("SELECT id,created,by_user,url,status,error,tries,done_at,n FROM bulk_queue WHERE status<>'done' OR done_at > $1 ORDER BY created DESC LIMIT 1000", [now() - 7 * 864e5])).rows;
-    res.json(rows.map(r => ({ ...r, created: Number(r.created), done_at: Number(r.done_at) || null })));
+    const rows = (await q("SELECT id,created,by_user,url,status,error,tries,done_at,n,next_at FROM bulk_queue WHERE status<>'done' OR done_at > $1 ORDER BY created DESC LIMIT 1000", [now() - 7 * 864e5])).rows;
+    res.json(rows.map(r => ({ ...r, created: Number(r.created), done_at: Number(r.done_at) || null, next_at: Number(r.next_at) || null })));
   } catch (e) { next(e); }
 });
 adm.delete('/bulk/queue', async (req, res, next) => {
   try { await q("DELETE FROM bulk_queue WHERE status<>'done'"); res.json({ ok: true }); } catch (e) { next(e); }
 });
-let bulkQueueBusy = false;
+let bulkQueueBusy = false, bulkQueueTimer = null;
 async function runBulkQueue() {
   if (bulkQueueBusy) return; bulkQueueBusy = true;
   try {
     for (let i = 0; i < 200; i++) {
-      const j = (await q("SELECT * FROM bulk_queue WHERE status='pending' ORDER BY created LIMIT 1")).rows[0];
+      const j = (await q("SELECT * FROM bulk_queue WHERE status='pending' AND (next_at IS NULL OR next_at <= $1) ORDER BY created LIMIT 1", [now()])).rows[0];
       if (!j) break;
       try {
         const recs = await urlRecipes(j.url); let n = 0;
         for (const rec of recs) { try { await saveBulkRecipe({ recipe: rec, dest: j.dest, credit: j.credit, origin: j.url, kind: 'url', by: j.by_user }); n++; } catch (e) { if (e.status === 429) throw e; } }
         await q("UPDATE bulk_queue SET status='done', done_at=$2, n=$3, error=NULL WHERE id=$1", [j.id, now(), n]);
       } catch (e) {
-        if (e.status === 429 || (!e.userMsg && j.tries < 5)) { await q('UPDATE bulk_queue SET tries=tries+1, error=$2 WHERE id=$1', [j.id, e.status === 429 ? 'Esperando a que la IA esté libre' : String(e.message).slice(0, 200)]); if (e.status === 429) break; continue; }
+        if (e.status === 429 || (!e.userMsg && j.tries < 5)) {
+          const at = e.status === 429 ? (e.retryAt || aiFreeAt({ hear: !!e.hear })) : 0;
+          await q('UPDATE bulk_queue SET tries=tries+1, error=$2, next_at=$3 WHERE id=$1', [j.id, at ? 'La IA ha llegado a su límite: se subirá ' + hhmm(at) : String(e.message).slice(0, 200), at || null]);
+          if (at) { await q("UPDATE bulk_queue SET next_at=$1, error=$2 WHERE status='pending'", [at, 'Esperando a la IA: se subirá a partir de ' + hhmm(at)]); clearTimeout(bulkQueueTimer); bulkQueueTimer = setTimeout(() => runBulkQueue().catch(() => {}), Math.min(at - Date.now() + 30e3, 6 * 3600e3)); break; }
+          continue; }
         await q("UPDATE bulk_queue SET status='failed', done_at=$2, error=$3 WHERE id=$1", [j.id, now(), e.userMsg || 'No se ha podido subir']);
       }
     }

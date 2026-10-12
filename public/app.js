@@ -2061,6 +2061,7 @@ async function adminLoad(){
 }
 let admT=null;
 function bindAdmSearch(kind){ const i=$('#admQ'); i.oninput=()=>{ S.admQ=i.value; clearTimeout(admT); admT=setTimeout(()=>kind==='usuarios'?admUsers():kind==='bulk'?admBulkHistory():admRecipes(),250); }; }
+const fmtWhen=ts=>{ const d=new Date(ts), t=d.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}); const same=x=>x.toDateString()===d.toDateString(); return same(new Date())?`hoy a las ${t}`:same(new Date(Date.now()+864e5))?`mañana a las ${t}`:`${d.toLocaleDateString('es-ES',{day:'numeric',month:'long'})} a las ${t}`; };
 async function admBulkQueue(){
   const box=$('#admQueue'); if(!box) return;
   let list=[]; try{ list=await api('GET','/admin/bulk/queue'); }catch{ return; }
@@ -2068,7 +2069,7 @@ async function admBulkQueue(){
   const pend=list.filter(x=>x.status==='pending'), fail=list.filter(x=>x.status==='failed'), done=list.filter(x=>x.status==='done');
   const row=x=>`<li class="${x.status==='done'?'ok':x.status==='failed'?'bad':'wait'}">${ico(x.status==='done'?'check':x.status==='failed'?'x':'clock')} <a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a> — ${x.status==='done'?`${x.n||0} ${x.n===1?'receta subida':'recetas subidas'}`:esc(x.error||'Esperando a que la IA esté libre')}</li>`;
   box.innerHTML=`<details class="card bulk bk-queue"><summary><h2 style="display:inline">${ico('clock')}En cola</h2> <span class="muted">${pend.length} esperando a la IA · ${done.length} subidos · ${fail.length} no válidos (últimos 7 días)</span></summary>
-    <p class="muted" style="font-size:14px">Los enlaces que no se pudieron subir porque la IA estaba ocupada se suben solos cada 15 minutos cuando vuelve a estar libre, al mismo destino que elegiste.</p>
+    <p class="muted" style="font-size:14px">Los enlaces que no se pudieron subir porque la IA gratuita llegó a su límite se suben solos en cuanto vuelve a estar libre, al mismo destino que elegiste.${pend.length&&pend[0].next_at?` <b>Próxima subida: ${esc(fmtWhen(pend[0].next_at))}.</b>`:''}</p>
     <ol class="bk-log">${[...pend,...fail,...done].slice(0,400).map(row).join('')}</ol>
     ${pend.length||fail.length?`<div class="row" style="justify-content:flex-end"><button class="btn danger sm" data-act="admQueueClear">${ico('trash')}Vaciar la cola</button></div>`:''}</details>`;
 }
@@ -2302,12 +2303,12 @@ function bindAdmBulk(){
     if(dest.type==='user' && !dest.username.replace(/[,\s@]/g,'')){ toast('Escribe al menos un usuario'); return; }
     const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML=''; $('#bkSum').hidden=true;
     // recuento para el resumen final
-    const cnt={items:0, recs:0, invalid:0, failed:0, queued:0, cancelled:0}; const busyUrls=[];
+    const cnt={items:0, recs:0, invalid:0, failed:0, queued:0, cancelled:0}; const busyUrls=[]; let retryAt=0, when='';
     // se puede cancelar en cualquier momento: corta lo que se esté leyendo y no sigue
     let ctl=new AbortController(), stopped=false;
     const stop=$('#bkStop'), prog=$('#bkProg'); stop.hidden=false;
     stop.onclick=()=>{ stopped=true; ctl.abort(); stop.disabled=true; prog.textContent='Cancelando…'; };
-    const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error, status:r.status}; return jj; };
+    const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error, status:r.status, retryAt:jj.retryAt}; return jj; };
     const raw=(path,blob)=>call(path,{method:'POST',headers:{'content-type':'application/octet-stream'},body:blob});
     const post=(path,body)=>call('/api'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     let ok=0, done=0;
@@ -2333,13 +2334,13 @@ function bindAdmBulk(){
       }catch(err){
         if(stopped){ li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; li.className='bad'; cnt.cancelled++; }
         else if(err.status===422||err.status===400||err.status===404){ li.innerHTML=`${ico('x')} ${esc(j.l)} — no es válido: ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; cnt.invalid++; }
-        else if(j.k==='url'){ busyUrls.push(j.v); li.innerHTML=`${ico('clock')} ${esc(j.l)} — ${esc(err.error||'no se ha podido subir')} Queda en cola: se subirá sola cuando la IA esté libre.`; li.className='wait'; cnt.queued++; }
+        else if(j.k==='url'){ busyUrls.push(j.v); if(err.retryAt) retryAt=Math.max(retryAt,err.retryAt); li.innerHTML=`${ico('clock')} ${esc(j.l)} — ${esc(err.error||'no se ha podido subir')} Queda en cola y se subirá sola entonces.`; li.className='wait'; cnt.queued++; }
         else { li.innerHTML=`${ico('x')} ${esc(j.l)} — no se ha podido subir: ${esc(err.error||'error al leerlo')}`; li.className='bad'; cnt.failed++; }
       }
       done++;
     }
     if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); cnt.cancelled++; }); }
-    if(busyUrls.length){ try{ await api('POST','/admin/bulk/queue',{urls:busyUrls, dest, credit}); }catch{ cnt.failed+=cnt.queued; cnt.queued=0; } }
+    if(busyUrls.length){ try{ const qr=await api('POST','/admin/bulk/queue',{urls:busyUrls, dest, credit, retryAt}); when=qr.when||''; }catch{ cnt.failed+=cnt.queued; cnt.queued=0; } }
     stop.hidden=true; stop.disabled=false; prog.textContent='';
     b.disabled=false; S.sugg=null; admBulkHistory().catch(()=>{});
     // resumen al final, con el botón de finalizar
@@ -2349,7 +2350,7 @@ function bindAdmBulk(){
       <ul>
         <li class="ok">${ico('check')}<b>${pl(cnt.items,'subido','subidos')}</b> (${pl(cnt.recs,'receta','recetas')})</li>
         <li class="bad">${ico('x')}<b>${pl(cnt.invalid,'no válido','no válidos')}</b> <span class="muted">(enlaces rotos, repetidos o sin receta)</span></li>
-        <li class="bad">${ico('x')}<b>${pl(cnt.failed+cnt.queued,'no se ha podido subir','no se han podido subir')}</b>${cnt.queued?` <span class="muted">— ${pl(cnt.queued,'queda','quedan')} en cola y se ${cnt.queued===1?'subirá':'subirán'} sola${cnt.queued===1?'':'s'} cuando la IA esté libre</span>`:''}</li>
+        <li class="bad">${ico('x')}<b>${pl(cnt.failed+cnt.queued,'no se ha podido subir','no se han podido subir')}</b>${cnt.queued?` <span class="muted">— la IA gratuita ha llegado a su límite. ${pl(cnt.queued,'queda','quedan')} en cola y se ${cnt.queued===1?'subirá':'subirán'} sola${cnt.queued===1?'':'s'} ${when?'a partir de '+esc(when):'cuando vuelva a estar libre'}, al mismo destino.</span>`:''}</li>
         ${cnt.cancelled?`<li class="bad">${ico('x')}<b>${pl(cnt.cancelled,'cancelado','cancelados')}</b></li>`:''}
       </ul>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn pri" id="bkEnd">${ico('check')}Finalizar</button></div></div>`;
