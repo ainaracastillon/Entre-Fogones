@@ -776,7 +776,9 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
   .tabbar .tab[aria-current="page"]{color:var(--accent)}
   .tabbar .tab[aria-current="page"]::before{content:"";position:absolute;top:-7px;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
   .tabbar .badge{position:absolute;top:0;left:calc(50% + 6px);margin:0;min-width:16px;height:16px;font-size:10px}
-  body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+  body{padding-bottom:calc(78px + env(safe-area-inset-bottom,0px))}
+  /* con cuenta, los enlaces legales y de ayuda están en Mi cuenta; sin cuenta se ven al final, por encima de la barra */
+  .has-account .legal-foot{display:none}
   .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
   .in-chat .chat{height:calc(100dvh - var(--toph,64px) - 24px - 64px - env(safe-area-inset-bottom,0px))}
   .top .brand .w{display:block}
@@ -791,6 +793,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=40"></script>
+<script src="/app.js?v=41"></script>
 </body>
 </html>

@@ -303,6 +303,7 @@ function renderTop(){
       <button class="bell reload-btn" data-act="reload" aria-label="Recargar" title="Recargar">${ico('reload')}</button>
       ${S.booted?bellHtml():''}${userBox}
     </nav>`;
+  document.body.classList.toggle('has-account', !!S.profile);
   // en el móvil, las secciones van en una barra abajo
   let tb=document.getElementById('tabbar');
   if(!tb){ tb=document.createElement('nav'); tb.id='tabbar'; tb.className='tabbar'; tb.setAttribute('aria-label','Secciones'); document.body.appendChild(tb); }
