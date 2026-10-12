@@ -2383,17 +2383,25 @@ function orderFoldersModal(){
   const draw=()=>{ $('#ordL',m).innerHTML=ids.map((id,i)=>{ const f=S.folders.find(x=>x.id===id); return `<li class="ord-row" data-id="${esc(id)}"><span class="ord-grip" aria-hidden="true">⋮⋮</span><span class="ord-sw" style="background:${esc(f.color)}"></span><span class="ord-n">${esc(f.name)}</span>
       <button type="button" class="x" data-mv="-1" data-i="${i}" ${i?'':'disabled'} aria-label="Subir">${ico('back')}</button><button type="button" class="x" data-mv="1" data-i="${i}" ${i<ids.length-1?'':'disabled'} aria-label="Bajar">${ico('next')}</button></li>`; }).join(''); };
   $('#ordL',m).onclick=e=>{ const b=e.target.closest('[data-mv]'); if(!b) return; const i=+b.dataset.i, j=i+(+b.dataset.mv); if(j<0||j>=ids.length) return; [ids[i],ids[j]]=[ids[j],ids[i]]; draw(); };
-  // arrastrar desde cualquier punto de la fila, con el dedo o el ratón
-  const list=$('#ordL',m); let drag=null, pid=null, scrollT=null;
-  list.addEventListener('pointerdown',e=>{ if(e.target.closest('button')) return; const row=e.target.closest('.ord-row'); if(!row) return;
-    drag=row; pid=e.pointerId; row.setPointerCapture(pid); row.classList.add('dragging'); e.preventDefault(); });
-  list.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==pid) return; e.preventDefault();
-    const y=e.clientY, lr=list.getBoundingClientRect();
-    clearInterval(scrollT); if(y<lr.top+30) scrollT=setInterval(()=>list.scrollTop-=8,16); else if(y>lr.bottom-30) scrollT=setInterval(()=>list.scrollTop+=8,16);
+  // arrastrar desde cualquier punto de la fila, con el dedo (eventos táctiles, también en iPhone) o con el ratón
+  const list=$('#ordL',m); let drag=null, scrollT=null, lastY=0;
+  const yOf=e=>e.touches&&e.touches.length?e.touches[0].clientY:(e.changedTouches&&e.changedTouches.length?e.changedTouches[0].clientY:e.clientY);
+  const move=e=>{ if(!drag) return; if(e.cancelable) e.preventDefault();
+    const y=yOf(e); lastY=y; const lr=list.getBoundingClientRect();
+    clearInterval(scrollT); scrollT=null;
+    if(y<lr.top+34) scrollT=setInterval(()=>{ list.scrollTop-=8; },16); else if(y>lr.bottom-34) scrollT=setInterval(()=>{ list.scrollTop+=8; },16);
     const after=[...list.children].find(r=>r!==drag && y < r.getBoundingClientRect().top + r.offsetHeight/2);
-    if(after!==drag.nextSibling) list.insertBefore(drag, after||null); });
-  const end=e=>{ if(!drag||(e&&e.pointerId!==pid)) return; clearInterval(scrollT); drag.classList.remove('dragging'); drag=null; ids=[...list.children].map(r=>r.dataset.id); draw(); };
-  list.addEventListener('pointerup',end); list.addEventListener('pointercancel',end);
+    if(after!==drag.nextElementSibling && after!==drag) list.insertBefore(drag, after||null); };
+  const end=()=>{ if(!drag) return; clearInterval(scrollT); drag.classList.remove('dragging'); drag=null; ids=[...list.children].map(r=>r.dataset.id); draw();
+    document.removeEventListener('touchmove',move,{passive:false}); document.removeEventListener('mousemove',move);
+    document.removeEventListener('touchend',end); document.removeEventListener('touchcancel',end); document.removeEventListener('mouseup',end); };
+  const start=e=>{ if(e.target.closest('button')) return; const row=e.target.closest('.ord-row'); if(!row) return;
+    if(e.type==='mousedown'&&e.button!==0) return;
+    drag=row; row.classList.add('dragging'); if(e.cancelable) e.preventDefault(); navigator.vibrate?.(10);
+    document.addEventListener('touchmove',move,{passive:false}); document.addEventListener('mousemove',move);
+    document.addEventListener('touchend',end); document.addEventListener('touchcancel',end); document.addEventListener('mouseup',end); };
+  list.addEventListener('touchstart',start,{passive:false});
+  list.addEventListener('mousedown',start);
   $('#ordOk',m).onclick=async()=>{ try{ await api('PUT','/folders-order',{ids}); await loadState(); closeModal(); toast('Orden guardado'); }catch(err){ toast(err.error||'No se ha podido guardar'); } };
   draw();
 }
