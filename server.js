@@ -929,6 +929,8 @@ function vttToText(v) {
 async function tiktokData(url) {
   const jar = {}, out = { title: '', desc: '', speech: '', image: '', how: [] };
   const r = await jarFetch(url, jar, { Accept: 'text/html,application/xhtml+xml' });
+  // un enlace corto que acaba en la portada de TikTok no lleva a ningún vídeo (borrado, privado o enlace roto)
+  if (!/\/(video|photo)\/\d+/.test(r.finalUrl || '')) { const e = new Error('tiktok_dead'); e.dead = true; throw e; }
   const html = await r.text();
   let item = null;
   const m = html.match(/<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
@@ -987,7 +989,7 @@ async function videoText(url) {
     out.text = [desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
   } else if (/tiktok/.test(host)) {
     let t = null;
-    try { t = await tiktokData(url); } catch (e) { console.error('tiktok', e.message); }
+    try { t = await tiktokData(url); } catch (e) { if (e.dead) throw e; console.error('tiktok', e.message); }
     if (!t || !t.desc) {
       try { const j = JSON.parse(await getText('https://www.tiktok.com/oembed?url=' + encodeURIComponent(t?.finalUrl || url)));
         t = t || { how: [] }; t.desc = t.desc || j.title || ''; t.title = t.title || (j.title || '').slice(0, 120); t.image = t.image || j.thumbnail_url || ''; t.how.push('oembed'); } catch { }
@@ -1023,7 +1025,7 @@ VIDEO>>>` }] })));
 async function importVideo(url, res, note = '') {
   let v;
   try { v = await videoText(url); }
-  catch (e) { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer; pega aquí la descripción o lo que dicen en el vídeo.', needText: true }); }
+  catch (e) { return res.status(422).json({ error: e.dead ? 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda a su portada. Pasa cuando el vídeo se ha borrado, es privado o solo lo pueden ver sus amigos.' : 'No he podido abrir ese vídeo. Si es privado no se puede leer; pega aquí la descripción o lo que dicen en el vídeo.', needText: !e.dead }); }
   if (note) v.text = 'Lo que cuenta quien comparte el vídeo: ' + note + (v.text ? '\n\n' + v.text : '');
   if (v.text && PROVIDER && res.req.user.username) {
     countAi();
@@ -2103,27 +2105,12 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// diagnóstico temporal de TikTok
-app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
-  const out = {};
-  const jar = {};
-  try { const r = await jarFetch('https://www.tiktok.com/', jar); await r.text(); out.cookies = Object.keys(jar); } catch (e) { out.homeErr = e.message; }
-  const cookie = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
-  for (const c of ['ZGe9CPS49', 'ZGeHMFU6t', 'ZGe9Qttcu', 'ZMh4bU5yk']) {
-    for (const [k, h] of [['plain', {}], ['cookie', { cookie }], ['iphone+cookie', { cookie, 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' }]]) {
-      try { const r = await fetch('https://vm.tiktok.com/' + c + '/', { redirect: 'manual', signal: AbortSignal.timeout(10000), headers: { 'User-Agent': BROWSER_UA, ...h } });
-        out[c + ' ' + k] = r.status + ' ' + (r.headers.get('location') || '').slice(0, 160); } catch (e) { out[c + ' ' + k] = 'err ' + e.message; }
-    }
-  }
-  try { const r = await fetch('https://ipinfo.io/json', { signal: AbortSignal.timeout(8000) }); const j = await r.json(); out.ip = j.country + ' ' + j.region + ' ' + j.org; } catch (e) { out.ipErr = e.message; }
-  res.json(out);
-});
 // Enlace (web o vídeo): todas las recetas que tenga
 adm.post('/bulk/url', async (req, res) => {
   try {
     const url = String(req.body.url || '').trim();
     if (isVideoUrl(url)) {
-      let v; try { v = await videoText(url); } catch { return res.status(422).json({ error: 'No he podido abrir ese vídeo. Si es privado no se puede leer.' }); }
+      let v; try { v = await videoText(url); } catch (e) { return res.status(422).json({ error: e.dead ? 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda a su portada. Pasa cuando el vídeo se ha borrado, es privado o solo lo pueden ver sus amigos.' : 'No he podido abrir ese vídeo. Si es privado no se puede leer.' }); }
       if (!v.text) return res.status(422).json({ error: 'Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.' });
       const recipes = await videoRecipes(v.title, v.text);
       if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en ese vídeo.' });
