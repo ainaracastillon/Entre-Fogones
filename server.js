@@ -2186,7 +2186,7 @@ async function videoRecipes(title, text) {
 // diagnóstico temporal de vídeos
 app.get('/api/_diag/vv-8h2m', async (req, res) => {
   const out = {};
-  for (const u of ['https://youtube.com/shorts/tn3E0RjLSb0', 'https://www.youtube.com/watch?v=RTqqV6mVSLU', 'https://youtube.com/shorts/EQaJUs0HAQM', 'https://www.facebook.com/reel/986240545878161', 'https://www.facebook.com/reel/914721316458404']) {
+  for (const u of [String(req.query.u || 'https://youtube.com/shorts/tn3E0RjLSb0')]) {
     try { const v = await videoText(u); out[u] = { title: v.title, platform: v.platform, len: v.text.length, text: v.text.slice(0, 300) }; } catch (e) { out[u] = 'ERR ' + e.message; }
   }
   res.json(out);
