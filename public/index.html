@@ -631,7 +631,7 @@ textarea.inp{resize:vertical;line-height:1.5}
 .pl-day{padding:10px 16px;display:flex;flex-direction:column;justify-content:center;gap:1px;border-right:1px solid var(--paper-line)}
 .pl-dn{font-family:var(--f-book);font-size:19px;line-height:1.1}
 .pl-dd{font-size:12px;color:var(--paper-muted);text-transform:capitalize}
-.pl-today{align-self:flex-start;margin-top:3px;font-size:10.5px;font-weight:700;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:1px 8px}
+.pl-today{display:inline-block;vertical-align:middle;font-family:var(--f-ui);font-size:10.5px;font-weight:700;line-height:1.5;background:var(--accent);color:var(--accent-ink);border-radius:999px;padding:0 8px;margin-left:4px}
 .pl-row.today{background:color-mix(in srgb,var(--accent) 7%,var(--paper))}
 .pl-row.today::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--accent)}
 .pl-cell{border:0;background:none;font:inherit;color:inherit;text-align:left;padding:10px 16px;display:flex;flex-direction:column;justify-content:center;gap:3px;min-width:0;border-right:1px dotted var(--paper-line);cursor:pointer;transition:background .15s}
@@ -657,8 +657,7 @@ textarea.inp{resize:vertical;line-height:1.5}
   .pl-head{display:none}
   .pl-row{grid-template-columns:1fr;background:var(--paper);border:1px solid var(--paper-line);border-radius:16px;overflow:hidden}
   .pl-row.today{box-shadow:0 0 0 3px var(--accent-soft)}
-  .pl-day{flex-direction:row;align-items:baseline;gap:8px;border-right:0;border-bottom:1px solid var(--paper-line);background:color-mix(in srgb,var(--paper-line) 35%,var(--paper))}
-  .pl-today{margin:0 0 0 auto}
+  .pl-day{flex-direction:row;align-items:baseline;justify-content:flex-start;gap:8px;border-right:0;border-bottom:1px solid var(--paper-line);background:color-mix(in srgb,var(--paper-line) 35%,var(--paper))}
   .pl-cell{border-right:0;border-bottom:1px dashed var(--paper-line)}
   .pl-cell:last-child{border-bottom:0}
   .pl-lab{display:block}
@@ -722,6 +721,15 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 .eq-opt:hover,.eq-opt[aria-selected="true"]{background:var(--accent-soft)}
 #admUserBox .below-h{margin:24px 0 12px}
 .push-on{display:inline-flex;align-items:center;gap:6px;color:var(--ok);font-weight:600}.push-on svg{width:16px;height:16px}
+.person-link{display:flex;align-items:center;gap:10px;flex:1;min-width:0;border:0;background:none;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
+.person-link:hover .pn{text-decoration:underline;text-underline-offset:3px}
+.ord-list{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:55vh;overflow:auto}
+.ord-row{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 8px;cursor:grab}
+.ord-grip{color:var(--muted);letter-spacing:-2px}
+.ord-sw{width:12px;height:22px;border-radius:2px;flex:none}
+.ord-n{flex:1;min-width:0;font-weight:600}
+.ord-row .x{width:32px;height:32px}.ord-row .x svg{transform:rotate(90deg)}
+.ord-row .x:disabled{opacity:.3}
 </style>
 </head>
 <body>
@@ -732,6 +740,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=28"></script>
+<script src="/app.js?v=29"></script>
 </body>
 </html>

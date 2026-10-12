@@ -323,7 +323,7 @@ function render(){
   else if(S.view==='community'){ m.innerHTML = viewCommunity(); afterCommunity(); }
   else if(S.view==='menu'){ m.innerHTML = viewMenu(); afterMenu(); }
   else if(S.view==='help'){ m.innerHTML = viewHelp(); }
-  else if(S.view==='admuser'){ m.innerHTML = viewAdmUser(); loadAdmUser(); }
+  else if(S.view==='admuser'||S.view==='friendlib'){ m.innerHTML = viewAdmUser(); loadAdmUser(); }
   else if(S.view==='equiv'){ m.innerHTML = viewEquiv(); bindEquiv(); }
   const top=$('.top'); if(top) document.documentElement.style.setProperty('--toph', top.offsetHeight+'px');
   navTrack();
@@ -346,7 +346,7 @@ function refresh(){
 }
 /* ===== Historial: atrás y adelante (botón del móvil, navegador y deslizar desde los bordes) ===== */
 const NAV={i:0, top:0, snaps:[], restoring:false, lastPop:0};
-const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'')+(s.view==='admuser'?(S.admUserId||''):'');
+const navKey=s=>s.view+'|'+(s.view==='book'?(s.book?.id||''):'')+'|'+(s.view==='chat'?(s.chatWith||''):'')+(['admuser','friendlib'].includes(s.view)?(S.admUserId||''):'');
 const navSnap=()=>({view:S.view, book:S.book, page:S.page, chatWith:S.chatWith, key:navKey(S)});
 /* La página actual va en la dirección (?v=…) para que al recargar se abra la misma */
 function navUrl(){
@@ -355,7 +355,7 @@ function navUrl(){
   if(S.view==='book' && S.book){ p.set('b',S.book.id); if(S.page) p.set('p',S.page); }
   if(S.view==='chat' && S.chatWith) p.set('c',S.chatWith);
   if(S.view==='admin' && S.admTab && S.admTab!=='resumen') p.set('t',S.admTab);
-  if(S.view==='admuser' && S.admUserId) p.set('u',S.admUserId);
+  if((S.view==='admuser'||S.view==='friendlib') && S.admUserId) p.set('u',S.admUserId);
   const q=p.toString(); return location.pathname+(q?'?'+q:'');
 }
 function navTrack(){
@@ -369,8 +369,8 @@ function navTrack(){
 /* Al recargar: se vuelve a abrir la página en la que estabas */
 function restoreFromUrl(){
   const p=new URLSearchParams(location.search), v=p.get('v');
-  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser'];
-  if(v==='admuser'){ S.admUserId=p.get('u'); S.admUser=null; }
+  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser','friendlib'];
+  if(v==='admuser'||v==='friendlib'){ S.admUserId=p.get('u'); S.admUser=null; }
   if(!v || !ok.includes(v)) return null;
   if(v==='admin' && p.get('t')) S.admTab=p.get('t');
   if(v==='chat'){ S.chatWith=p.get('c')||null; S.view='chat'; return null; }
@@ -483,7 +483,7 @@ function viewLibrary(){
   const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, usar la IA, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const slot = b => `<div class="slot">${b}</div>`;
   const books = [
-    slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">Todas</span><span class="sc">${S.recipes.length}</span></button>`),
+    slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">TODAS</span><span class="sc">${S.recipes.length}</span></button>`),
     ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
     none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
     slot(`<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
@@ -502,6 +502,7 @@ function viewLibrary(){
   </div>
   <section class="lib-res" id="libRes">${libResultsHtml()}</section>
   <div class="shelf-wrap"><div class="shelves">${books}</div></div>
+  ${S.folders.length>1?`<div class="row" style="justify-content:flex-end;margin-top:8px"><button class="btn sm ghost" data-act="orderFolders">${ico('move')}Ordenar recetarios</button></div>`:''}
   <section class="recent">
     <h2>Últimas recetas</h2>
     ${recent.length?`<div class="cards fam-grid">${recent.map(libCard).join('')}</div>`:
@@ -1227,7 +1228,7 @@ function editorModal(d){
     <div class="field"><div class="lblrow"><label for="enotes">Notas (salen escritas a mano en el libro)</label>${fmtBar('enotes')}</div><textarea id="enotes" class="inp" rows="2">${esc(r.notes)}</textarea></div>
     <div class="field"><label for="esrc">Enlace de origen (opcional)</label><input id="esrc" class="inp" type="url" value="${esc(r.source)}"></div>
     ${S.profile?`<fieldset class="nt-opts"><legend>¿Quién puede verla?</legend>
-      <label class="opt-line"><input type="radio" name="epub" value="0" ${r.public?'':'checked'}> Privada: solo tú y a quien se la mandes</label>
+      <label class="opt-line"><input type="radio" name="epub" value="0" ${r.public?'':'checked'}> Privada: solo tú, tus amigos y a quien se la mandes</label>
       <label class="opt-line"><input type="radio" name="epub" value="1" ${r.public?'checked':''}> Pública: sale en «Recetas preferidas por los usuarios» para todo el mundo</label></fieldset>`:''}
     <p class="muted" style="margin:0;font-size:13px">Selecciona palabras y pulsa N (negrita), C (cursiva) o el enlace. Si nombras otra receta tuya, se enlaza sola. También puedes dictar con el micrófono del teclado.</p>
     <div id="estatus"></div>
@@ -1505,9 +1506,10 @@ function viewAccount(){
 
     <section class="card" id="pushCard">
       <h2>Notificaciones en el móvil</h2>
-      <p class="muted">Si quieres, te avisamos en el móvil (o en el ordenador) aunque tengas la app cerrada.</p>
+      <p class="muted">Si quieres, te avisamos en el móvil (o en el ordenador) aunque tengas la app cerrada.${isAdminMe()?' Los avisos de administración (sugerencias pendientes y decisiones) te llegan siempre y no se pueden apagar.':''}</p>
       <div id="pushState"></div>
-      <div class="chips" id="notifyChips">${[['messages','Mensajes del chat'],['shares','Recetas que te mandan'],['friends','Solicitudes de amistad'],['notices','Avisos de Entre Fogones']].map(([k,l])=>`<button type="button" class="chip" data-nt="${k}" aria-pressed="${(me.prefs?.notify||{})[k]!==false}">${l}</button>`).join('')}</div>
+      <p class="muted" style="margin:0;font-size:13px">Elige qué quieres que te avise (en la campanita y en el móvil):</p>
+      <div class="chips" id="notifyChips">${[['messages','Mensajes del chat'],['shares','Recetas que te mandan'],['friendRecipes','Recetas nuevas de tus amigos'],['friends','Solicitudes de amistad'],['notices','Avisos de Entre Fogones']].map(([k,l])=>`<button type="button" class="chip" data-nt="${k}" aria-pressed="${(me.prefs?.notify||{})[k]!==false}">${l}</button>`).join('')}</div>
     </section>
 
     <section class="card">
@@ -1708,7 +1710,8 @@ function viewFriends(){
     <div style="display:grid;gap:16px" id="fside">${friendsSide()}</div>
   </div>`;
 }
-const personRow=(id,act)=>`<div class="person">${avatar(id)}<div class="pb"><div class="pn">${esc(pname(id))}</div><div class="pu">${esc(puser(id))}</div></div>${act}</div>`;
+const personRow=(id,act)=>{ const isFr=S.profile&&friends().includes(id); const who=`${avatar(id)}<div class="pb"><div class="pn">${esc(pname(id))}</div><div class="pu">${esc(puser(id))}</div></div>`;
+  return `<div class="person">${isFr?`<button class="person-link" data-act="viewFriend" data-id="${esc(id)}" title="Ver su biblioteca">${who}</button>`:who}${act}</div>`; };
 function friendState(id){
   const fr=friends(), pin=pendingIn(), pout=S.reqOut.filter(r=>r.status==='pending');
   if(fr.includes(id)) return `<button class="btn sm" data-act="chatWith" data-id="${esc(id)}">${ico('chat')}Escribir</button>`;
@@ -1720,7 +1723,7 @@ function friendsSide(){
   const fr=friends(), pin=pendingIn(), pout=S.reqOut.filter(r=>r.status==='pending');
   return `${pin.length?`<section class="panel"><div class="panel-h"><h2>Solicitudes recibidas</h2><span class="badge">${pin.length}</span></div><div class="fsec">${pin.map(r=>personRow(r.from,`<div class="row"><button class="btn sm pri" data-act="addFriend" data-id="${esc(r.from)}">Aceptar</button><button class="btn sm ghost" data-act="dropFriend" data-id="${esc(r.from)}">Rechazar</button></div>`)).join('')}</div></section>`:''}
     <section class="panel"><div class="panel-h"><h2>Tus amigos</h2><span class="muted" style="font-variant-numeric:tabular-nums">${fr.length}</span></div>
-      <div class="fsec">${fr.length?fr.map(id=>personRow(id,`<div class="row"><button class="btn sm" data-act="chatWith" data-id="${esc(id)}">${ico('chat')}Escribir</button><button class="btn sm ghost" data-act="unfriend" data-id="${esc(id)}" aria-label="Quitar amigo">${ico('x')}</button></div>`)).join(''):'<p class="muted" style="margin:0">Busca a tus amigos por su @usuario y mándales una solicitud.</p>'}</div></section>
+      <div class="fsec">${fr.length?fr.map(id=>personRow(id,`<div class="row"><button class="btn sm" data-act="viewFriend" data-id="${esc(id)}">${ico("book")}Biblioteca</button><button class="btn sm" data-act="chatWith" data-id="${esc(id)}">${ico('chat')}Escribir</button><button class="btn sm ghost" data-act="unfriend" data-id="${esc(id)}" aria-label="Quitar amigo">${ico('x')}</button></div>`)).join(''):'<p class="muted" style="margin:0">Busca a tus amigos por su @usuario y mándales una solicitud.</p>'}</div></section>
     ${pout.length?`<section class="panel"><div class="panel-h"><h2>Solicitudes enviadas</h2></div><div class="fsec">${pout.map(r=>personRow(r.to,`<button class="btn sm ghost" data-act="dropFriend" data-id="${esc(r.to)}">Cancelar</button>`)).join('')}</div></section>`:''}`;
 }
 function drawSearch(){
@@ -2059,21 +2062,30 @@ function userAutocomplete(inp, sug){
 }
 /* Perfil y biblioteca de una cuenta, visto desde el panel (solo lectura) */
 function viewAdmUser(){
-  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="admBackUsers" aria-label="Usuarios">${ico('back')}<span class="lbl">Usuarios</span></button><h1>Perfil</h1></div><div id="admUserBox"><div class="status"><span class="spin"></span>Cargando…</div></div>`;
+  const fr=S.view==='friendlib';
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="${fr?'friendBack':'admBackUsers'}" aria-label="${fr?'Amigos':'Usuarios'}">${ico('back')}<span class="lbl">${fr?'Amigos':'Usuarios'}</span></button><h1>${fr?'Biblioteca':'Perfil'}</h1></div><div id="admUserBox"><div class="status"><span class="spin"></span>Cargando…</div></div>`;
 }
 async function loadAdmUser(){
   const box=$('#admUserBox'); if(!box) return;
   try{
-    const d=S.admUser && S.admUser.user.id===S.admUserId ? S.admUser : await api('GET',`/admin/users/${encodeURIComponent(S.admUserId)}/library`);
+    const fr=S.view==='friendlib';
+    const d=S.admUser && S.admUser.user.id===S.admUserId && S.admUser.fr===fr ? S.admUser : {...await api('GET',fr?`/friends/${encodeURIComponent(S.admUserId)}/library`:`/admin/users/${encodeURIComponent(S.admUserId)}/library`), fr};
     S.admUser=d; const u=d.user; S.profiles[u.id]={id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
     const roleLbl={superadmin:'Superadministrador',admin:'Administrador',user:'Usuario'};
     const none=d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId));
     const slot=b=>`<div class="slot">${b}</div>`;
     const books=[
-      slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="admOpenBook" data-id="all"><span class="st">Todas</span><span class="sc">${d.recipes.length}</span></button>`),
+      slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="admOpenBook" data-id="all"><span class="st">TODAS</span><span class="sc">${d.recipes.length}</span></button>`),
       ...d.folders.map(f=>{ const n=d.recipes.filter(r=>r.folderId===f.id).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
       none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="admOpenBook" data-id="none"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):''
     ].join('');
+    if(fr){ box.innerHTML=`<section class="card account-head">${avatar(u.id,'big')}
+        <div class="head-info"><h2>${esc(u.display||u.username)}</h2><p class="muted" style="margin:2px 0 8px">@${esc(u.username)} · ${d.recipes.length} ${d.recipes.length===1?'receta':'recetas'} en ${d.folders.length} ${d.folders.length===1?'recetario':'recetarios'}</p>
+          <div class="row"><button class="btn sm" data-act="chatWith" data-id="${esc(u.id)}">${ico('chat')}Escribir</button></div></div></section>
+      <h2 class="below-h">Su estantería</h2>
+      ${d.recipes.length||d.folders.length?`<div class="shelf-wrap"><div class="shelves">${books}</div></div>`:'<p class="muted">Todavía no tiene recetas.</p>'}
+      ${d.recipes.length?`<h2 class="below-h">Sus últimas recetas</h2><div class="cards fam-grid">${d.recipes.slice(0,6).map(r=>`<div class="rcard sg"><button class="sg-open" data-act="admOpenRecipe" data-id="${esc(r.id)}"><span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(34,'var(--accent)','var(--accent-soft)')}</span><span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${esc([r.category,r.time].filter(Boolean).join(' · '))}</span></span></button></div>`).join('')}</div>`:''}`;
+      fitSpines(); return; }
     box.innerHTML=`<section class="card account-head">${avatar(u.id,'big')}
         <div class="head-info"><h2>${esc(u.display||u.username)}</h2><p class="muted" style="margin:2px 0 6px">@${esc(u.username)}${u.email?' · '+esc(u.email):' · sin correo'}</p>
           <div class="row" style="gap:6px"><span class="role r-${u.role}">${roleLbl[u.role]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Suspendida</span>':''}</div></div></section>
@@ -2092,7 +2104,7 @@ async function loadAdmUser(){
 function admUserBook(id){
   const d=S.admUser; if(!d) return null; const u=d.user;
   const base={owner:u.id, ownerName:u.display||('@'+u.username), visiting:true, adminView:true};
-  if(id==='all') return {...base, id:'au-all-'+u.id, name:'Todas', color:'#6E4429', recipes:[...d.recipes].sort(byTitle)};
+  if(id==='all') return {...base, id:'au-all-'+u.id, name:'TODAS', color:'#6E4429', recipes:[...d.recipes].sort(byTitle)};
   if(id==='none') return {...base, id:'au-none-'+u.id, name:'Sin recetario', color:'#7A6A5C', recipes:d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
   const f=d.folders.find(x=>x.id===id); if(!f) return null;
   return {...base, id:f.id, name:f.name, color:f.color, folder:true, recipes:d.recipes.filter(r=>r.folderId===f.id).sort(byTitle)};
@@ -2177,6 +2189,8 @@ const ADM_ACT = {
   },
   admViewUser:el=>{ S.admUserId=el.dataset.id; S.admUser=null; go('admuser'); },
   admBackUsers:()=>{ S.admTab='usuarios'; go('admin'); },
+  friendBack:()=>go('friends'),
+  viewFriend:el=>{ S.admUserId=el.dataset.id; S.admUser=null; go('friendlib'); },
   admOpenBook:el=>{ const b=admUserBook(el.dataset.id); if(b) showVisiting(b,0); },
   admOpenRecipe:el=>{ const d=S.admUser; const r=d&&d.recipes.find(x=>x.id===el.dataset.id); if(!r) return; const b={...admUserBook('all')}; const i=b.recipes.findIndex(x=>x.id===r.id); showVisiting(b, i>=0?pageOfRecipe(i):0); },
   admNewUser:async()=>{
@@ -2225,7 +2239,7 @@ function noticeHtml(n, inPanel=true){
       ${n.title?`<h3>${esc(n.title)}</h3>`:''}
       ${n.body?`<p>${fmt(n.body)}</p>`:''}
       <div class="n-foot">
-        ${n.url?`<a class="btn sm pri" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.url_label||'Abrir enlace')}</a>`:''}
+        ${n.url?(n.personal?`<button class="btn sm pri" data-act="openNotif" data-url="${esc(n.url)}">${esc(n.url_label||'Ver')}</button>`:`<a class="btn sm pri" href="${esc(n.url)}" target="_blank" rel="noopener">${esc(n.url_label||'Abrir enlace')}</a>`):''}
         <span class="n-date">${esc(new Date(n.created).toLocaleDateString('es-ES',{day:'numeric',month:'short'}))}</span>
         ${inPanel?(n.dismissible?`<button class="btn sm ghost" data-ndis="${esc(n.id)}">${ico('x')}Quitar</button>`:`<span class="n-fixed" title="Este aviso se queda fijo">${ico('pin')}Fijo</span>`):''}
       </div>
@@ -2352,6 +2366,29 @@ async function downloadPdf(url){
     const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=m?decodeURIComponent(m[1]):'receta.pdf'; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),4000); toast('PDF descargado'); }
   catch(err){ toast(err.error||'No se ha podido crear el PDF'); }
 }
+/* Ir a una dirección de la app sin recargar (desde notificaciones) */
+function navTo(url){
+  url=String(url||'/');
+  const h=url.indexOf('#'); if(h>=0){ location.hash=url.slice(h); return; }
+  try{ history.pushState({ef:++NAV.i},'',url); NAV.top=NAV.i; }catch{}
+  closeModal(); if(S.view==='chat') stopChat(); S.view='library'; S.book=null;
+  const later=restoreFromUrl(); NAV.restoring=true; try{ render(); } finally { NAV.restoring=false; }
+  NAV.snaps[NAV.i]=navSnap(); later?.(); window.scrollTo(0,0);
+}
+/* Ordenar los recetarios de la estantería */
+function orderFoldersModal(){
+  let ids=S.folders.map(f=>f.id);
+  const m=openModal(`${mHead('Ordenar recetarios')}<p class="muted" style="margin:0">Mueve cada recetario con las flechas o arrastrándolo. «TODAS» va siempre primero.</p><ol class="ord-list" id="ordL"></ol>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="ordOk">${ico('save')}Guardar orden</button></div>`);
+  const draw=()=>{ $('#ordL',m).innerHTML=ids.map((id,i)=>{ const f=S.folders.find(x=>x.id===id); return `<li class="ord-row" draggable="true" data-id="${esc(id)}"><span class="ord-grip" aria-hidden="true">⋮⋮</span><span class="ord-sw" style="background:${esc(f.color)}"></span><span class="ord-n">${esc(f.name)}</span>
+      <button type="button" class="x" data-mv="-1" data-i="${i}" ${i?'':'disabled'} aria-label="Subir">${ico('back')}</button><button type="button" class="x" data-mv="1" data-i="${i}" ${i<ids.length-1?'':'disabled'} aria-label="Bajar">${ico('next')}</button></li>`; }).join(''); };
+  $('#ordL',m).onclick=e=>{ const b=e.target.closest('[data-mv]'); if(!b) return; const i=+b.dataset.i, j=i+(+b.dataset.mv); if(j<0||j>=ids.length) return; [ids[i],ids[j]]=[ids[j],ids[i]]; draw(); };
+  let drag=null;
+  $('#ordL',m).addEventListener('dragstart',e=>{ drag=e.target.closest('.ord-row')?.dataset.id; e.dataTransfer.effectAllowed='move'; });
+  $('#ordL',m).addEventListener('dragover',e=>{ e.preventDefault(); const over=e.target.closest('.ord-row'); if(!over||!drag||over.dataset.id===drag) return; const a=ids.indexOf(drag), b=ids.indexOf(over.dataset.id); ids.splice(a,1); ids.splice(b,0,drag); draw(); });
+  $('#ordOk',m).onclick=async()=>{ try{ await api('PUT','/folders-order',{ids}); await loadState(); closeModal(); toast('Orden guardado'); }catch(err){ toast(err.error||'No se ha podido guardar'); } };
+  draw();
+}
 /* ===== Cuenta suspendida ===== */
 function viewSuspended(){
   const s=S.me.suspended||{};
@@ -2419,7 +2456,7 @@ function menuHtml(m){
   return `<div class="plan">
     <div class="pl-head"><span></span>${MEALS.map(([k,l,e])=>`<span class="pl-h pl-${k}"><span aria-hidden="true">${e}</span>${l}</span>`).join('')}</div>
     ${m.days.map((d,i)=>{ const dt=new Date(mon); dt.setDate(mon.getDate()+i);
-      return `<div class="pl-row ${i===today?'today':''}"><div class="pl-day"><span class="pl-dn">${esc(d.day)}</span><span class="pl-dd">${dt.getDate()} ${dt.toLocaleDateString('es-ES',{month:'short'}).replace('.','')}</span>${i===today?'<span class="pl-today">Hoy</span>':''}</div>
+      return `<div class="pl-row ${i===today?'today':''}"><div class="pl-day"><span class="pl-dn">${esc(d.day)}${i===today?' <span class="pl-today">Hoy</span>':''}</span><span class="pl-dd">${dt.getDate()} ${dt.toLocaleDateString('es-ES',{month:'short'}).replace('.','')}</span></div>
         ${MEALS.map(([k,l])=>cell(d[k],k,l)).join('')}</div>`; }).join('')}
   </div>`;
 }
@@ -2560,6 +2597,8 @@ const ACT = {
   openSugg:el=>openSuggestion(el.dataset.id),
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
+  orderFolders:()=>orderFoldersModal(),
+  openNotif:el=>{ const p=$('#bellPanel'); if(p) p.hidden=true; navTo(el.dataset.url); },
   libClear:()=>{ S.libQ=''; S.libF=''; const i=$('#libQ'); if(i) i.value=''; const f=$('#libF'); if(f) f.value=''; $('#libRes').innerHTML=''; },
   go:el=>go(el.dataset.v),
   closeModal:()=>closeModal(),

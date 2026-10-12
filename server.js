@@ -75,6 +75,9 @@ async function migrate() {
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at BIGINT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_suggested JSONB;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+  CREATE TABLE IF NOT EXISTS user_notifs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT, title TEXT, body TEXT, url TEXT, created BIGINT NOT NULL, read_at BIGINT);
+  CREATE INDEX IF NOT EXISTS user_notifs_user ON user_notifs(user_id, created);
+  ALTER TABLE folders ADD COLUMN IF NOT EXISTS position INT;
   CREATE TABLE IF NOT EXISTS push_subs(endpoint TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, keys JSONB NOT NULL, created BIGINT);
   CREATE TABLE IF NOT EXISTS app_settings(key TEXT PRIMARY KEY, value JSONB NOT NULL);
   CREATE TABLE IF NOT EXISTS recipe_imgs(recipe_id TEXT PRIMARY KEY, img BYTEA NOT NULL, type TEXT, created BIGINT);
@@ -207,7 +210,7 @@ api.get('/state', async (req, res, next) => {
   try {
     const me = req.user.id;
     const [folders, recipes, reqs, chats] = await Promise.all([
-      q('SELECT * FROM folders WHERE user_id=$1 ORDER BY created', [me]),
+      q('SELECT * FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [me]),
       q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY updated DESC', [me]),
       q('SELECT * FROM requests WHERE from_id=$1 OR to_id=$1', [me]),
       q('SELECT * FROM chats WHERE a=$1 OR b=$1 ORDER BY ts DESC', [me])
@@ -426,6 +429,27 @@ api.put('/folders/:id', async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+api.put('/folders-order', async (req, res, next) => {
+  try {
+    const ids = (Array.isArray(req.body.ids) ? req.body.ids : []).filter(idOk).slice(0, 300);
+    for (let i = 0; i < ids.length; i++) await q('UPDATE folders SET position=$1 WHERE id=$2 AND user_id=$3', [i, ids[i], req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// La biblioteca de un amigo (solo si sois amigos)
+api.get('/friends/:id/library', needProfile, async (req, res, next) => {
+  try {
+    const other = req.params.id;
+    const fr = (await q("SELECT 1 FROM requests WHERE status='accepted' AND ((from_id=$1 AND to_id=$2) OR (from_id=$2 AND to_id=$1))", [req.user.id, other])).rows[0];
+    if (!fr && !isAdmin(req.user)) return res.status(403).json({ error: 'Solo puedes ver la biblioteca de tus amigos.' });
+    const u = (await q('SELECT id,username,display,color,avatar,accepted_at FROM users WHERE id=$1 AND username IS NOT NULL', [other])).rows[0];
+    if (!u) return res.status(404).json({ error: 'Esa cuenta no existe.' });
+    const [folders, recipes] = await Promise.all([
+      q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [u.id]),
+      q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY updated DESC', [u.id])]);
+    res.json({ user: { ...u, accepted_at: Number(u.accepted_at) || null }, folders: folders.rows.map(f => ({ ...f, created: Number(f.created) })), recipes: recipes.rows.map(recipeOut) });
+  } catch (e) { next(e); }
+});
 api.delete('/folders/:id', async (req, res, next) => {
   try {
     await q('UPDATE recipes SET folder_id=NULL WHERE folder_id=$1 AND user_id=$2', [req.params.id, req.user.id]);
@@ -446,6 +470,11 @@ api.put('/recipes/:id', async (req, res, next) => {
     await q(`INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$6)
              ON CONFLICT(id) DO UPDATE SET folder_id=$3, data=$4, updated=$6`, [id, req.user.id, folderId, data, Number(req.body.created) || now(), now()]);
     res.json({ ok: true });
+    // receta nueva hecha por la persona (no copiada): se avisa a sus amigos
+    if (!ex.rows[0] && req.user.username && !data.fromSugg && !data.fromUid) {
+      q("SELECT CASE WHEN from_id=$1 THEN to_id ELSE from_id END id FROM requests WHERE status='accepted' AND (from_id=$1 OR to_id=$1)", [req.user.id])
+        .then(r => notifyUser(r.rows.map(x => x.id), 'friendRecipes', `${req.user.display || '@' + req.user.username} ha subido una receta`, data.title, `/#r~${id}`)).catch(() => {});
+    }
     queueRecipeWork(id);
   } catch (e) { next(e); }
 });
@@ -595,19 +624,29 @@ async function pushReady() {
   webpush.setVapidDetails('mailto:' + (process.env.LEGAL_EMAIL || SUPERADMIN_EMAIL), vapid.publicKey, vapid.privateKey);
   return true;
 }
-const NOTIFY_DEFAULT = { messages: true, friends: true, notices: true, shares: true };
+const NOTIFY_DEFAULT = { messages: true, friends: true, notices: true, shares: true, friendRecipes: true };
 // kind: messages | friends | notices | shares
 async function sendPush(userIds, kind, payload) {
   try {
     const ids = [...new Set([].concat(userIds).filter(Boolean))]; if (!ids.length || !(await pushReady())) return;
     const rows = (await q('SELECT s.endpoint, s.keys, s.user_id, u.prefs FROM push_subs s JOIN users u ON u.id=s.user_id WHERE s.user_id = ANY($1) AND NOT u.blocked', [ids])).rows;
     const body = JSON.stringify({ title: 'Entre Fogones', icon: '/icon-192.png', badge: '/favicon-32.png', ...payload });
-    await Promise.all(rows.filter(r => ({ ...NOTIFY_DEFAULT, ...((r.prefs || {}).notify || {}) })[kind] !== false).map(r =>
+    await Promise.all(rows.filter(r => kind === 'admin' || ({ ...NOTIFY_DEFAULT, ...((r.prefs || {}).notify || {}) })[kind] !== false).map(r =>
       webpush.sendNotification({ endpoint: r.endpoint, keys: r.keys }, body, { TTL: 86400 }).catch(async e => {
         if (e.statusCode === 404 || e.statusCode === 410) await q('DELETE FROM push_subs WHERE endpoint=$1', [r.endpoint]).catch(() => {});
         else console.error('push', e.statusCode, String(e.body || e.message).slice(0, 120));
       })));
   } catch (e) { console.error('push', e.message); }
+}
+/* Notificaciones personales (salen en la campanita y, si las tiene activadas, en el móvil).
+   kind 'admin' no se puede apagar. */
+async function notifyUser(userIds, kind, title, body, url) {
+  const ids = [...new Set([].concat(userIds).filter(Boolean))]; if (!ids.length) return;
+  try {
+    const rows = (await q('SELECT id, prefs FROM users WHERE id = ANY($1)', [ids])).rows.filter(u => kind === 'admin' || ({ ...NOTIFY_DEFAULT, ...((u.prefs || {}).notify || {}) })[kind] !== false);
+    for (const u of rows) await q('INSERT INTO user_notifs(id,user_id,kind,title,body,url,created) VALUES($1,$2,$3,$4,$5,$6,$7)', [gid(), u.id, kind, String(title).slice(0, 160), String(body || '').slice(0, 400), url || '/', now()]);
+    sendPush(rows.map(u => u.id), kind === 'admin' ? 'admin' : kind, { title, body, url: url || '/' });
+  } catch (e) { console.error('notif', e.message); }
 }
 api.get('/push/key', async (req, res) => { if (!(await pushReady())) return res.status(503).json({ error: 'Las notificaciones se están instalando. Prueba en unos minutos.' }); res.json({ key: vapid.publicKey }); });
 api.post('/push/subscribe', needProfile, async (req, res, next) => {
@@ -1197,7 +1236,7 @@ api.put('/me/prefs', needProfile, async (req, res, next) => {
     if ('fontScale' in b) p.fontScale = Math.max(0.8, Math.min(1.6, Number(b.fontScale) || 1));
     if ('diabetes' in b) p.diabetes = ['', 'tipo1', 'tipo2', 'gestacional', 'prediabetes'].includes(b.diabetes) ? b.diabetes : '';
     if ('diet' in b) p.diet = String(b.diet || '').slice(0, 300);
-    if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'notices', 'shares'].map(k => [k, b.notify[k] !== false]));
+    if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'notices', 'shares', 'friendRecipes'].map(k => [k, b.notify[k] !== false]));
     await q('UPDATE users SET prefs=$1 WHERE id=$2', [p, req.user.id]);
     res.json({ ok: true, prefs: p });
   } catch (e) { next(e); }
@@ -1765,7 +1804,7 @@ adm.get('/users/:id/library', async (req, res, next) => {
     const u = (await q('SELECT id,username,display,email,color,avatar,role,blocked,blocked_reason,delete_suggested,accepted_at,last_seen,allergens,prefs FROM users WHERE id=$1', [req.params.id])).rows[0];
     if (!u) return res.status(404).json({ error: 'Esa cuenta no existe.' });
     const [folders, recipes, friends] = await Promise.all([
-      q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY created', [u.id]),
+      q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [u.id]),
       q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY updated DESC', [u.id]),
       q("SELECT count(*)::int n FROM requests WHERE status='accepted' AND (from_id=$1 OR to_id=$1)", [u.id])
     ]);
@@ -1806,13 +1845,24 @@ adm.put('/users/:id/suggest-delete', async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
     const on = req.body.on !== false;
-    await q('UPDATE users SET delete_suggested=$1 WHERE id=$2', [on ? { by: req.user.username, reason: String(req.body.reason || '').slice(0, 500), at: now() } : null, req.params.id]);
+    const t = (await q('SELECT username, delete_suggested FROM users WHERE id=$1', [req.params.id])).rows[0];
+    const reason = String(req.body.reason || '').slice(0, 500);
+    await q('UPDATE users SET delete_suggested=$1 WHERE id=$2', [on ? { by: req.user.username, byId: req.user.id, reason, at: now() } : null, req.params.id]);
+    if (on) {
+      const supers = (await q("SELECT id FROM users WHERE role='superadmin'")).rows.map(r => r.id);
+      notifyUser(supers, 'admin', `@${req.user.username} sugiere borrar la cuenta @${t.username}`, (reason ? 'Motivo: ' + reason + '. ' : '') + 'Está pendiente de que decidas en Panel › Usuarios.', '/?v=admin&t=usuarios');
+    } else if (t.delete_suggested && t.delete_suggested.byId && t.delete_suggested.byId !== req.user.id) {
+      notifyUser(t.delete_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no borrar la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
+    }
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
 adm.delete('/users/:id', needSuper, async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
+    const t = (await q('SELECT username, delete_suggested FROM users WHERE id=$1', [req.params.id])).rows[0];
+    if (t && t.delete_suggested && t.delete_suggested.byId && t.delete_suggested.byId !== req.user.id)
+      notifyUser(t.delete_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha borrado la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
     await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [req.params.id])).rows);
     await q('DELETE FROM attachments WHERE owner=$1', [req.params.id]);
     await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);
@@ -1947,9 +1997,31 @@ adm.post('/bulk/video', express.raw({ type: () => true, limit: '25mb' }), async 
   } catch (e) { bulkErr(res, e); }
 });
 // Subida masiva: cada receta ya leída (de enlace, vídeo, foto o texto) se guarda donde diga el administrador
+/* En la subida masiva la IA deja cada receta bien escrita: título con sentido, pasos claros sin números repetidos y sin enlaces (solo la fuente) */
+const stripLinks = t => String(t || '').replace(/\[([^\]]+)\]\([^)]+\)/g, '$1').replace(/\bhttps?:\/\/\S+/gi, '').replace(/\bwww\.\S+/gi, '').replace(/[ \t]{2,}/g, ' ').trim();
+const stripNum = t => { let x = String(t || '').trim(); for (let i = 0; i < 3; i++) x = x.replace(/^\s*(?:paso\s*)?\d+\s*(?:[.)º:\-–]|\.-)\s*/i, '').replace(/^\s*[-•*]\s*/, ''); return x.trim(); };
+function tidyRecipe(d) {
+  return { ...d, title: cleanTitle(stripLinks(d.title)) || 'Receta', ingredients: (d.ingredients || []).map(i => stripLinks(i).replace(/^\s*[-•*]\s*/, '')).filter(Boolean),
+    steps: (d.steps || []).map(x => stripNum(stripLinks(x))).filter(Boolean), notes: stripLinks(d.notes) };
+}
+async function polishRecipe(d) {
+  if (!PROVIDER) return tidyRecipe(d);
+  try {
+    countAi();
+    const out = cleanAi(parseJson(await llm({ maxTokens: 3500, messages: [{ role: 'user', text: `Deja esta receta bien escrita para un recetario en español de España, sin cambiar el plato ni inventar nada:
+- ${TITLE_RULES}
+- Ingredientes: uno por elemento, con su cantidad delante y bien escritos; no quites ninguno.
+- Preparación: pasos claros, completos y en orden, uno por elemento, SIN números ni viñetas al principio (la app ya los numera), sin repetir pasos.
+- No pongas enlaces, direcciones web, menciones ni hashtags en ningún sitio.
+- En "notes" un consejo breve si viene en la receta; si no, vacío.
+Devuelve SOLO un objeto JSON con esta forma: ${SCHEMA}
+Receta: ${JSON.stringify({ title: d.title, servings: d.servings, time: d.time, difficulty: d.difficulty, ingredients: d.ingredients, steps: d.steps, notes: d.notes }).slice(0, 16000)}` }] })));
+    return tidyRecipe(out && out.ingredients.length >= Math.min(1, (d.ingredients || []).length) ? { ...d, ...out } : d);
+  } catch (e) { console.error('pulir', e.message); return tidyRecipe(d); }
+}
 adm.post('/bulk/save', async (req, res, next) => {
   try {
-    const d = cleanRecipe(req.body.recipe || {}), dest = req.body.dest || {};
+    const d = cleanRecipe(await polishRecipe(cleanRecipe(req.body.recipe || {}))), dest = req.body.dest || {};
     if (!d.ingredients.length && !d.steps.length) return res.status(400).json({ error: 'La receta está vacía.' });
     d.credit = String(req.body.credit || d.credit || '').slice(0, 120);
     if (dest.type === 'user') {
@@ -2039,13 +2111,18 @@ api.get('/notices', async (req, res, next) => {
       WHERE n.active AND NOT (coalesce(r.dismissed,false) AND n.dismissible)
         AND (n.audience='all' OR (n.audience='admins' AND $2) OR (n.audience='users' AND n.recipients ? $1))
       ORDER BY n.created DESC LIMIT 50`, [req.user.id, !!isAdmin(req.user)])).rows;
-    res.json(rows.map(n => ({ ...n, created: Number(n.created), read: !!n.read_at, read_at: undefined })));
+    const mine = req.user.username ? (await q('SELECT * FROM user_notifs WHERE user_id=$1 ORDER BY created DESC LIMIT 40', [req.user.id])).rows : [];
+    res.json([...rows.map(n => ({ ...n, created: Number(n.created), read: !!n.read_at, read_at: undefined })),
+      ...mine.map(n => ({ id: 'u:' + n.id, title: n.title, body: n.body, url: n.url, url_label: n.kind === 'admin' ? 'Ir al panel' : 'Ver', personal: true, kind: n.kind, dismissible: true, popup: false, created: Number(n.created), read: !!n.read_at }))]
+      .sort((a, b) => b.created - a.created));
   } catch (e) { next(e); }
 });
 api.post('/notices/:id/read', async (req, res, next) => {
+  if (req.params.id.startsWith('u:')) { try { await q('UPDATE user_notifs SET read_at=$1 WHERE id=$2 AND user_id=$3 AND read_at IS NULL', [now(), req.params.id.slice(2), req.user.id]); return res.json({ ok: true }); } catch (e) { return next(e); } }
   try { await q('INSERT INTO notice_reads(notice_id,user_id,read_at) VALUES($1,$2,$3) ON CONFLICT(notice_id,user_id) DO NOTHING', [req.params.id, req.user.id, now()]); res.json({ ok: true }); } catch (e) { next(e); }
 });
 api.post('/notices/:id/dismiss', async (req, res, next) => {
+  if (req.params.id.startsWith('u:')) { try { await q('DELETE FROM user_notifs WHERE id=$1 AND user_id=$2', [req.params.id.slice(2), req.user.id]); return res.json({ ok: true }); } catch (e) { return next(e); } }
   try {
     const n = (await q('SELECT dismissible FROM notices WHERE id=$1', [req.params.id])).rows[0];
     if (!n) return res.status(404).json({ error: 'Ese aviso ya no existe.' });
