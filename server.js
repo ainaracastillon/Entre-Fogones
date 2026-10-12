@@ -1544,15 +1544,6 @@ function exportPdf(d, res) {
   h1(`Mensajes enviados (${d.mensajesEnviados.length})`); d.mensajesEnviados.forEach(x => p(`[${x.fecha}] ${x.con ? 'a ' + x.con + ': ' : ''}${x.texto}`, { size: 10 }));
   doc.end();
 }
-// prueba temporal de la descarga de datos (se escribe en el registro al arrancar)
-setTimeout(async () => {
-  try {
-    const d = { exportado: new Date().toISOString(), cuenta: { usuario: 'prueba', nombre: 'Prueba Ñandú', correo: '', alergenos: [] }, recetarios: [{ nombre: 'Postres', color: '#000', recetas: 1, creado: '' }],
-      recetas: [{ titulo: 'Tarta 🍰', recetarios: ['Postres'], raciones: '8', tiempo: '1 h', dificultad: 'Fácil', ingredientes: ['500 g queso'], preparacion: ['Mezcla'], notas: '', origen: '', publica: false, subidaPorMi: true, creada: '' }], amistades: [], mensajesEnviados: [{ fecha: '', con: '@x', tipo: 'text', texto: 'hola 😀' }] };
-    const x = await exportXlsx(d); console.log('EXPTEST xlsx', Buffer.from(x).length);
-    const { PassThrough } = require('stream'); const pt = new PassThrough(); pt.set = () => pt; const chunks = []; pt.on('data', c => chunks.push(c)); pt.on('end', () => console.log('EXPTEST pdf', Buffer.concat(chunks).length)); exportPdf(d, pt);
-  } catch (e) { console.log('EXPTEST ERR', e.message); }
-}, 8000);
 api.get('/me/export', needProfile, async (req, res, next) => {
   try {
     const fmt = String(req.query.format || 'json').toLowerCase(), d = await myExportData(req.user);
