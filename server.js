@@ -1102,7 +1102,7 @@ async function openaiCompat({ url, key, model, system, messages, maxTokens, plai
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify(plain
       ? { model, messages: msgs, max_tokens: maxTokens, temperature: 0.6 }
-      : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : /qwen3/.test(model) ? { reasoning_effort: 'none' } : {}) })
+      : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
   });
   if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
   const j = await r.json();
@@ -1113,9 +1113,9 @@ async function openaiCompat({ url, key, model, system, messages, maxTokens, plai
 // Las tareas de fondo (bg) usan solo modelos pequeños para no gastar el cupo que necesitan las personas.
 const aiRest = {}, modelRest = {};
 const uniq = a => [...new Set(a.filter(Boolean))];
-const GROQ_TEXT = uniq([GROQ_MODEL, 'llama-3.3-70b-versatile', 'moonshotai/kimi-k2-instruct-0905', 'qwen/qwen3-32b', 'meta-llama/llama-4-maverick-17b-128e-instruct', GROQ_FALLBACK, 'meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.1-8b-instant']);
-const GROQ_BG = uniq(['llama-3.1-8b-instant', 'meta-llama/llama-4-scout-17b-16e-instruct', GROQ_FALLBACK]);
-const GROQ_VISION = uniq([GROQ_VISION_MODEL, 'meta-llama/llama-4-maverick-17b-128e-instruct', 'meta-llama/llama-4-scout-17b-16e-instruct']);
+const GROQ_TEXT = uniq([GROQ_MODEL, 'llama-3.3-70b-versatile', 'qwen/qwen3.8-27b', 'minimaxai/minimax-m2.7', GROQ_FALLBACK, 'llama-3.1-8b-instant']);
+const GROQ_BG = uniq([GROQ_FALLBACK, 'llama-3.1-8b-instant']);
+const GROQ_VISION = uniq([GROQ_VISION_MODEL]);
 function restFor(e) {
   const m = String(e.message || '');
   if (e.status === 429) return /per day|TPD|RPD|daily/i.test(m) ? 60 * 60e3 : 90e3;
