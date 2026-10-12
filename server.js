@@ -2152,20 +2152,19 @@ app.get('/api/_diag/vv-8h2m', async (req, res) => {
   const out = {}; const tryIt = async (k, fn) => { try { out[k] = await fn(); } catch (e) { out[k] = 'ERR ' + String(e.message).slice(0, 200); } };
   const yid = String(req.query.y || 'tn3E0RjLSb0'), fb = String(req.query.f || 'https://www.facebook.com/reel/173724362174791');
   const around = (h, re, n = 160) => { const out = []; let m; const rx = new RegExp(re, 'g'); while ((m = rx.exec(h)) && out.length < 3) out.push(h.slice(Math.max(0, m.index - 30), m.index + n)); return out; };
-  await tryIt('inv_list', async () => { const r = await fetch('https://api.invidious.io/instances.json?sort_by=health', { signal: AbortSignal.timeout(10000) }); const j = await r.json(); return j.filter(x => x[1]?.api && x[1]?.type === 'https').map(x => x[0]).slice(0, 15); });
-  await tryIt('inv_f5', async () => { const base = 'https://invidious.f5.si'; const r = await fetch(base + '/api/v1/videos/' + yid + '?local=true', { signal: AbortSignal.timeout(15000) }); const j = await r.json();
-    const caps = (j.captions || []).map(c => c.languageCode + ':' + c.label).slice(0, 6);
-    const c = (j.captions || []).find(c => /^es/.test(c.languageCode)) || (j.captions || [])[0]; let capTxt = null;
-    if (c) { const rr = await fetch(base + c.url, { signal: AbortSignal.timeout(15000) }); capTxt = rr.status + ' ' + (await rr.text()).slice(0, 200); }
-    const a = (j.adaptiveFormats || []).filter(f => /audio/.test(f.type)).sort((x, y) => Number(x.bitrate) - Number(y.bitrate))[0]; let dl = null;
-    if (a) { const u = a.url.startsWith('http') ? a.url : base + a.url; const rr = await fetch(u, { signal: AbortSignal.timeout(30000) }); const buf = await rr.arrayBuffer(); dl = { st: rr.status, bytes: buf.byteLength, type: a.type, host: new URL(u).host, clen: a.clen }; }
-    return { title: j.title, len: j.lengthSeconds, desc: String(j.description || '').slice(0, 80), caps, capTxt, dl }; });
-  for (const [k, u, ua] of [['fb_plugin', 'https://www.facebook.com/plugins/video.php?show_text=true&href=' + encodeURIComponent(fb), BROWSER_UA],
-    ['fb_google', fb, 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'],
-    ['fb_watch', 'https://www.facebook.com/watch/?v=' + fb.match(/(\d{6,})/)[1], 'curl/8.4.0']]) {
-    await tryIt(k, async () => { const r = await fetch(u, { headers: { 'User-Agent': ua, Accept: 'text/html', 'Accept-Language': 'es-ES' } }); const h = await r.text();
-      return { st: r.status, len: h.length, src: around(h, 'hd_src|sd_src|playable_url|browser_native|\\.mp4\\?', 160), txt: around(h, '"message":\\{|"text":"[^"]{50,}|og:description|userContent', 220), title: (h.match(/<title[^>]*>([^<]*)/) || [])[1] }; });
-  }
+  await tryIt('inv_audio', async () => { const base = 'https://invidious.f5.si'; const j = await (await fetch(base + '/api/v1/videos/' + yid + '?local=true', { signal: AbortSignal.timeout(15000) })).json();
+    const res2 = {};
+    const fm = (j.adaptiveFormats || []).filter(f => /audio/.test(f.type)).sort((x, y) => Number(x.bitrate) - Number(y.bitrate));
+    const a = fm.find(f => /mp4/.test(f.type)) || fm[0]; res2.fmt = a && { type: a.type, itag: a.itag, clen: a.clen };
+    if (a) { const u = a.url.startsWith('http') ? a.url : base + a.url;
+      const r1 = await fetch(u, { headers: { Range: 'bytes=0-' + a.clen }, signal: AbortSignal.timeout(30000) }); res2.range = r1.status + ' ' + (await r1.arrayBuffer()).byteLength;
+      const r2 = await fetch(base + `/latest_version?id=${yid}&itag=${a.itag}&local=true`, { signal: AbortSignal.timeout(30000) }); res2.latest = r2.status + ' ' + (await r2.arrayBuffer()).byteLength; }
+    const c = (j.captions || [])[0]; if (c) { const r3 = await fetch(base + c.url + (c.url.includes('?') ? '&' : '?') + 'fmt=vtt', { signal: AbortSignal.timeout(15000) }); res2.cap = c.url.slice(0, 80) + ' → ' + r3.status + ' ' + (await r3.text()).slice(0, 150); }
+    return res2; });
+  await tryIt('fdown', async () => { const r = await fetch('https://fdown.net/download.php', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, Referer: 'https://fdown.net/' }, body: 'URLz=' + encodeURIComponent(fb), signal: AbortSignal.timeout(20000) }); const h = await r.text(); return { st: r.status, len: h.length, links: around(h, 'href="https://video[^"]+', 120), err: around(h, 'alert-danger|not public|private', 120) }; });
+  await tryIt('getfvid', async () => { const r = await fetch('https://www.getfvid.com/downloader', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, Referer: 'https://www.getfvid.com/' }, body: 'url=' + encodeURIComponent(fb), signal: AbortSignal.timeout(20000) }); const h = await r.text(); return { st: r.status, len: h.length, links: around(h, 'href="https://video[^"]+', 120), title: around(h, 'card-title', 150) }; });
+  await tryIt('snapsave', async () => { const r = await fetch('https://snapsave.app/action.php?lang=es', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, Origin: 'https://snapsave.app', Referer: 'https://snapsave.app/es' }, body: 'url=' + encodeURIComponent(fb), signal: AbortSignal.timeout(20000) }); const h = await r.text(); return { st: r.status, len: h.length, head: h.slice(0, 160) }; });
+  await tryIt('fb_mobile_ua', async () => { const r = await fetch(fb.replace('www.', 'm.'), { headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', 'Accept-Language': 'es-ES', 'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document' } }); const h = await r.text(); return { st: r.status, len: h.length, src: around(h, 'video_redirect|\\.mp4|playable_url', 160), txt: around(h, 'og:description|"message":\\{"text"', 200) }; });
   res.json(out);
 });
 // Enlace (web o vídeo): todas las recetas que tenga.
