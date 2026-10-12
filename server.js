@@ -1252,8 +1252,16 @@ async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }
       if (modelRest[model] > Date.now()) { rateLimited = true; continue; }
       try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages, maxTokens: /8b-instant/.test(model) ? Math.min(maxTokens, 7000) : maxTokens }); }
       catch (e) {
-        // 413: este texto es demasiado largo para ese modelo (no es que esté sin cupo): se prueba el siguiente
-        if (e.status === 413) tooBig.push(model);
+        // 413: el texto es demasiado largo para ese modelo: se prueba con el texto recortado a lo que admite
+        if (e.status === 413) {
+          const lim = String(e.message).match(/Limit\s*(\d+)[^R]*Requested\s*(\d+)/i);
+          if (lim && Number(lim[2]) > Number(lim[1])) {
+            const f = Number(lim[1]) / Number(lim[2]) * 0.85, lastU = messages.length - 1;
+            const cut = messages.map((mm, i) => i === lastU && !mm.image ? { ...mm, text: mm.text.slice(0, Math.floor(mm.text.length * f)) } : mm);
+            try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages: cut, maxTokens }); } catch (e2) { console.error('groq recortado', model, e2.status || '', String(e2.message).slice(0, 120)); }
+          }
+          tooBig.push(model);
+        }
         else { const r = restFor(e); if (r) modelRest[model] = Date.now() + r; }
         if (e.status === 429) rateLimited = true;
         console.error('groq', model, e.status || '', String(e.message).slice(0, 120));
