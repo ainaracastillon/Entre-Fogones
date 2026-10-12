@@ -1455,17 +1455,111 @@ api.put('/me/allergens', needProfile, async (req, res, next) => {
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+// Descargar mis datos: en JSON, Excel, PDF o texto (?format=json|xlsx|pdf|txt)
+async function myExportData(user) {
+  const me = user.id;
+  const [f, r, rq, m] = await Promise.all([
+    q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [me]),
+    q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY created', [me]),
+    q(`SELECT r.status, r.ts, CASE WHEN r.from_id=$1 THEN r.to_id ELSE r.from_id END other, r.from_id=$1 sent, u.username, u.display
+       FROM requests r JOIN users u ON u.id = CASE WHEN r.from_id=$1 THEN r.to_id ELSE r.from_id END WHERE r.from_id=$1 OR r.to_id=$1 ORDER BY r.ts`, [me]),
+    q(`SELECT m.chat_id, m.ts, m.data, c.a, c.b, g.name gname FROM messages m LEFT JOIN chats c ON c.id=m.chat_id LEFT JOIN groups g ON 'g:'||g.id=m.chat_id WHERE m.from_id=$1 ORDER BY m.ts`, [me]).catch(() => q('SELECT chat_id, ts, data FROM messages WHERE from_id=$1 ORDER BY ts', [me]))
+  ]);
+  const others = [...new Set(m.rows.map(x => x.a === me ? x.b : x.a).filter(Boolean))];
+  const names = new Map((others.length ? (await q('SELECT id, username FROM users WHERE id = ANY($1)', [others])).rows : []).map(u => [u.id, '@' + u.username]));
+  const fname = new Map(f.rows.map(x => [x.id, x.name]));
+  const day = ts => ts ? new Date(Number(ts)).toISOString().slice(0, 16).replace('T', ' ') : '';
+  const recetas = r.rows.map(recipeOut).map(x => ({
+    titulo: x.title || '', recetarios: (x.folderIds || []).map(id => fname.get(id)).filter(Boolean), raciones: x.servings || '', tiempo: x.time || '', dificultad: x.difficulty || '',
+    ingredientes: x.ingredients || [], preparacion: x.steps || [], notas: x.notes || '', origen: x.source || '', publica: !!x.public,
+    subidaPorMi: !x.fromSugg && !x.fromUid, creada: day(x.created), actualizada: day(x.updated) }));
+  return {
+    exportado: new Date().toISOString(),
+    cuenta: { usuario: user.username, nombre: user.display, correo: user.email || '', alergenos: user.allergens || [] },
+    recetarios: f.rows.map(x => ({ nombre: x.name, color: x.color, recetas: recetas.filter(rr => rr.recetarios.includes(x.name)).length, creado: day(x.created) })),
+    recetas,
+    amistades: rq.rows.map(x => ({ persona: '@' + x.username, nombre: x.display || '', estado: x.status === 'accepted' ? 'Amigos' : x.sent ? 'Solicitud enviada' : 'Solicitud recibida', fecha: day(x.ts) })),
+    mensajesEnviados: m.rows.map(x => ({ fecha: day(x.ts), con: x.gname ? 'Grupo ' + x.gname : names.get(x.a === me ? x.b : x.a) || '', tipo: x.data?.type || 'text', texto: msgPreview(x.data || {}) }))
+  };
+}
+const exportName = ext => `entre-fogones-mis-datos-${new Date().toISOString().slice(0, 10)}.${ext}`;
+const pdfTxt = v => String(v ?? '').replace(/\*\*?/g, '').replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF€–—‘’“”•…]/g, '').trim();
+function exportTxt(d) {
+  const L = [], line = (t = '') => L.push(t), h = t => { line(); line(t.toUpperCase()); line('='.repeat(t.length)); };
+  line('ENTRE FOGONES · MIS DATOS'); line('Descargado el ' + d.exportado.slice(0, 10));
+  h('Cuenta'); line('Usuario: @' + d.cuenta.usuario); line('Nombre: ' + (d.cuenta.nombre || '')); line('Correo: ' + (d.cuenta.correo || '—')); line('Alérgenos: ' + (d.cuenta.alergenos.join(', ') || 'ninguno'));
+  h(`Recetarios (${d.recetarios.length})`); d.recetarios.forEach(x => line(`- ${x.nombre} (${x.recetas} recetas)`));
+  h(`Recetas (${d.recetas.length})`);
+  d.recetas.forEach((x, i) => {
+    line(); line(`${i + 1}. ${x.titulo}`); line('-'.repeat(Math.min(60, x.titulo.length + 4)));
+    const meta = [x.raciones && x.raciones + ' raciones', x.tiempo, x.dificultad, x.recetarios.join(', '), x.publica ? 'Pública' : ''].filter(Boolean).join(' · '); if (meta) line(meta);
+    if (x.ingredientes.length) { line('Ingredientes:'); x.ingredientes.forEach(t => line('  • ' + t)); }
+    if (x.preparacion.length) { line('Preparación:'); x.preparacion.forEach((t, j) => line(`  ${j + 1}. ${t}`)); }
+    if (x.notas) line('Notas: ' + x.notas); if (x.origen) line('Origen: ' + x.origen);
+  });
+  h(`Amistades (${d.amistades.length})`); d.amistades.forEach(x => line(`- ${x.persona}${x.nombre ? ' (' + x.nombre + ')' : ''}: ${x.estado}, ${x.fecha}`));
+  h(`Mensajes enviados (${d.mensajesEnviados.length})`); d.mensajesEnviados.forEach(x => line(`[${x.fecha}] ${x.con ? 'a ' + x.con + ': ' : ''}${x.texto}`));
+  return L.join('\n');
+}
+async function exportXlsx(d) {
+  const ExcelJS = require('exceljs'); const wb = new ExcelJS.Workbook(); wb.creator = 'Entre Fogones'; wb.created = new Date();
+  const sheet = (name, cols, rows) => {
+    const ws = wb.addWorksheet(name, { views: [{ state: 'frozen', ySplit: 1 }] });
+    ws.columns = cols.map(([header, key, width]) => ({ header, key, width }));
+    rows.forEach(r => ws.addRow(r));
+    ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } }; ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFB5562B' } };
+    ws.eachRow((row, i) => { if (i > 1) row.alignment = { vertical: 'top', wrapText: true }; });
+    if (rows.length) ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: cols.length } };
+  };
+  sheet('Cuenta', [['Dato', 'k', 18], ['Valor', 'v', 50]], [{ k: 'Usuario', v: '@' + d.cuenta.usuario }, { k: 'Nombre', v: d.cuenta.nombre }, { k: 'Correo', v: d.cuenta.correo }, { k: 'Alérgenos', v: d.cuenta.alergenos.join(', ') }, { k: 'Descargado', v: d.exportado.slice(0, 10) }]);
+  sheet('Recetas', [['Título', 'titulo', 32], ['Recetarios', 'recetarios', 22], ['Raciones', 'raciones', 10], ['Tiempo', 'tiempo', 12], ['Dificultad', 'dificultad', 12], ['Ingredientes', 'ingredientes', 50], ['Preparación', 'preparacion', 70], ['Notas', 'notas', 30], ['Origen', 'origen', 30], ['Pública', 'publica', 9], ['Subida por mí', 'subidaPorMi', 13], ['Creada', 'creada', 17]],
+    d.recetas.map(x => ({ ...x, recetarios: x.recetarios.join(', '), ingredientes: x.ingredientes.join('\n'), preparacion: x.preparacion.map((t, i) => `${i + 1}. ${t}`).join('\n'), publica: x.publica ? 'Sí' : 'No', subidaPorMi: x.subidaPorMi ? 'Sí' : 'No' })));
+  sheet('Recetarios', [['Nombre', 'nombre', 30], ['Color', 'color', 12], ['Recetas', 'recetas', 10], ['Creado', 'creado', 17]], d.recetarios);
+  sheet('Amistades', [['Persona', 'persona', 24], ['Nombre', 'nombre', 24], ['Estado', 'estado', 20], ['Fecha', 'fecha', 17]], d.amistades);
+  sheet('Mensajes enviados', [['Fecha', 'fecha', 17], ['Con', 'con', 24], ['Tipo', 'tipo', 10], ['Texto', 'texto', 80]], d.mensajesEnviados);
+  return await wb.xlsx.writeBuffer();
+}
+function exportPdf(d, res) {
+  const PDFDocument = require('pdfkit');
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 56, bottom: 56, left: 56, right: 56 }, info: { Title: 'Mis datos · Entre Fogones', Author: 'Entre Fogones' } });
+  res.set('content-type', 'application/pdf').set('content-disposition', `attachment; filename="${exportName('pdf')}"`); doc.pipe(res);
+  const ink = '#3B2116', muted = '#7A5C4C', acc = '#B5562B', W = doc.page.width - 112;
+  const h1 = t => { doc.moveDown(0.8); doc.font('Times-Bold').fontSize(17).fillColor(acc).text(pdfTxt(t)); doc.moveDown(0.2); doc.save().lineWidth(0.6).strokeColor(acc).moveTo(56, doc.y).lineTo(56 + W, doc.y).stroke().restore(); doc.moveDown(0.4); };
+  const p = (t, o = {}) => doc.font(o.font || 'Times-Roman').fontSize(o.size || 11).fillColor(o.color || ink).text(pdfTxt(t), { width: W, ...o });
+  doc.font('Times-Bold').fontSize(24).fillColor(ink).text('Mis datos', { align: 'center' });
+  p('Entre Fogones · descargado el ' + d.exportado.slice(0, 10), { align: 'center', color: muted, font: 'Times-Italic' });
+  h1('Cuenta'); p('Usuario: @' + d.cuenta.usuario); p('Nombre: ' + (d.cuenta.nombre || '')); p('Correo: ' + (d.cuenta.correo || '—')); p('Alérgenos: ' + (d.cuenta.alergenos.join(', ') || 'ninguno'));
+  h1(`Recetarios (${d.recetarios.length})`); d.recetarios.forEach(x => p(`• ${x.nombre} — ${x.recetas} recetas`));
+  h1(`Recetas (${d.recetas.length})`);
+  d.recetas.forEach((x, i) => {
+    if (doc.y > doc.page.height - 160) doc.addPage();
+    doc.moveDown(0.5); p(`${i + 1}. ${x.titulo}`, { font: 'Times-Bold', size: 13 });
+    const meta = [x.raciones && x.raciones + ' raciones', x.tiempo, x.dificultad, x.recetarios.join(', '), x.publica ? 'Pública' : ''].filter(Boolean).join(' · '); if (meta) p(meta, { font: 'Times-Italic', size: 10, color: muted });
+    if (x.ingredientes.length) { p('Ingredientes', { font: 'Times-Bold', size: 11 }); x.ingredientes.forEach(t => p('• ' + t, { indent: 10 })); }
+    if (x.preparacion.length) { p('Preparación', { font: 'Times-Bold', size: 11 }); x.preparacion.forEach((t, j) => p(`${j + 1}. ${t}`, { indent: 10 })); }
+    if (x.notas) p('Notas: ' + x.notas, { font: 'Times-Italic' });
+    if (x.origen) p('Origen: ' + x.origen, { size: 9, color: muted });
+  });
+  h1(`Amistades (${d.amistades.length})`); d.amistades.forEach(x => p(`• ${x.persona}${x.nombre ? ' (' + x.nombre + ')' : ''}: ${x.estado}, ${x.fecha}`));
+  h1(`Mensajes enviados (${d.mensajesEnviados.length})`); d.mensajesEnviados.forEach(x => p(`[${x.fecha}] ${x.con ? 'a ' + x.con + ': ' : ''}${x.texto}`, { size: 10 }));
+  doc.end();
+}
+// prueba temporal de la descarga de datos (se escribe en el registro al arrancar)
+setTimeout(async () => {
+  try {
+    const d = { exportado: new Date().toISOString(), cuenta: { usuario: 'prueba', nombre: 'Prueba Ñandú', correo: '', alergenos: [] }, recetarios: [{ nombre: 'Postres', color: '#000', recetas: 1, creado: '' }],
+      recetas: [{ titulo: 'Tarta 🍰', recetarios: ['Postres'], raciones: '8', tiempo: '1 h', dificultad: 'Fácil', ingredientes: ['500 g queso'], preparacion: ['Mezcla'], notas: '', origen: '', publica: false, subidaPorMi: true, creada: '' }], amistades: [], mensajesEnviados: [{ fecha: '', con: '@x', tipo: 'text', texto: 'hola 😀' }] };
+    const x = await exportXlsx(d); console.log('EXPTEST xlsx', Buffer.from(x).length);
+    const { PassThrough } = require('stream'); const pt = new PassThrough(); pt.set = () => pt; const chunks = []; pt.on('data', c => chunks.push(c)); pt.on('end', () => console.log('EXPTEST pdf', Buffer.concat(chunks).length)); exportPdf(d, pt);
+  } catch (e) { console.log('EXPTEST ERR', e.message); }
+}, 8000);
 api.get('/me/export', needProfile, async (req, res, next) => {
   try {
-    const me = req.user.id;
-    const [f, r, rq, m] = await Promise.all([
-      q('SELECT id,name,color,created FROM folders WHERE user_id=$1', [me]),
-      q('SELECT * FROM recipes WHERE user_id=$1', [me]),
-      q('SELECT * FROM requests WHERE from_id=$1 OR to_id=$1', [me]),
-      q('SELECT chat_id, ts, data FROM messages WHERE from_id=$1 ORDER BY ts', [me])
-    ]);
-    res.json({ exportado: new Date().toISOString(), cuenta: { usuario: req.user.username, nombre: req.user.display, correo: req.user.email, color: req.user.color, alergenos: req.user.allergens || [] },
-      recetarios: f.rows, recetas: r.rows.map(recipeOut), amistades: rq.rows, mensajesEnviados: m.rows });
+    const fmt = String(req.query.format || 'json').toLowerCase(), d = await myExportData(req.user);
+    if (fmt === 'txt') return res.set('content-type', 'text/plain; charset=utf-8').set('content-disposition', `attachment; filename="${exportName('txt')}"`).send('﻿' + exportTxt(d));
+    if (fmt === 'xlsx') return res.set('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').set('content-disposition', `attachment; filename="${exportName('xlsx')}"`).send(Buffer.from(await exportXlsx(d)));
+    if (fmt === 'pdf') return exportPdf(d, res);
+    res.set('content-disposition', `attachment; filename="${exportName('json')}"`).json(d);
   } catch (e) { next(e); }
 });
 

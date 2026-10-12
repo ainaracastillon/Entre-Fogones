@@ -1744,10 +1744,12 @@ function bindAccount(root){
   $('#avFile',root).onchange=async e=>{ const f=e.target.files[0]; e.target.value=''; if(!f) return;
     try{ const img=await squarePhoto(f); if(await ok(()=>api('PUT','/me/avatar',{image:img}),'Foto de perfil actualizada')) render(); }catch{ toast('No se ha podido leer esa foto. Prueba con otra.'); } };
   const del=$('#avDel',root); if(del) del.onclick=async()=>{ if(await ok(()=>api('DELETE','/me/avatar'),'Foto quitada')) render(); };
-  $('#expData',root).onclick=async e=>{ const b=e.currentTarget; b.disabled=true;
-    try{ const data=await api('GET','/me/export'); const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-      const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=`entre-fogones-mis-datos-${new Date().toISOString().slice(0,10)}.json`; document.body.append(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); toast('Datos descargados'); }
-    catch(err){ toast(err.error||'No se han podido descargar'); } b.disabled=false; };
+  // descargar mis datos: se elige el formato
+  $('#expData',root).onclick=()=>{
+    const m=openModal(`${mHead('Descargar mis datos')}<p class="muted" style="margin:0">Elige en qué formato quieres la copia de tus datos: cuenta, recetarios, recetas, amistades y mensajes que has enviado.</p>
+      <div class="exp-opts">${[['xlsx','chart','Excel','Una hoja para cada cosa, para ordenar y filtrar'],['pdf','pdf','PDF','Para leer o imprimir'],['txt','doc','Texto (TXT)','Texto sencillo que abre cualquier programa'],['json','copy','JSON','Datos completos para llevarlos a otra app']].map(([f,i,l,d])=>`<a class="exp-opt" href="/api/me/export?format=${f}" download data-f="${f}">${ico(i)}<span><b>${l}</b><small>${d}</small></span></a>`).join('')}</div>`);
+    m.querySelectorAll('.exp-opt').forEach(a=>a.onclick=()=>{ setTimeout(()=>{ closeModal(); toast('Preparando la descarga…'); },150); });
+  };
   const ad=$('#accDel',root); if(ad) ad.onclick=()=>deleteAccountModal();
   drawPushState();
   $('#notifyChips',root).onclick=async e=>{ const c=e.target.closest('[data-nt]'); if(!c) return; c.setAttribute('aria-pressed', c.getAttribute('aria-pressed')!=='true');
