@@ -2051,7 +2051,7 @@ async function adminLoad(){
       if(del) await admDeletedUsers(); else { bindAdmSearch('usuarios'); await admUsers(); } }
     else if(tab==='recetas'){ const bulk=S.admRecSub==='bulk';
       box.innerHTML=`<div class="tabs adm-sub" role="tablist"><button role="tab" data-act="admRecSub" data-s="users" aria-selected="${!bulk}">Recetas de los usuarios</button><button role="tab" data-act="admRecSub" data-s="bulk" aria-selected="${bulk}">${ico('upload')}Subidas masivas</button></div>`
-        +(bulk?`${admBulkHtml()}<h2 class="below-h">Historial de subidas masivas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título, enlace o quién la subió" value="${esc(S.admQ||'')}" aria-label="Buscar en el historial"></div><div id="admList"></div>`
+        +(bulk?`${admBulkHtml()}<div id="admQueue"></div><h2 class="below-h">Historial de subidas masivas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título, enlace o quién la subió" value="${esc(S.admQ||'')}" aria-label="Buscar en el historial"></div><div id="admList"></div>`
           :`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`);
       if(bulk){ bindAdmBulk(); bindAdmSearch('bulk'); await admBulkHistory(); } else { bindAdmSearch('recetas'); await admRecipes(); } }
     else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
@@ -2061,7 +2061,19 @@ async function adminLoad(){
 }
 let admT=null;
 function bindAdmSearch(kind){ const i=$('#admQ'); i.oninput=()=>{ S.admQ=i.value; clearTimeout(admT); admT=setTimeout(()=>kind==='usuarios'?admUsers():kind==='bulk'?admBulkHistory():admRecipes(),250); }; }
+async function admBulkQueue(){
+  const box=$('#admQueue'); if(!box) return;
+  let list=[]; try{ list=await api('GET','/admin/bulk/queue'); }catch{ return; }
+  if(!list.length){ box.innerHTML=''; return; }
+  const pend=list.filter(x=>x.status==='pending'), fail=list.filter(x=>x.status==='failed'), done=list.filter(x=>x.status==='done');
+  const row=x=>`<li class="${x.status==='done'?'ok':x.status==='failed'?'bad':'wait'}">${ico(x.status==='done'?'check':x.status==='failed'?'x':'clock')} <a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.url)}</a> — ${x.status==='done'?`${x.n||0} ${x.n===1?'receta subida':'recetas subidas'}`:esc(x.error||'Esperando a que la IA esté libre')}</li>`;
+  box.innerHTML=`<details class="card bulk bk-queue"><summary><h2 style="display:inline">${ico('clock')}En cola</h2> <span class="muted">${pend.length} esperando a la IA · ${done.length} subidos · ${fail.length} no válidos (últimos 7 días)</span></summary>
+    <p class="muted" style="font-size:14px">Los enlaces que no se pudieron subir porque la IA estaba ocupada se suben solos cada 15 minutos cuando vuelve a estar libre, al mismo destino que elegiste.</p>
+    <ol class="bk-log">${[...pend,...fail,...done].slice(0,400).map(row).join('')}</ol>
+    ${pend.length||fail.length?`<div class="row" style="justify-content:flex-end"><button class="btn danger sm" data-act="admQueueClear">${ico('trash')}Vaciar la cola</button></div>`:''}</details>`;
+}
 async function admBulkHistory(){
+  admBulkQueue().catch(()=>{});
   const list=await api('GET','/admin/bulk/history?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
   if(!list.length){ box.innerHTML='<p class="muted">Todavía no hay recetas subidas de forma masiva.</p>'; return; }
   const kindLbl={url:'Enlace',photo:'Foto',video:'Vídeo',file:'Archivo',text:'Texto'};
@@ -2270,6 +2282,7 @@ function admBulkHtml(){
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
       <div class="row"><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button><button type="button" class="btn danger" id="bkStop" hidden>${ico('x')}Cancelar</button><span class="muted" id="bkProg" style="font-size:13px"></span></div>
       <ol class="bk-log" id="bkLog"></ol>
+      <div id="bkSum" hidden></div>
     </form></details>`;
 }
 function bindAdmBulk(){
@@ -2287,12 +2300,14 @@ function bindAdmBulk(){
     if(!jobs.length){ toast('Añade enlaces, archivos o texto'); return; }
     const dest=f.querySelector('input[name=bkDest]:checked').value==='user'?{type:'user', username:$('#bkU').value.trim(), folder:$('#bkFo').value.trim(), public:$('#bkPub').checked}:{type:'sugg'};
     if(dest.type==='user' && !dest.username.replace(/[,\s@]/g,'')){ toast('Escribe al menos un usuario'); return; }
-    const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML='';
+    const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML=''; $('#bkSum').hidden=true;
+    // recuento para el resumen final
+    const cnt={items:0, recs:0, invalid:0, failed:0, queued:0, cancelled:0}; const busyUrls=[];
     // se puede cancelar en cualquier momento: corta lo que se esté leyendo y no sigue
     let ctl=new AbortController(), stopped=false;
     const stop=$('#bkStop'), prog=$('#bkProg'); stop.hidden=false;
     stop.onclick=()=>{ stopped=true; ctl.abort(); stop.disabled=true; prog.textContent='Cancelando…'; };
-    const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error}; return jj; };
+    const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error, status:r.status}; return jj; };
     const raw=(path,blob)=>call(path,{method:'POST',headers:{'content-type':'application/octet-stream'},body:blob});
     const post=(path,body)=>call('/api'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     let ok=0, done=0;
@@ -2300,7 +2315,7 @@ function bindAdmBulk(){
     let dup={}; if(urls.length){ try{ dup=await post('/admin/bulk/check',{urls}); }catch{} }
     for(const j of jobs){
       if(stopped) break;
-      if(j.k==='url' && dup[j.v]){ const d=dup[j.v]; const li=document.createElement('li'); li.className='dup'; li.innerHTML=`${ico('check')} ${esc(j.l)} — ya se añadió el ${esc(fmtDate(d.at))}${d.by?' por @'+esc(d.by):''}${d.title?' («'+esc(d.title)+'»)':''}. No se vuelve a subir.`; log.append(li); done++; continue; }
+      if(j.k==='url' && dup[j.v]){ const d=dup[j.v]; const li=document.createElement('li'); li.className='dup'; li.innerHTML=`${ico('check')} ${esc(j.l)} — ya se añadió el ${esc(fmtDate(d.at))}${d.by?' por @'+esc(d.by):''}${d.title?' («'+esc(d.title)+'»)':''}. No se vuelve a subir.`; log.append(li); done++; cnt.invalid++; continue; }
       prog.textContent=`${done+1} de ${jobs.length}`;
       const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — leyendo…`; log.append(li);
       try{
@@ -2314,12 +2329,32 @@ function bindAdmBulk(){
         li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — ${recs.length} ${recs.length===1?'receta encontrada':'recetas encontradas'}, guardando…`;
         for(const rec of recs){ if(stopped) break; try{ await post('/admin/bulk/save',{recipe:rec, dest, credit, origin:j.k==='url'?j.v:(j.k==='text'?'Texto pegado':j.v.name), kind:j.k}); n++; ok++; }catch(e){ if(stopped) break; } }
         li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(recs.slice(0,8).map(x=>x.title).join(', '))}${recs.length>8?'…':''}${stopped&&n<recs.length?' (cancelado)':''}`; li.className='ok';
-      }catch(err){ li.innerHTML=stopped?`${ico('x')} ${esc(j.l)} — cancelado`:`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
+        if(n){ cnt.items++; cnt.recs+=n; } else if(!stopped){ cnt.failed++; li.className='bad'; }
+      }catch(err){
+        if(stopped){ li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; li.className='bad'; cnt.cancelled++; }
+        else if(err.status===422||err.status===400||err.status===404){ li.innerHTML=`${ico('x')} ${esc(j.l)} — no es válido: ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; cnt.invalid++; }
+        else if(j.k==='url'){ busyUrls.push(j.v); li.innerHTML=`${ico('clock')} ${esc(j.l)} — ${esc(err.error||'no se ha podido subir')} Queda en cola: se subirá sola cuando la IA esté libre.`; li.className='wait'; cnt.queued++; }
+        else { li.innerHTML=`${ico('x')} ${esc(j.l)} — no se ha podido subir: ${esc(err.error||'error al leerlo')}`; li.className='bad'; cnt.failed++; }
+      }
       done++;
     }
-    if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); }); }
-    stop.hidden=true; stop.disabled=false; prog.textContent=stopped?'Subida cancelada':'';
-    b.disabled=false; toast(`${stopped?'Cancelado. ':''}${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null; admBulkHistory().catch(()=>{});
+    if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); cnt.cancelled++; }); }
+    if(busyUrls.length){ try{ await api('POST','/admin/bulk/queue',{urls:busyUrls, dest, credit}); }catch{ cnt.failed+=cnt.queued; cnt.queued=0; } }
+    stop.hidden=true; stop.disabled=false; prog.textContent='';
+    b.disabled=false; S.sugg=null; admBulkHistory().catch(()=>{});
+    // resumen al final, con el botón de finalizar
+    const pl=(n,a,b)=>`${n} ${n===1?a:b}`;
+    const sum=$('#bkSum'); sum.hidden=false;
+    sum.innerHTML=`<div class="bk-sum" role="status"><h3>${stopped?'Subida cancelada':'Subida terminada'}</h3>
+      <ul>
+        <li class="ok">${ico('check')}<b>${pl(cnt.items,'subido','subidos')}</b> (${pl(cnt.recs,'receta','recetas')})</li>
+        <li class="bad">${ico('x')}<b>${pl(cnt.invalid,'no válido','no válidos')}</b> <span class="muted">(enlaces rotos, repetidos o sin receta)</span></li>
+        <li class="bad">${ico('x')}<b>${pl(cnt.failed+cnt.queued,'no se ha podido subir','no se han podido subir')}</b>${cnt.queued?` <span class="muted">— ${pl(cnt.queued,'queda','quedan')} en cola y se ${cnt.queued===1?'subirá':'subirán'} sola${cnt.queued===1?'':'s'} cuando la IA esté libre</span>`:''}</li>
+        ${cnt.cancelled?`<li class="bad">${ico('x')}<b>${pl(cnt.cancelled,'cancelado','cancelados')}</b></li>`:''}
+      </ul>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn pri" id="bkEnd">${ico('check')}Finalizar</button></div></div>`;
+    $('#bkEnd').onclick=()=>{ log.innerHTML=''; sum.hidden=true; sum.innerHTML=''; $('#bkUrls').value=''; $('#bkText').value=''; $('#bkFiles').value=''; $('#bkFn').textContent=''; f.closest('details').open=false; S.bulkOpen=false; f.closest('details').scrollIntoView?.({block:'start'}); };
+    sum.scrollIntoView?.({block:'nearest', behavior:'smooth'});
   };
 }
 const admDo = async (fn,msg) => { try{ await fn(); toast(msg); adminLoad(); }catch(err){ toast(err.error||'No se ha podido hacer'); } };
@@ -2823,6 +2858,7 @@ const ACT = {
   openCommunity:el=>{ const r=[...(S.community||[]),...(S.communityAll||[])].find(x=>x.id===el.dataset.id); if(r) showVisiting({id:'c-'+r.id, name:r.title, color:'#6E4429', owner:r.owner.id, ownerName:r.owner.display||('@'+r.owner.username), visiting:true, recipes:[r]}, 2); },
   openSugg:el=>openSuggestion(el.dataset.id),
   admBulkOpen:el=>admBulkOpen(el.dataset.id),
+  admQueueClear:async()=>{ if(await confirmBox('Se quitarán de la cola los enlaces que esperan y los no válidos. Lo ya subido no se toca.','Vaciar')){ try{ await api('DELETE','/admin/bulk/queue'); toast('Cola vaciada'); admBulkQueue(); }catch(e){ toast(e.error||'No se ha podido'); } } },
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   orderFolders:()=>orderFoldersModal(),

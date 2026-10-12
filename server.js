@@ -83,6 +83,7 @@ async function migrate() {
   CREATE TABLE IF NOT EXISTS group_members(group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, added BIGINT, added_by TEXT, PRIMARY KEY(group_id, user_id));
   CREATE TABLE IF NOT EXISTS bulk_log(id TEXT PRIMARY KEY, created BIGINT NOT NULL, by_user TEXT, origin TEXT, kind TEXT, title TEXT, dest JSONB, sugg_id TEXT, recipe_ids JSONB);
   CREATE INDEX IF NOT EXISTS bulk_log_origin ON bulk_log(origin);
+  CREATE TABLE IF NOT EXISTS bulk_queue(id TEXT PRIMARY KEY, created BIGINT NOT NULL, by_user TEXT, url TEXT NOT NULL, dest JSONB, credit TEXT, status TEXT NOT NULL, tries INT NOT NULL DEFAULT 0, error TEXT, done_at BIGINT, n INT);
   CREATE TABLE IF NOT EXISTS user_notifs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT, title TEXT, body TEXT, url TEXT, created BIGINT NOT NULL, read_at BIGINT);
   CREATE INDEX IF NOT EXISTS user_notifs_user ON user_notifs(user_id, created);
   ALTER TABLE folders ADD COLUMN IF NOT EXISTS position INT;
@@ -937,6 +938,7 @@ function vttToText(v) {
 async function tiktokData(url) {
   const jar = {}, out = { title: '', desc: '', speech: '', image: '', how: [] };
   const r = await jarFetch(url, jar, { Accept: 'text/html,application/xhtml+xml' });
+  out.finalUrl = r.finalUrl;
   // un enlace corto que acaba en la portada de TikTok no lleva a ningún vídeo (borrado, privado o enlace roto)
   if (!/\/(video|photo)\/\d+/.test(r.finalUrl || '')) { const e = new Error('tiktok_dead'); e.dead = true; throw e; }
   const html = await r.text();
@@ -971,7 +973,7 @@ async function tiktokData(url) {
         const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
         const buf = Buffer.from(await vr.arrayBuffer()); if (buf.length < 20000 || buf.length > 24e6) continue;
         out.speech = await transcribe(buf, 'video/mp4'); if (out.speech) { out.how.push('audio'); break; }
-      } catch (e) { console.error('tiktok video', e.message); }
+      } catch (e) { if (e.status === 429) out.busy = true; console.error('tiktok video', e.message); }
     }
   }
   return out;
@@ -1002,7 +1004,7 @@ async function videoText(url) {
       try { const j = JSON.parse(await getText('https://www.tiktok.com/oembed?url=' + encodeURIComponent(t?.finalUrl || url)));
         t = t || { how: [] }; t.desc = t.desc || j.title || ''; t.title = t.title || (j.title || '').slice(0, 120); t.image = t.image || j.thumbnail_url || ''; t.how.push('oembed'); } catch { }
     }
-    if (t) { out.title = t.title || ''; out.image = t.image || ''; out.how = t.how;
+    if (t) { out.title = t.title || ''; out.image = t.image || ''; out.how = t.how; out.busy = !!t.busy;
       out.text = [t.desc && 'Descripción del vídeo: ' + t.desc, t.speech && 'Lo que se dice en el vídeo: ' + t.speech].filter(Boolean).join('\n\n'); }
   } else if (/instagram/.test(host)) {
     const m = new URL(url).pathname.match(/\/(p|reel|reels|tv)\/([\w-]+)/);
@@ -2113,25 +2115,30 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// Enlace (web o vídeo): todas las recetas que tenga
+// Enlace (web o vídeo): todas las recetas que tenga.
+// Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
+const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
+const DEAD_TT = 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda a su portada. Pasa cuando el vídeo se ha borrado, es privado o solo lo pueden ver sus amigos.';
+async function urlRecipes(url) {
+  if (isVideoUrl(url)) {
+    let v; try { v = await videoText(url); } catch (e) { throw bad(e.dead ? DEAD_TT : 'No he podido abrir ese vídeo. Si es privado no se puede leer.'); }
+    if (!v.text) throw v.busy ? bad('La IA está ocupada y no ha podido escuchar el vídeo.', 429) : bad('Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.');
+    const recipes = await videoRecipes(v.title, v.text);
+    if (!recipes.length) throw bad('No he encontrado recetas en ese vídeo.');
+    return recipes.map(r => ({ ...r, image: '', source: url }));
+  }
+  let r; try { r = await safeFetch(url); } catch { throw bad('No he podido abrir esa web.'); }
+  if (!r.ok) throw bad('No he podido abrir esa web.');
+  const html = await r.text();
+  const ld = parseJsonLdAll(html);
+  if (ld.length) return ld.map(x => ({ ...x, source: url }));
+  const recipes = await extractMany(htmlToText(html));
+  if (!recipes.length) throw bad('No he encontrado recetas en esa web.');
+  return recipes.map(x => ({ ...x, source: url }));
+}
 adm.post('/bulk/url', async (req, res) => {
-  try {
-    const url = String(req.body.url || '').trim();
-    if (isVideoUrl(url)) {
-      let v; try { v = await videoText(url); } catch (e) { return res.status(422).json({ error: e.dead ? 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda a su portada. Pasa cuando el vídeo se ha borrado, es privado o solo lo pueden ver sus amigos.' : 'No he podido abrir ese vídeo. Si es privado no se puede leer.' }); }
-      if (!v.text) return res.status(422).json({ error: 'Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.' });
-      const recipes = await videoRecipes(v.title, v.text);
-      if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en ese vídeo.' });
-      return res.json({ recipes: recipes.map(r => ({ ...r, image: '', source: url })) });
-    }
-    const r = await safeFetch(url); if (!r.ok) return res.status(422).json({ error: 'No he podido abrir esa web.' });
-    const html = await r.text();
-    const ld = parseJsonLdAll(html);
-    if (ld.length) return res.json({ recipes: ld.map(x => ({ ...x, source: url })) });
-    const recipes = await extractMany(htmlToText(html));
-    if (!recipes.length) return res.status(422).json({ error: 'No he encontrado recetas en esa web.' });
-    res.json({ recipes: recipes.map(x => ({ ...x, source: url })) });
-  } catch (e) { bulkErr(res, e); }
+  try { res.json({ recipes: await urlRecipes(String(req.body.url || '').trim()) }); }
+  catch (e) { if (e.status === 422) return res.status(422).json({ error: e.userMsg }); bulkErr(res, e); }
 });
 // Foto: todas las recetas que se lean en ella
 adm.post('/bulk/photo', async (req, res) => {
@@ -2181,45 +2188,85 @@ Receta: ${JSON.stringify({ title: d.title, servings: d.servings, time: d.time, d
     return tidyRecipe(out && out.ingredients.length >= Math.min(1, (d.ingredients || []).length) ? { ...d, ...out } : d);
   } catch (e) { console.error('pulir', e.message); return tidyRecipe(d); }
 }
-adm.post('/bulk/save', async (req, res, next) => {
-  try {
-    const d = cleanRecipe(await polishRecipe(cleanRecipe(req.body.recipe || {}))), dest = req.body.dest || {};
-    if (!d.ingredients.length && !d.steps.length) return res.status(400).json({ error: 'La receta está vacía.' });
-    d.credit = String(req.body.credit || d.credit || '').slice(0, 120);
-    if (dest.type === 'user') {
-      const names = [...new Set(String(dest.username || '').split(/[,;\s]+/).map(x => x.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))].slice(0, 50);
-      if (!names.length) return res.status(400).json({ error: 'Escribe al menos un usuario.' });
-      const users = (await q('SELECT id, username FROM users WHERE username = ANY($1)', [names])).rows;
-      const missing = names.filter(n => !users.some(u => u.username === n));
-      if (missing.length) return res.status(404).json({ error: `No existe: ${missing.map(n => '@' + n).join(', ')}.` });
-      const fname = String(dest.folder || '').trim().slice(0, 40);
-      const rids = [];
-      for (const u of users) {
-        let fid = null;
-        if (fname) {
-          const f = (await q('SELECT id FROM folders WHERE user_id=$1 AND lower(name)=lower($2)', [u.id, fname])).rows[0];
-          fid = f ? f.id : gid(); if (!f) await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [fid, u.id, fname, '#7A2E2E', now()]);
-        }
-        const id = gid();
-        await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
-        queueRecipeWork(id); rids.push(id);
+async function saveBulkRecipe({ recipe, dest = {}, credit, origin, kind, by }) {
+  const d = cleanRecipe(await polishRecipe(cleanRecipe(recipe || {})));
+  if (!d.ingredients.length && !d.steps.length) throw bad('La receta está vacía.', 400);
+  d.credit = String(credit || d.credit || '').slice(0, 120);
+  const log = { by, origin, kind };
+  if (dest.type === 'user') {
+    const names = [...new Set(String(dest.username || '').split(/[,;\s]+/).map(x => x.trim().toLowerCase().replace(/^@/, '')).filter(Boolean))].slice(0, 50);
+    if (!names.length) throw bad('Escribe al menos un usuario.', 400);
+    const users = (await q('SELECT id, username FROM users WHERE username = ANY($1)', [names])).rows;
+    const missing = names.filter(n => !users.some(u => u.username === n));
+    if (missing.length) throw bad(`No existe: ${missing.map(n => '@' + n).join(', ')}.`, 404);
+    const fname = String(dest.folder || '').trim().slice(0, 40);
+    const rids = [];
+    for (const u of users) {
+      let fid = null;
+      if (fname) {
+        const f = (await q('SELECT id FROM folders WHERE user_id=$1 AND lower(name)=lower($2)', [u.id, fname])).rows[0];
+        fid = f ? f.id : gid(); if (!f) await q('INSERT INTO folders(id,user_id,name,color,created) VALUES($1,$2,$3,$4,$5)', [fid, u.id, fname, '#7A2E2E', now()]);
       }
-      await bulkLog(req, d.title, { type: 'user', users: users.map(u => u.username), folder: fname, public: !!dest.public }, null, rids);
-      return res.json({ ok: true, n: users.length });
+      const id = gid();
+      await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
+      queueRecipeWork(id); rids.push(id);
     }
-    // por defecto, a Recetas recomendadas (visibles para todo el mundo)
-    const id = gid(), pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
-    await q('INSERT INTO suggestions(id,url,title,position,created,data,rewritten,title_ok,credit) VALUES($1,$2,$3,$4,$5,$6,true,true,$7)', [id, d.source || 'manual:' + id, cleanTitle(d.title), pos, now(), { ...d, title: cleanTitle(d.title), image: '' }, d.credit || null]);
-    processSuggestionArt().catch(() => {});
-    await bulkLog(req, cleanTitle(d.title), { type: 'sugg' }, id, []);
-    res.json({ ok: true, id });
+    await bulkLog(log, d.title, { type: 'user', users: users.map(u => u.username), folder: fname, public: !!dest.public }, null, rids);
+    return { ok: true, n: users.length, title: d.title };
+  }
+  // por defecto, a Recetas recomendadas (visibles para todo el mundo)
+  const id = gid(), pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
+  await q('INSERT INTO suggestions(id,url,title,position,created,data,rewritten,title_ok,credit) VALUES($1,$2,$3,$4,$5,$6,true,true,$7)', [id, d.source || 'manual:' + id, cleanTitle(d.title), pos, now(), { ...d, title: cleanTitle(d.title), image: '' }, d.credit || null]);
+  processSuggestionArt().catch(() => {});
+  await bulkLog(log, cleanTitle(d.title), { type: 'sugg' }, id, []);
+  return { ok: true, id, title: d.title };
+}
+adm.post('/bulk/save', async (req, res, next) => {
+  try { res.json(await saveBulkRecipe({ ...req.body, by: req.user.username })); }
+  catch (e) { if (e.userMsg) return res.status(e.status || 400).json({ error: e.userMsg }); next(e); }
+});
+/* Cola de la subida masiva: los enlaces que no se pudieron subir porque la IA estaba ocupada
+   se guardan aquí y se van subiendo solos cuando vuelve a estar libre */
+adm.post('/bulk/queue', async (req, res, next) => {
+  try {
+    const urls = (Array.isArray(req.body.urls) ? req.body.urls : []).map(u => String(u).trim()).filter(u => /^https?:\/\//.test(u)).slice(0, 2000);
+    for (const u of urls) await q('INSERT INTO bulk_queue(id,created,by_user,url,dest,credit,status,tries) VALUES($1,$2,$3,$4,$5,$6,$7,0)', [gid(), now(), req.user.username, u.slice(0, 800), req.body.dest || {}, String(req.body.credit || '').slice(0, 120), 'pending']);
+    res.json({ ok: true, n: urls.length }); setTimeout(() => runBulkQueue().catch(() => {}), 2000);
   } catch (e) { next(e); }
 });
+adm.get('/bulk/queue', async (req, res, next) => {
+  try {
+    const rows = (await q("SELECT id,created,by_user,url,status,error,tries,done_at,n FROM bulk_queue WHERE status<>'done' OR done_at > $1 ORDER BY created DESC LIMIT 1000", [now() - 7 * 864e5])).rows;
+    res.json(rows.map(r => ({ ...r, created: Number(r.created), done_at: Number(r.done_at) || null })));
+  } catch (e) { next(e); }
+});
+adm.delete('/bulk/queue', async (req, res, next) => {
+  try { await q("DELETE FROM bulk_queue WHERE status<>'done'"); res.json({ ok: true }); } catch (e) { next(e); }
+});
+let bulkQueueBusy = false;
+async function runBulkQueue() {
+  if (bulkQueueBusy) return; bulkQueueBusy = true;
+  try {
+    for (let i = 0; i < 200; i++) {
+      const j = (await q("SELECT * FROM bulk_queue WHERE status='pending' ORDER BY created LIMIT 1")).rows[0];
+      if (!j) break;
+      try {
+        const recs = await urlRecipes(j.url); let n = 0;
+        for (const rec of recs) { try { await saveBulkRecipe({ recipe: rec, dest: j.dest, credit: j.credit, origin: j.url, kind: 'url', by: j.by_user }); n++; } catch (e) { if (e.status === 429) throw e; } }
+        await q("UPDATE bulk_queue SET status='done', done_at=$2, n=$3, error=NULL WHERE id=$1", [j.id, now(), n]);
+      } catch (e) {
+        if (e.status === 429 || (!e.userMsg && j.tries < 5)) { await q('UPDATE bulk_queue SET tries=tries+1, error=$2 WHERE id=$1', [j.id, e.status === 429 ? 'Esperando a que la IA esté libre' : String(e.message).slice(0, 200)]); if (e.status === 429) break; continue; }
+        await q("UPDATE bulk_queue SET status='failed', done_at=$2, error=$3 WHERE id=$1", [j.id, now(), e.userMsg || 'No se ha podido subir']);
+      }
+    }
+  } catch (e) { console.error('cola subida', e.message); }
+  finally { bulkQueueBusy = false; }
+}
 /* Historial de la subida masiva y aviso de enlaces repetidos */
 const normUrl = u => String(u || '').trim().replace(/#.*$/, '').replace(/[?&](utm_[^=&]+|fbclid|igsh|is_from_webapp|sender_device|_r|_t)=[^&]*/g, '').replace(/\/+$/, '').toLowerCase();
-async function bulkLog(req, title, dest, suggId, recipeIds) {
+async function bulkLog(log, title, dest, suggId, recipeIds) {
   try { await q('INSERT INTO bulk_log(id,created,by_user,origin,kind,title,dest,sugg_id,recipe_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-    [gid(), now(), req.user.username, String(req.body.origin || '').slice(0, 800), String(req.body.kind || '').slice(0, 20), String(title || '').slice(0, 200), dest, suggId, JSON.stringify(recipeIds || [])]); } catch (e) { console.error('bulk log', e.message); }
+    [gid(), now(), log.by, String(log.origin || '').slice(0, 800), String(log.kind || '').slice(0, 20), String(title || '').slice(0, 200), dest, suggId, JSON.stringify(recipeIds || [])]); } catch (e) { console.error('bulk log', e.message); }
 }
 adm.post('/bulk/check', async (req, res, next) => {
   try {
@@ -2396,5 +2443,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setTimeout(() => suggNutrition().catch(() => {}), 40000); setInterval(backfillRecipes, 3 * 3600e3); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setTimeout(() => suggNutrition().catch(() => {}), 40000); setInterval(backfillRecipes, 3 * 3600e3); setTimeout(() => runBulkQueue().catch(() => {}), 60000); setInterval(() => runBulkQueue().catch(() => {}), 15 * 60e3); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });
