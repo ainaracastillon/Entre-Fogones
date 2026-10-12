@@ -329,7 +329,7 @@ function render(){
   document.body.classList.toggle('in-book', S.view==='book');
   document.documentElement.classList.toggle('in-chat', S.view==='chat');
   document.documentElement.classList.toggle('in-menu', S.view==='menu');
-  if(['account','admin'].includes(S.view) && !S.profile) S.view='library';
+  if(['account','admin','myrecipes'].includes(S.view) && !S.profile) S.view='library';
   if(['admin','admuser'].includes(S.view) && !isAdminMe()) S.view='library';
   renderTop();
   const m=$('#main');
@@ -346,6 +346,7 @@ function render(){
   else if(S.view==='help'){ m.innerHTML = viewHelp(); }
   else if(S.view==='admuser'||S.view==='friendlib'){ m.innerHTML = viewAdmUser(); loadAdmUser(); }
   else if(S.view==='equiv'){ m.innerHTML = viewEquiv(); bindEquiv(); }
+  else if(S.view==='myrecipes'){ m.innerHTML = viewMyRecipes(); bindMyRecipes(); }
   const top=$('.top'); if(top) document.documentElement.style.setProperty('--toph', top.offsetHeight+'px');
   navTrack();
 }
@@ -392,7 +393,7 @@ function navTrack(){
 /* Al recargar: se vuelve a abrir la página en la que estabas */
 function restoreFromUrl(){
   const p=new URLSearchParams(location.search), v=p.get('v');
-  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser','friendlib'];
+  const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser','friendlib','myrecipes'];
   if(v==='admuser'||v==='friendlib'){ S.admUserId=p.get('u'); S.admUser=null; }
   if(!v || !ok.includes(v)) return null;
   if(v==='admin' && p.get('t')){ S.admTab=p.get('t'); S.admUsersDel=p.get('s')==='del'; S.admRecSub=p.get('s')==='bulk'?'bulk':'users'; }
@@ -1166,7 +1167,7 @@ function aiChatModal({folderId, seed, edit=false, prompt=''}={}){
       const b=$('#aiok',m); b.disabled=true;
       const base=st.recipe;
       const r={...base, ...(st.newImage?{image:''}:{}), id:edit&&base.id?base.id:gid(), folderId:folderId||null, created:edit&&base.created?base.created:now()};
-      try{ S.pendingFocus=r.id; await store.saveRecipe(r); closeModal(); toast(edit?'Cambios guardados':'Receta aprobada y guardada'); openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); }
+      try{ S.pendingFocus=r.id; await store.saveRecipe(r); closeModal(); toast(edit?'Cambios guardados':'Receta aprobada y guardada'); if(S.view==='myrecipes'){ render(); return; } openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); }
       catch(err){ b.disabled=false; $('#aierr',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
     };
   };
@@ -1600,18 +1601,22 @@ function myUploadsRows(q=''){
   const k=q.trim().toLowerCase(), list=myUploads().filter(r=>!k||(r.title||'').toLowerCase().includes(k)||(r.ingredients||[]).join(' ').toLowerCase().includes(k));
   if(!list.length) return `<p class="muted" style="margin:0">${k?'Ninguna con ese nombre.':'Todavía no has subido ninguna receta. Pulsa «Nueva receta» en la biblioteca.'}</p>`;
   return list.map(r=>{ const fs=(r.folderIds&&r.folderIds.length?r.folderIds:[r.folderId]).map(id=>S.folders.find(f=>f.id===id)?.name).filter(Boolean);
-    return `<button class="rcard up-row" data-act="openRecipe" data-id="${esc(r.id)}"><span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(30,'var(--accent)','var(--accent-soft)')}</span>
-      <span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${r.created>1e12?esc(fmtDate(r.created))+" · ":""}${esc(fs.join(', ')||'Sin recetario')}${r.public?' · Pública':''}</span></span></button>`; }).join('');
+    return `<button class="rcard up-row" data-act="editMine" data-id="${esc(r.id)}"><span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(30,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${r.created>1e12?esc(fmtDate(r.created))+" · ":""}${esc(fs.join(', ')||'Sin recetario')}${r.public?' · Pública':''}</span></span><span class="btn sm" aria-hidden="true">${ico('edit')}Editar</span></button>`; }).join('');
 }
 function myUploadsCard(){
   const n=myUploads().length;
-  return `<section class="card" id="myUp">
-    <h2>Recetas subidas por mí <span class="muted" style="font-weight:400;font-size:15px">(${n})</span></h2>
-    <p class="muted">Todas las recetas que has subido tú. No salen las que has guardado de las recomendadas ni las que te han mandado tus amigos.</p>
-    ${n>5?`<input id="myUpQ" class="inp" type="search" placeholder="Buscar en tus recetas subidas" aria-label="Buscar en tus recetas subidas">`:''}
-    <div class="up-list" id="myUpList">${myUploadsRows()}</div>
-  </section>`;
+  return `<section class="card up-card"><div><h2>Recetas subidas por mí</h2><p class="up-n"><b>${n}</b> ${n===1?'receta':'recetas'}</p></div>
+    <button class="btn pri" data-act="go" data-v="myrecipes">${ico('book')}Ver y editar</button></section>`;
 }
+function viewMyRecipes(){
+  const n=myUploads().length;
+  return `<div class="book-head"><button class="btn ghost sm tbtn" data-act="go" data-v="account" aria-label="Mi cuenta">${ico('back')}<span class="lbl">Mi cuenta</span></button><h1>Recetas subidas por mí</h1></div>
+    <p class="muted">${n} ${n===1?'receta':'recetas'} que has subido tú (no salen las guardadas de las recomendadas ni las que te han mandado). Pulsa una para editarla.</p>
+    ${n>5?`<input id="myUpQ" class="inp" type="search" placeholder="Buscar por nombre o ingrediente" aria-label="Buscar en tus recetas subidas" value="${esc(S.myUpQ||'')}" style="margin-bottom:12px">`:''}
+    <div class="up-list" id="myUpList">${myUploadsRows(S.myUpQ||'')}</div>`;
+}
+function bindMyRecipes(){ const q=$('#myUpQ'); if(q) q.oninput=()=>{ S.myUpQ=q.value; $('#myUpList').innerHTML=myUploadsRows(q.value); }; }
 /* ===== Mi cuenta (igual que en Kairos, adaptada a Entre Fogones) ===== */
 const ALLERGENS = ['Gluten','Lactosa','Huevo','Frutos secos','Marisco','Pescado','Cacahuete','Soja'];
 function viewAccount(){
@@ -1724,7 +1729,6 @@ function viewAccount(){
   </div>`;
 }
 function bindAccount(root){
-  const upQ=$('#myUpQ',root); if(upQ) upQ.oninput=()=>{ $('#myUpList',root).innerHTML=myUploadsRows(upQ.value); };
   let color=S.profile.color||AVCOLORS[0];
   initColorField(root,'pcolor',c=>{color=c});
   const ok = async (fn, msg) => { try{ await fn(); await loadState(); toast(msg); return true; }catch(err){ toast(err.error||'No se ha podido guardar'); return false; } };
@@ -2975,6 +2979,7 @@ const ACT = {
   newRecipe:el=>{ closeModal(); newRecipeModal(el.dataset.folder||undefined); },
   newFolder:()=>folderModal(),
   openBook:el=>openBook(el.dataset.id),
+  editMine:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) editorModal(r); },
   openRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); },
   closeBook:()=>{ const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
   prevPage:()=>turn('prev'), nextPage:()=>turn('next'),
