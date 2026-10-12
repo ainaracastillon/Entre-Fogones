@@ -730,6 +730,11 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 .ord-n{flex:1;min-width:0;font-weight:600}
 .ord-row .x{width:32px;height:32px}.ord-row .x svg{transform:rotate(90deg)}
 .ord-row .x:disabled{opacity:.3}
+.person{flex-wrap:wrap;row-gap:8px}
+.person .pb,.person-link{flex:1 1 160px;min-width:0}
+.person .pn,.person .pu{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.person>.row{margin-left:auto;flex-wrap:nowrap;gap:6px}
+@media (max-width:560px){.person>.row .btn{padding:7px 11px}}
 </style>
 </head>
 <body>
@@ -740,6 +745,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=29"></script>
+<script src="/app.js?v=30"></script>
 </body>
 </html>
