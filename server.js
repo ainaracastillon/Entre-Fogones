@@ -65,6 +65,7 @@ async function migrate() {
   CREATE INDEX IF NOT EXISTS messages_chat ON messages(chat_id, ts);
   CREATE TABLE IF NOT EXISTS contact_messages(
     id TEXT PRIMARY KEY, email TEXT NOT NULL, subject TEXT, message TEXT NOT NULL, user_id TEXT, created BIGINT NOT NULL);
+  ALTER TABLE recipes ADD COLUMN IF NOT EXISTS more_folders TEXT[] NOT NULL DEFAULT '{}';
   ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'user';
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked BOOLEAN NOT NULL DEFAULT false;
@@ -183,7 +184,7 @@ const suspension = u => u && u.blocked ? { reason: u.blocked_reason || '', at: N
 
 /* ---------- Ayudantes ---------- */
 const pub = u => u ? { id: u.id, username: u.username, display: u.display, color: u.color, avatar: u.avatar || null } : null;
-function recipeOut(r) { return { ...r.data, id: r.id, folderId: r.folder_id, created: Number(r.created), updated: Number(r.updated) }; }
+function recipeOut(r) { const more = (r.more_folders || []).filter(x => x && x !== r.folder_id); return { ...r.data, id: r.id, folderId: r.folder_id, moreFolders: more, folderIds: r.folder_id ? [r.folder_id, ...more] : [], created: Number(r.created), updated: Number(r.updated) }; }
 function cleanRecipe(b) {
   const s = (v, n) => String(v ?? '').slice(0, n);
   const arr = (v, n, m) => (Array.isArray(v) ? v : []).map(x => s(x, m)).filter(Boolean).slice(0, n);
@@ -349,7 +350,7 @@ api.post('/login', async (req, res, next) => {
 async function adoptAnon(req, userId) {
   const cur = req.user;
   if (!cur.username && cur.id !== userId) {
-    await q('UPDATE folders SET user_id=$1 WHERE user_id=$2 AND id IN (SELECT DISTINCT folder_id FROM recipes WHERE user_id=$2 AND folder_id IS NOT NULL)', [userId, cur.id]);
+    await q('UPDATE folders SET user_id=$1 WHERE user_id=$2 AND id IN (SELECT folder_id FROM recipes WHERE user_id=$2 AND folder_id IS NOT NULL UNION SELECT unnest(more_folders) FROM recipes WHERE user_id=$2)', [userId, cur.id]);
     await q('UPDATE recipes SET user_id=$1 WHERE user_id=$2', [userId, cur.id]);
     await q('DELETE FROM users WHERE id=$1', [cur.id]);
   } else await q('DELETE FROM sessions WHERE token=$1', [req.token]);
@@ -476,7 +477,9 @@ api.get('/friends/:id/library', needProfile, async (req, res, next) => {
 });
 api.delete('/folders/:id', async (req, res, next) => {
   try {
-    await q('UPDATE recipes SET folder_id=NULL WHERE folder_id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+    // la receta sigue en sus otros recetarios; si este era el principal, pasa a serlo el siguiente
+    await q('UPDATE recipes SET more_folders=array_remove(more_folders,$1) WHERE user_id=$2 AND $1=ANY(more_folders)', [req.params.id, req.user.id]);
+    await q("UPDATE recipes SET folder_id=more_folders[1], more_folders=more_folders[2:] WHERE folder_id=$1 AND user_id=$2", [req.params.id, req.user.id]);
     await q('DELETE FROM folders WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -488,11 +491,16 @@ api.put('/recipes/:id', async (req, res, next) => {
     const id = req.params.id; if (!idOk(id)) return res.status(400).json({ error: 'Id no válido' });
     const ex = await q('SELECT user_id FROM recipes WHERE id=$1', [id]);
     if (ex.rows[0] && ex.rows[0].user_id !== req.user.id) return res.status(403).json({ error: 'No es tuya' });
-    let folderId = req.body.folderId || null;
-    if (folderId) { const f = await q('SELECT 1 FROM folders WHERE id=$1 AND user_id=$2', [folderId, req.user.id]); if (!f.rows[0]) folderId = null; }
+    // una receta puede estar en varios recetarios: folderId es el principal y moreFolders los demás
+    const mine = new Set((await q('SELECT id FROM folders WHERE user_id=$1', [req.user.id])).rows.map(x => x.id));
+    let folderId = mine.has(req.body.folderId) ? req.body.folderId : null;
+    let more = Array.isArray(req.body.moreFolders) ? req.body.moreFolders : (ex.rows[0] ? null : []);
+    if (more === null) more = (await q('SELECT more_folders FROM recipes WHERE id=$1', [id])).rows[0]?.more_folders || [];
+    more = [...new Set(more.map(String))].filter(x => mine.has(x) && x !== folderId).slice(0, 50);
+    if (!folderId && more.length) folderId = more.shift();
     const data = cleanRecipe(req.body);
-    await q(`INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$6)
-             ON CONFLICT(id) DO UPDATE SET folder_id=$3, data=$4, updated=$6`, [id, req.user.id, folderId, data, Number(req.body.created) || now(), now()]);
+    await q(`INSERT INTO recipes(id,user_id,folder_id,data,created,updated,more_folders) VALUES($1,$2,$3,$4,$5,$6,$7)
+             ON CONFLICT(id) DO UPDATE SET folder_id=$3, data=$4, updated=$6, more_folders=$7`, [id, req.user.id, folderId, data, Number(req.body.created) || now(), now(), more]);
     res.json({ ok: true });
     // receta nueva hecha por la persona (no copiada): se avisa a sus amigos
     if (!ex.rows[0] && req.user.username && !data.fromSugg && !data.fromUid) {
@@ -606,7 +614,7 @@ api.get('/public/folder/:id', async (req, res, next) => {
   try {
     const f = (await q('SELECT f.*, u.username, u.display, u.color AS ucolor FROM folders f JOIN users u ON u.id=f.user_id WHERE f.id=$1 AND u.deleted_at IS NULL', [req.params.id])).rows[0];
     if (!f) return res.status(404).json({ error: 'Este recetario ya no existe.' });
-    const rs = await q('SELECT * FROM recipes WHERE folder_id=$1 AND user_id=$2', [f.id, f.user_id]);
+    const rs = await q('SELECT * FROM recipes WHERE (folder_id=$1 OR $1=ANY(more_folders)) AND user_id=$2', [f.id, f.user_id]);
     res.json({ folder: { id: f.id, name: f.name, color: f.color }, recipes: rs.rows.map(recipeOut), owner: { id: f.user_id, username: f.username, display: f.display, color: f.ucolor } });
   } catch (e) { next(e); }
 });
@@ -1822,7 +1830,7 @@ api.get('/pdf/folder/:id', async (req, res, next) => {
     } else {
       const f = (await q('SELECT * FROM folders WHERE id=$1', [id])).rows[0];
       if (!f) return res.status(404).json({ error: 'Este recetario ya no existe.' });
-      name = f.name; rows = (await q('SELECT * FROM recipes WHERE folder_id=$1 AND user_id=$2', [f.id, f.user_id])).rows;
+      name = f.name; rows = (await q('SELECT * FROM recipes WHERE (folder_id=$1 OR $1=ANY(more_folders)) AND user_id=$2', [f.id, f.user_id])).rows;
     }
     const list = rows.map(recipeOut).sort((a, b) => String(a.title).localeCompare(String(b.title), 'es'));
     if (!list.length) return res.status(400).json({ error: 'Este recetario no tiene recetas.' });

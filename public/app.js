@@ -14,6 +14,9 @@ const S = {
 /* ===== Utilidades ===== */
 const $ = (s,r=document)=>r.querySelector(s);
 /* En el móvil la página se desplaza dentro de <main> (entre la cabecera y la barra de abajo); en el ordenador, la ventana */
+// una receta puede estar en varios recetarios
+const inF = (r,fid) => r.folderId===fid || (r.folderIds||[]).includes(fid);
+const hasF = (r,folders) => folders.some(f=>inF(r,f.id));
 const isMobileLayout = () => matchMedia('(max-width:640px)').matches;
 const scroller = () => isMobileLayout() ? document.querySelector('body > main') : null;
 const curScroll = () => { const s=scroller(); return s ? s.scrollTop : window.scrollY; };
@@ -514,12 +517,12 @@ function fitSpines(){
   });
 }
 function viewLibrary(){
-  const none = S.recipes.filter(r=>!r.folderId || !S.folders.some(f=>f.id===r.folderId));
+  const none = S.recipes.filter(r=>!hasF(r,S.folders));
   const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, usar la IA, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const slot = b => `<div class="slot">${b}</div>`;
   const books = [
     slot(`<button class="spine all" style="--cloth:#6E4429;--h:226" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">TODAS</span><span class="sc">${S.recipes.length}</span></button>`),
-    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
+    ...S.folders.map(f=>{const n=S.recipes.filter(r=>inF(r,f.id)).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
     none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;--h:190" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
     slot(`<button class="spine add" style="--h:200" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
   ].join('');
@@ -667,9 +670,9 @@ async function openSuggestion(id){
 const byTitle = (a,b)=>(a.title||'').localeCompare(b.title||'','es');
 function ownBook(id){
   if(id==='all') return {id:'all', name:'Todas mis recetas', color:'#6E4429', owner:S.uid, recipes:[...S.recipes].sort(byTitle)};
-  if(id==='none') return {id:'none', name:'Sin recetario', color:'#7A6A5C', owner:S.uid, recipes:S.recipes.filter(r=>!r.folderId||!S.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
+  if(id==='none') return {id:'none', name:'Sin recetario', color:'#7A6A5C', owner:S.uid, recipes:S.recipes.filter(r=>!hasF(r,S.folders)).sort(byTitle)};
   const f=S.folders.find(f=>f.id===id); if(!f) return null;
-  return {id:f.id, name:f.name, color:f.color, owner:S.uid, folder:true, recipes:S.recipes.filter(r=>r.folderId===f.id).sort(byTitle)};
+  return {id:f.id, name:f.name, color:f.color, owner:S.uid, folder:true, recipes:S.recipes.filter(r=>inF(r,f.id)).sort(byTitle)};
 }
 function syncOwnBook(){
   const b = ownBook(S.book.id);
@@ -704,7 +707,7 @@ function bookTools(){
     if(b.folder && b.recipes.length) t += tbBtn('saveFolderCopy','','book','Guardar el recetario entero');
     return t;
   }
-  if(cur){ const a=` data-id="${esc(cur.id)}"`; return tbBtn('shareRecipe',a,'share','Compartir')+tbBtn('pdfRecipe',a,'pdf','PDF')+tbBtn('moveRecipe',a,'move','Mover')+tbBtn('delRecipe',a,'trash','Borrar','danger'); }
+  if(cur){ const a=` data-id="${esc(cur.id)}"`; return tbBtn('shareRecipe',a,'share','Compartir')+tbBtn('pdfRecipe',a,'pdf','PDF')+tbBtn('foldersRecipe',a,'move','Recetarios')+tbBtn('delRecipe',a,'trash','Borrar','danger'); }
   const pdfF = b.recipes.length ? tbBtn('pdfFolder',` data-id="${esc(b.id)}"`,'pdf','PDF') : '';
   if(b.folder) return tbBtn('shareFolder','','share','Compartir recetario')+pdfF+tbBtn('editFolder','','edit','Renombrar o color')+tbBtn('delFolder','','trash','Borrar recetario','danger');
   return pdfF;
@@ -899,6 +902,28 @@ function folderPicker(title, cb, {allowNone=true}={}){
   </div>`);
   m.querySelectorAll('[data-fid]').forEach(b=>b.onclick=()=>{closeModal();cb(b.dataset.fid||null)});
   $('[data-newf]',m).onclick=()=>{ closeModal(); folderModal(null,{onCreated:id=>cb(id), simple:true}); };
+}
+/* Elegir en qué recetarios está una receta (uno o varios) */
+function foldersModal(r){
+  const sel=new Set(r.folderIds&&r.folderIds.length?r.folderIds:(r.folderId?[r.folderId]:[]));
+  const m=openModal(`${mHead('Recetarios de esta receta')}<p class="muted" style="margin:0">Marca todos los recetarios en los que quieras tener «${esc(r.title||'esta receta')}». Es la misma receta: si la cambias, se cambia en todos.</p>
+    <div class="pick fpick" id="fpk"></div>
+    <div class="row" style="justify-content:space-between"><button type="button" class="btn" id="fpNew">${ico('plus')}Nuevo recetario</button><span class="row" style="gap:8px"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="fpOk">Guardar</button></span></div>`);
+  const draw=()=>{ $('#fpk',m).innerHTML=S.folders.length?S.folders.map(f=>`<label class="bp-row fp-row"><input type="checkbox" data-fid="${esc(f.id)}" ${sel.has(f.id)?'checked':''}><span class="fp-sw" style="background:${esc(f.color)}"></span><span class="bp-t">${esc(f.name)}</span></label>`).join(''):'<p class="muted">Todavía no tienes recetarios.</p>';
+    m.querySelectorAll('[data-fid]').forEach(c=>c.onchange=()=>{ c.checked?sel.add(c.dataset.fid):sel.delete(c.dataset.fid); }); };
+  draw();
+  $('#fpNew',m).onclick=()=>{ const name=prompt('Nombre del nuevo recetario'); if(!name||!name.trim()) return;
+    const f={id:gid(), name:name.trim().slice(0,40), color:CLOTHS[S.folders.length%CLOTHS.length][0], created:now()};
+    store.saveFolder(f).then(()=>{ sel.add(f.id); draw(); toast('Recetario creado'); }).catch(err=>toast(err.error||'No se pudo crear')); };
+  $('#fpOk',m).onclick=async()=>{
+    const ids=S.folders.map(f=>f.id).filter(id=>sel.has(id));
+    const primary=ids.includes(r.folderId)?r.folderId:(ids[0]||null);
+    const {folderIds:_x,...rest}=r;
+    try{ await store.saveRecipe({...rest, folderId:primary, moreFolders:ids.filter(id=>id!==primary)}); closeModal();
+      toast(ids.length>1?`Ahora está en ${ids.length} recetarios`:ids.length?'Guardada en el recetario':'La receta queda sin recetario');
+      if(S.view==='book' && S.book && !S.book.visiting) render();
+    }catch(e){ toast(e.error||'No se ha podido guardar'); }
+  };
 }
 /* Desplegable de recetarios con la opción de crear uno nuevo */
 const folderOptions = sel => `${S.folders.map(f=>`<option value="${esc(f.id)}" ${f.id===sel?'selected':''}>${esc(f.name)}</option>`).join('')}<option value="" ${!sel?'selected':''}>Sin recetario</option><option value="__new">＋ Nuevo recetario…</option>`;
@@ -1361,7 +1386,7 @@ function shareModal(kind, item){
 }
 function snapOf(kind,item){
   if(kind==='recipe') return {title:item.title||'Sin título', time:item.time||'', servings:item.servings||'', n:(item.ingredients||[]).length};
-  return {title:item.name, n:S.recipes.filter(r=>r.folderId===item.id).length};
+  return {title:item.name, n:S.recipes.filter(r=>inF(r,item.id)).length};
 }
 async function sendShare(to, kind, item, purpose, text=''){
   await sendMsg(to, {type:kind, purpose, text, ref:{owner:S.uid, id:item.id}, snap:snapOf(kind,item)});
@@ -2192,11 +2217,11 @@ async function loadAdmUser(){
     const d=S.admUser && S.admUser.user.id===S.admUserId && S.admUser.fr===fr ? S.admUser : {...await api('GET',fr?`/friends/${encodeURIComponent(S.admUserId)}/library`:`/admin/users/${encodeURIComponent(S.admUserId)}/library`), fr};
     S.admUser=d; const u=d.user; S.profiles[u.id]={id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
     const roleLbl={superadmin:'Superadministrador',admin:'Administrador',user:'Usuario'};
-    const none=d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId));
+    const none=d.recipes.filter(r=>!hasF(r,d.folders));
     const slot=b=>`<div class="slot">${b}</div>`;
     const books=[
       slot(`<button class="spine all" style="--cloth:#6E4429;--h:226" data-act="admOpenBook" data-id="all"><span class="st">TODAS</span><span class="sc">${d.recipes.length}</span></button>`),
-      ...d.folders.map(f=>{ const n=d.recipes.filter(r=>r.folderId===f.id).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
+      ...d.folders.map(f=>{ const n=d.recipes.filter(r=>inF(r,f.id)).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
       none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;--h:190" data-act="admOpenBook" data-id="none"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):''
     ].join('');
     if(fr){ box.innerHTML=`<section class="card account-head">${avatar(u.id,'big')}
@@ -2225,9 +2250,9 @@ function admUserBook(id){
   const d=S.admUser; if(!d) return null; const u=d.user;
   const base={owner:u.id, ownerName:u.display||('@'+u.username), visiting:true, adminView:true};
   if(id==='all') return {...base, id:'au-all-'+u.id, name:'TODAS', color:'#6E4429', recipes:[...d.recipes].sort(byTitle)};
-  if(id==='none') return {...base, id:'au-none-'+u.id, name:'Sin recetario', color:'#7A6A5C', recipes:d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId)).sort(byTitle)};
+  if(id==='none') return {...base, id:'au-none-'+u.id, name:'Sin recetario', color:'#7A6A5C', recipes:d.recipes.filter(r=>!hasF(r,d.folders)).sort(byTitle)};
   const f=d.folders.find(x=>x.id===id); if(!f) return null;
-  return {...base, id:f.id, name:f.name, color:f.color, folder:true, recipes:d.recipes.filter(r=>r.folderId===f.id).sort(byTitle)};
+  return {...base, id:f.id, name:f.name, color:f.color, folder:true, recipes:d.recipes.filter(r=>inF(r,f.id)).sort(byTitle)};
 }
 /* Subida masiva de recetas desde el panel */
 function admBulkHtml(){
@@ -2817,6 +2842,7 @@ const ACT = {
   goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn=p>S.page?'next':'prev'; S.page=p; renderBook(); S.turn=null; scrollTopTo(0,true); },
   editRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) editorModal({...r}); },
   shareRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) shareModal('recipe',r); },
+  foldersRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) foldersModal(r); },
   moveRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Mover a…', async fid=>{ try{ await store.saveRecipe({...r,folderId:fid}); toast('Receta movida'); }catch(e){fail(e)} }); },
   delRecipe:async el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; if(await confirmBox(`Se borrará «${r.title}» de tu libro.`)){ try{ await store.deleteRecipe(r.id); toast('Receta borrada'); }catch(e){fail(e)} } },
   shareFolder:()=>{ const f=S.folders.find(x=>x.id===S.book.id); if(f) shareModal('folder',f); },
