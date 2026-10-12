@@ -979,25 +979,59 @@ async function tiktokData(url) {
   }
   return out;
 }
+// Espejos de YouTube (Invidious): dan la descripción y, a veces, los subtítulos cuando YouTube no deja leerlos
+let invList = { at: 0, hosts: ['https://invidious.f5.si'] };
+async function invidiousVideo(id) {
+  if (Date.now() - invList.at > 6 * 3600e3) {
+    invList.at = Date.now();
+    try { const j = await (await fetch('https://api.invidious.io/instances.json?sort_by=health', { signal: AbortSignal.timeout(8000) })).json();
+      const hs = j.filter(x => x[1]?.api && x[1]?.type === 'https').map(x => 'https://' + x[0]); if (hs.length) invList.hosts = [...new Set(['https://invidious.f5.si', ...hs])].slice(0, 6); } catch { }
+  }
+  for (const base of invList.hosts) {
+    try {
+      const r = await fetch(`${base}/api/v1/videos/${id}?local=true&hl=es`, { signal: AbortSignal.timeout(15000) }); if (!r.ok) continue;
+      const j = await r.json(); if (!j || j.error) continue;
+      const out = { title: j.title || '', description: j.description || '' };
+      const caps = j.captions || [], c = caps.find(c => /spanish|español/i.test(c.label || '')) || caps.find(c => /english|inglés/i.test(c.label || '')) || caps[0];
+      if (c?.url) { try { const v = await (await fetch(base + c.url, { signal: AbortSignal.timeout(15000) })).text(); out.transcript = vttToText(v); } catch { } }
+      return out;
+    } catch { }
+  }
+  return null;
+}
 async function videoText(url) {
   const host = new URL(url).hostname.toLowerCase();
   const out = { title: '', text: '', image: '' };
   if (/youtu/.test(host)) {
     const id = youtubeId(url); if (!id) throw new Error('bad_url');
     out.image = `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
-    const html = await getText(`https://www.youtube.com/watch?v=${id}&hl=es`, { cookie: 'CONSENT=YES+1; SOCS=CAI' });
+    // YouTube pide "confirmar que no eres un bot" a los servidores, pero la descripción sigue en la página
+    // (en la de Shorts o en los datos de la página normal); si no, se pide a Invidious, que es un espejo de YouTube
+    const yh = { 'User-Agent': BROWSER_UA, 'Accept-Language': 'es-ES,es;q=0.9', cookie: 'CONSENT=YES+1; SOCS=CAI' };
+    const page = async u => { try { const r = await fetch(u, { headers: yh, signal: AbortSignal.timeout(20000) }); return r.ok ? await r.text() : ''; } catch { return ''; } };
+    const jstr = (h, re) => { const m = h.match(re); if (!m) return ''; try { return JSON.parse('"' + m[1] + '"'); } catch { return ''; } };
+    const html = await page(`https://www.youtube.com/watch?v=${id}&hl=es`);
     let pr = null; const m = html.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;\s*(?:var\s|<\/script>)/);
     if (m) { try { pr = JSON.parse(m[1]); } catch { } }
     out.title = pr?.videoDetails?.title || metaTag(html, 'og:title');
-    const desc = pr?.videoDetails?.shortDescription || metaTag(html, 'og:description');
+    const fromHtml = h => jstr(h, /"shortDescription":"((?:[^"\\]|\\.)*)"/) || jstr(h, /"attributedDescription(?:BodyText)?":\{"content":"((?:[^"\\]|\\.)*)"/);
+    let desc = pr?.videoDetails?.shortDescription || fromHtml(html);
+    if (!desc) { const sh = await page(`https://www.youtube.com/shorts/${id}?hl=es`); desc = fromHtml(sh); out.title = out.title || metaTag(sh, 'og:title'); }
+    let inv = null;
+    if (!desc || desc.length < 80) inv = await invidiousVideo(id);
+    if (inv) { if ((inv.description || '').length > (desc || '').length) desc = inv.description; out.title = out.title || inv.title; }
+    if (!out.title) { try { const j = JSON.parse(await getText('https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id))); out.title = j.title || ''; } catch { } }
+    desc = desc || metaTag(html, 'og:description');
     let transcript = '';
+    if (inv?.transcript) transcript = inv.transcript;
     const tracks = pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
     const tr = tracks.find(t => /^es/.test(t.languageCode)) || tracks.find(t => /^en/.test(t.languageCode)) || tracks[0];
     if (tr?.baseUrl) {
       try { const j = JSON.parse(await getText(tr.baseUrl + '&fmt=json3'));
         transcript = (j.events || []).map(e => (e.segs || []).map(s => s.utf8).join('')).join(' ').replace(/\s+/g, ' ').trim(); } catch { }
     }
-    out.text = [desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
+    out.text = [out.title && desc && !desc.includes(out.title) ? 'Título: ' + out.title : '', desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
+    if (!desc && !transcript) out.platform = 'youtube';
   } else if (/tiktok/.test(host)) {
     let t = null;
     try { t = await tiktokData(url); } catch (e) { if (e.dead) throw e; console.error('tiktok', e.message); }
@@ -1018,8 +1052,10 @@ async function videoText(url) {
     }
     if (!out.text) { const html = await getText(url, { 'User-Agent': BOT_UA }); out.text = metaTag(html, 'og:description'); out.title = metaTag(html, 'og:title'); out.image = out.image || metaTag(html, 'og:image'); }
   } else {
-    const html = await getText(url, { 'User-Agent': BOT_UA });
+    let html = ''; try { html = await getText(url, { 'User-Agent': BOT_UA }); } catch { }
     out.title = metaTag(html, 'og:title'); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.image = metaTag(html, 'og:image');
+    // Facebook enseña textos genéricos de su portada cuando no deja ver el vídeo: esos no sirven
+    if (/facebook|fb\.watch/.test(host)) { if (/espacio para disfrutar de v[ií]deos|Log in or sign up|Inicia sesi[oó]n o reg[ií]strate|^Facebook$/i.test(out.text + ' ' + out.title) || !out.text) { out.text = ''; out.platform = 'facebook'; } }
   }
   out.text = String(out.text || '').trim();
   return out;
@@ -2149,29 +2185,24 @@ async function videoRecipes(title, text) {
 }
 // diagnóstico temporal de vídeos
 app.get('/api/_diag/vv-8h2m', async (req, res) => {
-  const out = {}; const tryIt = async (k, fn) => { try { out[k] = await fn(); } catch (e) { out[k] = 'ERR ' + String(e.message).slice(0, 200); } };
-  const yt = 'https://www.youtube.com/shorts/tn3E0RjLSb0', fb = String(req.query.f || 'https://www.facebook.com/reel/173724362174791');
-  let list = [];
-  await tryIt('cobalt_list', async () => { const r = await fetch('https://instances.cobalt.best/api/instances.json', { headers: { 'User-Agent': 'entre-fogones/1.0 (+https://entre-fogones.onrender.com)' }, signal: AbortSignal.timeout(15000) }); const j = await r.json();
-    list = j.filter(x => x.online && !x.info?.auth && !(x.info?.turnstileSitekey)).map(x => ({ api: (x.protocol || 'https') + '://' + x.api, yt: x.services?.youtube, fb: x.services?.facebook, score: x.score })).sort((a, b) => (b.score || 0) - (a.score || 0));
-    return { total: j.length, open: list.length, sample: list.slice(0, 12) }; });
-  const extra = ['https://cobalt-api.meowing.de', 'https://cobalt-backend.canine.tools', 'https://capi.3kh0.net', 'https://cobalt-api.kwiatekmiki.com', 'https://api.cobalt.liubquanti.click'];
-  const apis = [...new Set([...list.filter(x => x.yt || x.fb).map(x => x.api), ...extra])].slice(0, 10);
-  for (const api of apis) for (const [k, u] of [['yt', yt], ['fb', fb]]) await tryIt('cobalt ' + k + ' ' + api, async () => {
-    const r = await fetch(api.replace(/\/$/, '') + '/', { method: 'POST', headers: { Accept: 'application/json', 'content-type': 'application/json', 'User-Agent': 'entre-fogones/1.0' }, body: JSON.stringify({ url: u, downloadMode: 'audio', audioFormat: 'mp3' }), signal: AbortSignal.timeout(20000) });
-    const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch { }
-    let dl = null; if (j.url) { try { const rr = await fetch(j.url, { signal: AbortSignal.timeout(40000) }); dl = rr.status + ' ' + (await rr.arrayBuffer()).byteLength; } catch (e) { dl = 'err ' + e.message; } }
-    return { st: r.status, status: j.status, err: j.error?.code, dl, body: j.status ? undefined : t.slice(0, 100) }; });
+  const out = {};
+  for (const u of ['https://youtube.com/shorts/tn3E0RjLSb0', 'https://www.youtube.com/watch?v=RTqqV6mVSLU', 'https://youtube.com/shorts/EQaJUs0HAQM', 'https://www.facebook.com/reel/986240545878161', 'https://www.facebook.com/reel/914721316458404']) {
+    try { const v = await videoText(u); out[u] = { title: v.title, platform: v.platform, len: v.text.length, text: v.text.slice(0, 300) }; } catch (e) { out[u] = 'ERR ' + e.message; }
+  }
   res.json(out);
 });
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
+const NO_TEXT = {
+  youtube: 'Este vídeo de YouTube no trae la receta escrita y YouTube no deja escucharlo desde aquí. Descárgalo y súbelo como archivo para que se escuche.',
+  facebook: 'Facebook no deja ver este vídeo sin iniciar sesión (o ya no está disponible). Descárgalo y súbelo como archivo para que se escuche.'
+};
 const DEAD_TT = 'Ese enlace de TikTok no lleva a ningún vídeo: TikTok lo manda a su portada. Pasa cuando el vídeo se ha borrado, es privado o solo lo pueden ver sus amigos.';
 async function urlRecipes(url) {
   if (isVideoUrl(url)) {
     let v; try { v = await videoText(url); } catch (e) { throw bad(e.dead ? DEAD_TT : 'No he podido abrir ese vídeo. Si es privado no se puede leer.'); }
-    if (!v.text) throw v.busy ? Object.assign(new Error('escucha sin cupo'), { status: 429, hear: true }) : bad('Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.');
+    if (!v.text) throw v.busy ? Object.assign(new Error('escucha sin cupo'), { status: 429, hear: true }) : bad(NO_TEXT[v.platform] || 'Ese vídeo no trae texto ni se ha podido escuchar. Descárgalo y súbelo como archivo.');
     const recipes = await videoRecipes(v.title, v.text);
     if (!recipes.length) throw bad('No he encontrado recetas en ese vídeo.');
     return recipes.map(r => ({ ...r, image: '', source: url }));
