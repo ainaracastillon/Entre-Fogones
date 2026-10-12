@@ -88,7 +88,7 @@ main{padding-block:24px 64px}
 .spine::before,.spine::after{content:"";position:absolute;left:0;right:0;height:3px;background:rgba(255,235,190,.55)}
 .spine::before{top:22px}.spine::after{bottom:30px}
 .spine:hover{transform:translateY(-8px)}
-.spine .st{display:flex;justify-content:center;align-items:center;writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;line-height:1.08;text-align:center;white-space:normal;overflow-wrap:anywhere;flex:1;min-height:0;width:100%;max-width:52px;overflow:hidden;margin:30px 0 8px;padding:0 5px;box-sizing:border-box}
+.spine .st{display:flex;justify-content:center;align-items:center;writing-mode:vertical-rl;transform:rotate(180deg);font-family:var(--f-book);font-size:16px;line-height:1.08;text-align:center;white-space:normal;overflow-wrap:normal;word-break:normal;hyphens:none;flex:1;min-height:0;width:100%;max-width:52px;overflow:hidden;margin:30px 0 8px;padding:0 5px;box-sizing:border-box}
 .spine.add .st{flex:none;max-height:150px}
 .spine .sc{font-size:11px;font-weight:700;background:rgba(0,0,0,.22);border-radius:999px;padding:1px 7px;font-variant-numeric:tabular-nums}
 .spine.all{background:repeating-linear-gradient(90deg,var(--cloth) 0 14px,color-mix(in srgb,var(--cloth) 82%,#000) 14px 16px)}
@@ -304,9 +304,20 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:10
 .lockb .ico{width:13px;height:13px;color:var(--muted);margin:0}
 /* estanterías: cada fila de libros tiene su estante */
 .shelf-wrap{padding:22px 16px 0}
-.shelves{display:flex;flex-wrap:wrap;column-gap:10px;row-gap:16px;align-items:flex-end;padding:0 6px;
-  background:repeating-linear-gradient(to bottom,transparent 0 272px,var(--shelf-edge) 272px 276px,var(--shelf) 276px 288px,transparent 288px 288px);margin:0 -16px;padding:0 22px 16px}
-.slot{height:272px;display:flex;align-items:flex-end}
+/* tamaño de los libros: --sk escala la altura y --bw el ancho; en el móvil caben 6 por fila */
+.shelves{--sk:1;--bw:62px;--gap:10px;--rowh:calc(272px * var(--sk));display:flex;flex-wrap:wrap;column-gap:var(--gap);row-gap:16px;align-items:flex-end;
+  background:repeating-linear-gradient(to bottom,transparent 0 var(--rowh),var(--shelf-edge) var(--rowh) calc(var(--rowh) + 4px),var(--shelf) calc(var(--rowh) + 4px) calc(var(--rowh) + 16px),transparent calc(var(--rowh) + 16px) calc(var(--rowh) + 16px));margin:0 -16px;padding:0 22px 16px}
+.slot{height:var(--rowh);display:flex;align-items:flex-end}
+.spine{height:calc(var(--h,200) * 1px * var(--sk,1));width:var(--bw)!important}
+@media (max-width:640px){
+  .shelves{--gap:8px;--bw:calc((100% - 5 * var(--gap)) / 6);--sk:.74;padding:0 14px 16px}
+  .slot{width:calc((100% - 5 * var(--gap)) / 6)}
+  .slot .spine{width:100%!important}
+  .spine::before{top:16px}.spine::after{bottom:24px}
+  .spine .st{margin:22px 0 6px;padding:0 3px;max-width:none}
+  .spine .sc{font-size:10px;padding:0 5px}
+  .spine.add svg{width:16px;height:16px}
+}
 /* últimas recetas y sugerencias */
 .sugg{margin-top:28px}
 .sugg-h{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:12px}
@@ -746,6 +757,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=32"></script>
+<script src="/app.js?v=33"></script>
 </body>
 </html>

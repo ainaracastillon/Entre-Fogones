@@ -465,11 +465,11 @@ function fitSpines(){
   const ctx=(fitSpines.c ||= document.createElement('canvas').getContext('2d'));
   document.querySelectorAll('.spine .st').forEach(st=>{
     const words=st.textContent.trim().split(/\s+/).filter(Boolean);
-    const L=st.clientHeight-6, W=st.clientWidth-8;
+    const L=(st.clientHeight-6)*0.9, W=st.clientWidth-6;
     if(L<20||W<10) return;
     for(let fs=16; fs>=7.5; fs-=.5){
       ctx.font=`${fs}px "Young Serif", Georgia, serif`;
-      const maxLines=Math.max(1, Math.floor(W/(fs*1.12)));
+      const maxLines=Math.max(1, Math.floor(W/(fs*1.22)));
       const sp=ctx.measureText(' ').width; let lines=1, cur=0, ok=true;
       for(const w of words){ const ww=ctx.measureText(w).width; if(ww>L){ ok=false; break; }
         if(!cur) cur=ww; else if(cur+sp+ww<=L) cur+=sp+ww; else { lines++; cur=ww; } }
@@ -483,10 +483,10 @@ function viewLibrary(){
   const banner = !S.profile && !lsGet('ef_hide_banner') ? `<div class="banner">${ico('chat')}<span style="flex:1;min-width:200px">Puedes usar la app sin cuenta: tus recetas se guardan en este dispositivo. Inicia sesión o crea una cuenta para tenerlas en todos tus dispositivos, usar la IA, añadir amigos y chatear.</span><button class="btn sm" data-act="login">Iniciar sesión</button><button class="x" data-act="hideBanner" aria-label="Cerrar aviso" title="No volver a mostrar">${ico('x')}</button></div>` : '';
   const slot = b => `<div class="slot">${b}</div>`;
   const books = [
-    slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">TODAS</span><span class="sc">${S.recipes.length}</span></button>`),
-    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
-    none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
-    slot(`<button class="spine add" style="height:200px" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
+    slot(`<button class="spine all" style="--cloth:#6E4429;--h:226" data-act="openBook" data-id="all" aria-label="Todas las recetas, ${S.recipes.length}"><span class="st">TODAS</span><span class="sc">${S.recipes.length}</span></button>`),
+    ...S.folders.map(f=>{const n=S.recipes.filter(r=>r.folderId===f.id).length;return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="openBook" data-id="${esc(f.id)}" aria-label="${esc(f.name)}, ${n} recetas"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`)}),
+    none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;--h:190" data-act="openBook" data-id="none" aria-label="Sin recetario, ${none.length}"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):'',
+    slot(`<button class="spine add" style="--h:200" data-act="newFolder" aria-label="Nuevo recetario">${ico('plus')}<span class="st">Nuevo recetario</span></button>`)
   ].join('');
   const recent = S.recipes.slice(0,3);
   return `${banner}
@@ -2075,9 +2075,9 @@ async function loadAdmUser(){
     const none=d.recipes.filter(r=>!r.folderId||!d.folders.some(f=>f.id===r.folderId));
     const slot=b=>`<div class="slot">${b}</div>`;
     const books=[
-      slot(`<button class="spine all" style="--cloth:#6E4429;height:226px" data-act="admOpenBook" data-id="all"><span class="st">TODAS</span><span class="sc">${d.recipes.length}</span></button>`),
-      ...d.folders.map(f=>{ const n=d.recipes.filter(r=>r.folderId===f.id).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};height:${spineH(f.id,f.name)}px" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
-      none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;height:190px" data-act="admOpenBook" data-id="none"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):''
+      slot(`<button class="spine all" style="--cloth:#6E4429;--h:226" data-act="admOpenBook" data-id="all"><span class="st">TODAS</span><span class="sc">${d.recipes.length}</span></button>`),
+      ...d.folders.map(f=>{ const n=d.recipes.filter(r=>r.folderId===f.id).length; return slot(`<button class="spine" style="--cloth:${esc(f.color)};color:${inkOn(f.color)};--h:${spineH(f.id,f.name)}" data-act="admOpenBook" data-id="${esc(f.id)}"><span class="st">${esc(f.name)}</span><span class="sc">${n}</span></button>`); }),
+      none.length?slot(`<button class="spine" style="--cloth:#7A6A5C;--h:190" data-act="admOpenBook" data-id="none"><span class="st">Sin recetario</span><span class="sc">${none.length}</span></button>`):''
     ].join('');
     if(fr){ box.innerHTML=`<section class="card account-head">${avatar(u.id,'big')}
         <div class="head-info"><h2>${esc(u.display||u.username)}</h2><p class="muted" style="margin:2px 0 8px">@${esc(u.username)} · ${d.recipes.length} ${d.recipes.length===1?'receta':'recetas'} en ${d.folders.length} ${d.folders.length===1?'recetario':'recetarios'}</p>
