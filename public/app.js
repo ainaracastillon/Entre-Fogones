@@ -2378,14 +2378,22 @@ function navTo(url){
 /* Ordenar los recetarios de la estantería */
 function orderFoldersModal(){
   let ids=S.folders.map(f=>f.id);
-  const m=openModal(`${mHead('Ordenar recetarios')}<p class="muted" style="margin:0">Mueve cada recetario con las flechas o arrastrándolo. «TODAS» va siempre primero.</p><ol class="ord-list" id="ordL"></ol>
+  const m=openModal(`${mHead('Ordenar recetarios')}<p class="muted" style="margin:0">Arrastra cada recetario a su sitio (o usa las flechas). «TODAS» va siempre primero.</p><ol class="ord-list" id="ordL"></ol>
     <div class="row" style="justify-content:flex-end"><button class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="ordOk">${ico('save')}Guardar orden</button></div>`);
-  const draw=()=>{ $('#ordL',m).innerHTML=ids.map((id,i)=>{ const f=S.folders.find(x=>x.id===id); return `<li class="ord-row" draggable="true" data-id="${esc(id)}"><span class="ord-grip" aria-hidden="true">⋮⋮</span><span class="ord-sw" style="background:${esc(f.color)}"></span><span class="ord-n">${esc(f.name)}</span>
+  const draw=()=>{ $('#ordL',m).innerHTML=ids.map((id,i)=>{ const f=S.folders.find(x=>x.id===id); return `<li class="ord-row" data-id="${esc(id)}"><span class="ord-grip" aria-hidden="true">⋮⋮</span><span class="ord-sw" style="background:${esc(f.color)}"></span><span class="ord-n">${esc(f.name)}</span>
       <button type="button" class="x" data-mv="-1" data-i="${i}" ${i?'':'disabled'} aria-label="Subir">${ico('back')}</button><button type="button" class="x" data-mv="1" data-i="${i}" ${i<ids.length-1?'':'disabled'} aria-label="Bajar">${ico('next')}</button></li>`; }).join(''); };
   $('#ordL',m).onclick=e=>{ const b=e.target.closest('[data-mv]'); if(!b) return; const i=+b.dataset.i, j=i+(+b.dataset.mv); if(j<0||j>=ids.length) return; [ids[i],ids[j]]=[ids[j],ids[i]]; draw(); };
-  let drag=null;
-  $('#ordL',m).addEventListener('dragstart',e=>{ drag=e.target.closest('.ord-row')?.dataset.id; e.dataTransfer.effectAllowed='move'; });
-  $('#ordL',m).addEventListener('dragover',e=>{ e.preventDefault(); const over=e.target.closest('.ord-row'); if(!over||!drag||over.dataset.id===drag) return; const a=ids.indexOf(drag), b=ids.indexOf(over.dataset.id); ids.splice(a,1); ids.splice(b,0,drag); draw(); });
+  // arrastrar desde cualquier punto de la fila, con el dedo o el ratón
+  const list=$('#ordL',m); let drag=null, pid=null, scrollT=null;
+  list.addEventListener('pointerdown',e=>{ if(e.target.closest('button')) return; const row=e.target.closest('.ord-row'); if(!row) return;
+    drag=row; pid=e.pointerId; row.setPointerCapture(pid); row.classList.add('dragging'); e.preventDefault(); });
+  list.addEventListener('pointermove',e=>{ if(!drag||e.pointerId!==pid) return; e.preventDefault();
+    const y=e.clientY, lr=list.getBoundingClientRect();
+    clearInterval(scrollT); if(y<lr.top+30) scrollT=setInterval(()=>list.scrollTop-=8,16); else if(y>lr.bottom-30) scrollT=setInterval(()=>list.scrollTop+=8,16);
+    const after=[...list.children].find(r=>r!==drag && y < r.getBoundingClientRect().top + r.offsetHeight/2);
+    if(after!==drag.nextSibling) list.insertBefore(drag, after||null); });
+  const end=e=>{ if(!drag||(e&&e.pointerId!==pid)) return; clearInterval(scrollT); drag.classList.remove('dragging'); drag=null; ids=[...list.children].map(r=>r.dataset.id); draw(); };
+  list.addEventListener('pointerup',end); list.addEventListener('pointercancel',end);
   $('#ordOk',m).onclick=async()=>{ try{ await api('PUT','/folders-order',{ids}); await loadState(); closeModal(); toast('Orden guardado'); }catch(err){ toast(err.error||'No se ha podido guardar'); } };
   draw();
 }

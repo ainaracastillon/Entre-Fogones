@@ -724,7 +724,8 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 .person-link{display:flex;align-items:center;gap:10px;flex:1;min-width:0;border:0;background:none;padding:0;text-align:left;font:inherit;color:inherit;cursor:pointer}
 .person-link:hover .pn{text-decoration:underline;text-underline-offset:3px}
 .ord-list{list-style:none;margin:0;padding:0;display:grid;gap:6px;max-height:55vh;overflow:auto}
-.ord-row{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 8px;cursor:grab}
+.ord-row{display:flex;align-items:center;gap:10px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:6px 8px;cursor:grab;touch-action:none;user-select:none;-webkit-user-select:none}
+.ord-row.dragging{cursor:grabbing;background:var(--surface);border-color:var(--accent);box-shadow:0 8px 20px rgba(0,0,0,.18);position:relative;z-index:2}
 .ord-grip{color:var(--muted);letter-spacing:-2px}
 .ord-sw{width:12px;height:22px;border-radius:2px;flex:none}
 .ord-n{flex:1;min-width:0;font-weight:600}
@@ -745,6 +746,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=30"></script>
+<script src="/app.js?v=31"></script>
 </body>
 </html>
