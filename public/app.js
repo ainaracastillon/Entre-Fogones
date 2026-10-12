@@ -1747,7 +1747,7 @@ function bindAccount(root){
   // descargar mis datos: se elige el formato
   $('#expData',root).onclick=()=>{
     const m=openModal(`${mHead('Descargar mis datos')}<p class="muted" style="margin:0">Elige en qué formato quieres la copia de tus datos: cuenta, recetarios, recetas, amistades y mensajes que has enviado.</p>
-      <div class="exp-opts">${[['xlsx','chart','Excel','Una hoja para cada cosa, para ordenar y filtrar'],['pdf','pdf','PDF','Para leer o imprimir'],['txt','doc','Texto (TXT)','Texto sencillo que abre cualquier programa'],['json','copy','JSON','Datos completos para llevarlos a otra app']].map(([f,i,l,d])=>`<a class="exp-opt" href="/api/me/export?format=${f}" download data-f="${f}">${ico(i)}<span><b>${l}</b><small>${d}</small></span></a>`).join('')}</div>`);
+      <div class="exp-opts">${[['xlsx','chart','Excel','Una hoja para cada cosa, para ordenar y filtrar'],['pdf','pdf','PDF','Para leer o imprimir'],['csv','chart','CSV','Tus recetas en una tabla, para Excel u otras apps'],['txt','doc','Texto (TXT)','Texto sencillo que abre cualquier programa'],['json','copy','JSON','Datos completos para llevarlos a otra app']].map(([f,i,l,d])=>`<a class="exp-opt" href="/api/me/export?format=${f}" download data-f="${f}">${ico(i)}<span><b>${l}</b><small>${d}</small></span></a>`).join('')}</div>`);
     m.querySelectorAll('.exp-opt').forEach(a=>a.onclick=()=>{ setTimeout(()=>{ closeModal(); toast('Preparando la descarga…'); },150); });
   };
   const ad=$('#accDel',root); if(ad) ad.onclick=()=>deleteAccountModal();

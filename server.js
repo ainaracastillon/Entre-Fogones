@@ -1501,6 +1501,13 @@ function exportTxt(d) {
   h(`Mensajes enviados (${d.mensajesEnviados.length})`); d.mensajesEnviados.forEach(x => line(`[${x.fecha}] ${x.con ? 'a ' + x.con + ': ' : ''}${x.texto}`));
   return L.join('\n');
 }
+// CSV: las recetas en una tabla (separado por punto y coma, como lo abre Excel en español)
+function exportCsv(d) {
+  const cell = v => { const t = String(v ?? ''); return /[;"\n\r]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+  const head = ['Título', 'Recetarios', 'Raciones', 'Tiempo', 'Dificultad', 'Ingredientes', 'Preparación', 'Notas', 'Origen', 'Pública', 'Subida por mí', 'Creada'];
+  const rows = d.recetas.map(x => [x.titulo, x.recetarios.join(', '), x.raciones, x.tiempo, x.dificultad, x.ingredientes.join('\n'), x.preparacion.map((t, i) => `${i + 1}. ${t}`).join('\n'), x.notas, x.origen, x.publica ? 'Sí' : 'No', x.subidaPorMi ? 'Sí' : 'No', x.creada]);
+  return '\ufeff' + [head, ...rows].map(r => r.map(cell).join(';')).join('\r\n');
+}
 async function exportXlsx(d) {
   const ExcelJS = require('exceljs'); const wb = new ExcelJS.Workbook(); wb.creator = 'Entre Fogones'; wb.created = new Date();
   const sheet = (name, cols, rows) => {
@@ -1550,6 +1557,7 @@ api.get('/me/export', needProfile, async (req, res, next) => {
     if (fmt === 'txt') return res.set('content-type', 'text/plain; charset=utf-8').set('content-disposition', `attachment; filename="${exportName('txt')}"`).send('﻿' + exportTxt(d));
     if (fmt === 'xlsx') return res.set('content-type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').set('content-disposition', `attachment; filename="${exportName('xlsx')}"`).send(Buffer.from(await exportXlsx(d)));
     if (fmt === 'pdf') return exportPdf(d, res);
+    if (fmt === 'csv') return res.set('content-type', 'text/csv; charset=utf-8').set('content-disposition', `attachment; filename="${exportName('csv')}"`).send(exportCsv(d));
     res.set('content-disposition', `attachment; filename="${exportName('json')}"`).json(d);
   } catch (e) { next(e); }
 });
