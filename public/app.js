@@ -13,6 +13,11 @@ const S = {
 
 /* ===== Utilidades ===== */
 const $ = (s,r=document)=>r.querySelector(s);
+/* En el móvil la página se desplaza dentro de <main> (entre la cabecera y la barra de abajo); en el ordenador, la ventana */
+const isMobileLayout = () => matchMedia('(max-width:640px)').matches;
+const scroller = () => isMobileLayout() ? document.querySelector('body > main') : null;
+const curScroll = () => { const s=scroller(); return s ? s.scrollTop : window.scrollY; };
+function scrollTopTo(y, smooth){ const s=scroller(); const o={top:y, behavior:smooth?'smooth':'auto'}; if(s) s.scrollTo(o); else window.scrollTo(o); }
 const esc = s => String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const gid = () => Date.now().toString(36)+Math.random().toString(36).slice(2,10);
 const now = () => Date.now();
@@ -347,7 +352,7 @@ function refresh(){
     if(!menuOpen) renderTop();
     if(S.view==='library'){
       if(['libQ','libF'].includes(document.activeElement?.id)){ const b=$('#libRes'); if(b) b.innerHTML=libResultsHtml(); }
-      else { const keep=window.scrollY; $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); bindLibSearch(); window.scrollTo(0,keep); } }
+      else { const keep=curScroll(); $('#main').innerHTML=viewLibrary(); fitSpines(); drawSuggestions(); bindLibSearch(); scrollTopTo(keep); } }
     else if(S.view==='book'){ if(!S.book.visiting) syncOwnBook(); if(S.view==='book') renderBook(); else render(); }
     else if(S.view==='chat'){ const l=$('#convList'); if(l) l.innerHTML=convListHtml(); else render(); updateConvHeader(); }
     else if(S.view==='friends'){ const l=$('#fside'); if(l) l.innerHTML=friendsSide(); drawSearch(); }
@@ -413,7 +418,7 @@ function navRestore(s){
   if(view==='chat'){ S.chatWith=s.chatWith; S.msgs=[]; S.askMode=false; }
   NAV.restoring=true; S.view=view;
   try{ render(); } finally { NAV.restoring=false; }
-  window.scrollTo(0,0);
+  scrollTopTo(0);
 }
 addEventListener('popstate',e=>{
   const i=e.state && e.state.ef;
@@ -425,7 +430,7 @@ addEventListener('popstate',e=>{
     const later=restoreFromUrl();
     NAV.restoring=true; try{ render(); } finally { NAV.restoring=false; }
     if(typeof i==='number'){ NAV.i=i; NAV.top=Math.max(NAV.top,i); }
-    NAV.snaps[NAV.i]=navSnap(); later?.(); window.scrollTo(0,0); return;
+    NAV.snaps[NAV.i]=navSnap(); later?.(); scrollTopTo(0); return;
   }
   NAV.lastPop=Date.now();
   const cur=NAV.snaps[NAV.i]; if(cur && cur.key===navKey(S)) NAV.snaps[NAV.i]=navSnap();
@@ -468,7 +473,7 @@ addEventListener('popstate',e=>{
 function go(v){
   if(S.view==='chat' && v!=='chat') stopChat();
   if(S.view!=='book') S.prevView=S.view;
-  S.view=v; render(); window.scrollTo(0,0);
+  S.view=v; render(); scrollTopTo(0);
 }
 
 /* ===== Biblioteca ===== */
@@ -689,7 +694,7 @@ function openBook(id, recipeId){
   if(recipeId){ const i=b.recipes.findIndex(r=>r.id===recipeId); if(i>=0) S.page=pageOfRecipe(i); }
   if(S.view!=='book') S.prevView=S.view;
   if(S.view==='chat') stopChat();
-  S.view='book'; render(); window.scrollTo(0,0);
+  S.view='book'; render(); scrollTopTo(0);
 }
 const tbBtn=(act,attrs,icon,label,cls='')=>`<button class="btn sm tbtn ${cls}" data-act="${act}"${attrs} aria-label="${label}" title="${label}">${ico(icon)}<span class="lbl">${label}</span></button>`;
 function bookTools(){
@@ -808,9 +813,10 @@ function renderBook(){
 function layoutBook(){
   const stage=$('#stage'), book=$('#book'); if(!stage||!book) return;
   const W=stage.clientWidth;
-  const top=stage.getBoundingClientRect().top + window.scrollY;
+  const sc=scroller(), viewBottom=sc?sc.getBoundingClientRect().bottom:window.innerHeight;
+  const top=stage.getBoundingClientRect().top + curScroll();
   const foot=$('.book-foot'); const fh=foot?foot.offsetHeight+16:60;
-  let H=Math.min(window.innerHeight - top - fh - 14, window.innerHeight*0.62);
+  let H=Math.min(viewBottom - top - fh - 14, window.innerHeight*0.62);
   H=Math.max(H, 240);
   const bp=Math.round(Math.max(6, Math.min(16, W*0.012)));
   const AR=0.72;
@@ -1382,7 +1388,7 @@ async function openShared(c){
 function showVisiting(book, page){
   if(S.view==='chat'){ S.returnChat=S.chatWith; stopChat(); }
   if(S.view!=='book') S.prevView=S.view;
-  S.book=book; S.page=page; S.view='book'; render(); window.scrollTo(0,0);
+  S.book=book; S.page=page; S.view='book'; render(); scrollTopTo(0);
 }
 function copyToMine(r, folderId, check=true){
   const {id, folderId:_f, ...rest} = r;
@@ -2514,7 +2520,7 @@ function navTo(url){
   try{ history.pushState({ef:++NAV.i},'',url); NAV.top=NAV.i; }catch{}
   closeModal(); if(S.view==='chat') stopChat(); S.view='library'; S.book=null;
   const later=restoreFromUrl(); NAV.restoring=true; try{ render(); } finally { NAV.restoring=false; }
-  NAV.snaps[NAV.i]=navSnap(); later?.(); window.scrollTo(0,0);
+  NAV.snaps[NAV.i]=navSnap(); later?.(); scrollTopTo(0);
 }
 /* Ordenar los recetarios de la estantería */
 function orderFoldersModal(){
@@ -2783,7 +2789,7 @@ const ACT = {
   openRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; openBook(r.folderId&&S.folders.some(f=>f.id===r.folderId)?r.folderId:'none', r.id); },
   closeBook:()=>{ const back=S.prevView||'library'; S.book=null; if(back==='chat'&&S.returnChat){ const id=S.returnChat; S.returnChat=null; openChat(id); } else { S.view='library'; go(back==='book'?'library':back); } },
   prevPage:()=>turn('prev'), nextPage:()=>turn('next'),
-  goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn=p>S.page?'next':'prev'; S.page=p; renderBook(); S.turn=null; window.scrollTo({top:0,behavior:'smooth'}); },
+  goPage:el=>{ let p=+el.dataset.p; if(p%2)p--; S.turn=p>S.page?'next':'prev'; S.page=p; renderBook(); S.turn=null; scrollTopTo(0,true); },
   editRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) editorModal({...r}); },
   shareRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(r) shareModal('recipe',r); },
   moveRecipe:el=>{ const r=S.recipes.find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Mover a…', async fid=>{ try{ await store.saveRecipe({...r,folderId:fid}); toast('Receta movida'); }catch(e){fail(e)} }); },
