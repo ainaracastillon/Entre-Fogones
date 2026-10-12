@@ -394,18 +394,19 @@ api.post('/password/forgot', async (req, res, next) => {
     const u = (await q('SELECT id, display FROM users WHERE lower(email)=$1 AND username IS NOT NULL', [email])).rows[0];
     if (u) {
       const recent = (await q('SELECT count(*)::int n FROM password_resets WHERE user_id=$1 AND created>$2', [u.id, now() - 3600e3])).rows[0].n;
-      if (recent < 4) {
+      if (recent < 4) await sendResetMail(req, u, email);
+    }
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+async function sendResetMail(req, u, email) {
         const token = crypto.randomBytes(32).toString('hex');
         await q('INSERT INTO password_resets(token_hash,user_id,created,expires) VALUES($1,$2,$3,$4)', [sha(token), u.id, now(), now() + 3600e3]);
         const link = `${req.protocol}://${req.get('host')}/#reset~${token}`;
         await sendMail(email, 'Cambia tu contraseña de Entre Fogones',
           `<div style="font-family:system-ui,sans-serif;font-size:16px;color:#3B2116;max-width:520px"><p>Hola ${String(u.display || '').replace(/[<>&]/g, '')},</p><p>Has pedido cambiar la contraseña de tu cuenta de Entre Fogones. Pulsa el botón para elegir una nueva. El enlace caduca en una hora.</p><p><a href="${link}" style="display:inline-block;background:#B5562B;color:#fff;padding:12px 20px;border-radius:999px;text-decoration:none">Elegir una contraseña nueva</a></p><p style="color:#7A5C4C;font-size:14px">Si no lo has pedido tú, ignora este correo: tu contraseña no cambia.</p></div>`,
           `Has pedido cambiar la contraseña de Entre Fogones. Abre este enlace en la próxima hora para elegir una nueva: ${link}\nSi no lo has pedido tú, ignora este correo.`);
-      }
-    }
-    res.json({ ok: true });
-  } catch (e) { next(e); }
-});
+}
 api.post('/password/reset', async (req, res, next) => {
   try {
     const token = String(req.body.token || ''), password = String(req.body.password || '');
@@ -636,7 +637,7 @@ async function sendPush(userIds, kind, payload) {
     const ids = [...new Set([].concat(userIds).filter(Boolean))]; if (!ids.length || !(await pushReady())) return;
     const rows = (await q('SELECT s.endpoint, s.keys, s.user_id, u.prefs FROM push_subs s JOIN users u ON u.id=s.user_id WHERE s.user_id = ANY($1) AND NOT u.blocked', [ids])).rows;
     const body = JSON.stringify({ title: 'Entre Fogones', icon: '/icon-192.png', badge: '/favicon-32.png', ...payload });
-    await Promise.all(rows.filter(r => kind === 'admin' || ({ ...NOTIFY_DEFAULT, ...((r.prefs || {}).notify || {}) })[kind] !== false).map(r =>
+    await Promise.all(rows.filter(r => kind === 'admin' || kind === 'notices' || ({ ...NOTIFY_DEFAULT, ...((r.prefs || {}).notify || {}) })[kind] !== false).map(r =>
       webpush.sendNotification({ endpoint: r.endpoint, keys: r.keys }, body, { TTL: 86400 }).catch(async e => {
         if (e.statusCode === 404 || e.statusCode === 410) await q('DELETE FROM push_subs WHERE endpoint=$1', [r.endpoint]).catch(() => {});
         else console.error('push', e.statusCode, String(e.body || e.message).slice(0, 120));
@@ -1241,7 +1242,7 @@ api.put('/me/prefs', needProfile, async (req, res, next) => {
     if ('fontScale' in b) p.fontScale = Math.max(0.8, Math.min(1.6, Number(b.fontScale) || 1));
     if ('diabetes' in b) p.diabetes = ['', 'tipo1', 'tipo2', 'gestacional', 'prediabetes'].includes(b.diabetes) ? b.diabetes : '';
     if ('diet' in b) p.diet = String(b.diet || '').slice(0, 300);
-    if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'notices', 'shares', 'friendRecipes'].map(k => [k, b.notify[k] !== false]));
+    if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'shares', 'friendRecipes'].map(k => [k, b.notify[k] !== false]));
     await q('UPDATE users SET prefs=$1 WHERE id=$2', [p, req.user.id]);
     res.json({ ok: true, prefs: p });
   } catch (e) { next(e); }
@@ -1815,6 +1816,30 @@ adm.get('/users/:id/library', async (req, res, next) => {
     ]);
     res.json({ user: { ...u, accepted_at: Number(u.accepted_at) || null, last_seen: Number(u.last_seen) || null, friends: friends.rows[0].n },
       folders: folders.rows.map(f => ({ ...f, created: Number(f.created) })), recipes: recipes.rows.map(recipeOut) });
+  } catch (e) { next(e); }
+});
+// Contraseña desde el panel: poner una nueva o mandar el correo para que la elija la persona
+adm.put('/users/:id/password', async (req, res, next) => {
+  try {
+    const t = (await q('SELECT role FROM users WHERE id=$1 AND username IS NOT NULL', [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: 'Esa cuenta no existe.' });
+    if (t.role === 'superadmin' && req.params.id !== req.user.id) return res.status(400).json({ error: 'La contraseña del Superadministrador solo la cambia él.' });
+    if (t.role === 'admin' && req.user.role !== 'superadmin' && req.params.id !== req.user.id) return res.status(403).json({ error: 'Solo el Superadministrador puede cambiar la contraseña de otros administradores.' });
+    const password = String(req.body.password || '');
+    if (password.length < 6) return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres.' });
+    await q('UPDATE users SET pass_hash=$1 WHERE id=$2', [hashPass(password), req.params.id]);
+    if (req.body.logout) await q('DELETE FROM sessions WHERE user_id=$1', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.post('/users/:id/reset-mail', async (req, res, next) => {
+  try {
+    const u = (await q('SELECT id, display, email, role FROM users WHERE id=$1 AND username IS NOT NULL', [req.params.id])).rows[0];
+    if (!u) return res.status(404).json({ error: 'Esa cuenta no existe.' });
+    if (!u.email) return res.status(400).json({ error: 'Esta cuenta no tiene correo. Ponle una contraseña nueva directamente.' });
+    if (!mailReady()) return res.status(503).json({ error: 'El envío de correos no está configurado todavía (falta BREVO_API_KEY y MAIL_FROM en Render). Mientras, puedes ponerle una contraseña nueva.' });
+    await sendResetMail(req, u, u.email);
+    res.json({ ok: true, email: u.email });
   } catch (e) { next(e); }
 });
 adm.put('/users/:id/role', needSuper, async (req, res, next) => {

@@ -1523,10 +1523,10 @@ function viewAccount(){
 
     <section class="card" id="pushCard">
       <h2>Notificaciones en el móvil</h2>
-      <p class="muted">Si quieres, te avisamos en el móvil (o en el ordenador) aunque tengas la app cerrada.${isAdminMe()?' Los avisos de administración (sugerencias pendientes y decisiones) te llegan siempre y no se pueden apagar.':''}</p>
+      <p class="muted">Si quieres, te avisamos en el móvil (o en el ordenador) aunque tengas la app cerrada. Los avisos de Entre Fogones${isAdminMe()?' y los de administración (sugerencias pendientes y decisiones)':''} te llegan siempre.</p>
       <div id="pushState"></div>
       <p class="muted" style="margin:0;font-size:13px">Elige qué quieres que te avise (en la campanita y en el móvil):</p>
-      <div class="chips" id="notifyChips">${[['messages','Mensajes del chat'],['shares','Recetas que te mandan'],['friendRecipes','Recetas nuevas de tus amigos'],['friends','Solicitudes de amistad'],['notices','Avisos de Entre Fogones']].map(([k,l])=>`<button type="button" class="chip" data-nt="${k}" aria-pressed="${(me.prefs?.notify||{})[k]!==false}">${l}</button>`).join('')}</div>
+      <div class="chips" id="notifyChips">${[['messages','Mensajes del chat'],['shares','Recetas que te mandan'],['friendRecipes','Recetas nuevas de tus amigos'],['friends','Solicitudes de amistad']].map(([k,l])=>`<button type="button" class="chip" data-nt="${k}" aria-pressed="${(me.prefs?.notify||{})[k]!==false}">${l}</button>`).join('')}</div>
     </section>
 
     <section class="card">
@@ -2016,6 +2016,7 @@ async function admUsers(){
         ${u.delete_suggested?`<div class="ar-s">@${esc(u.delete_suggested.by||'')} sugiere borrarla${u.delete_suggested.reason?': '+esc(u.delete_suggested.reason):''}</div>`:''}</div>
       <div class="ar-act">
         <button class="btn sm" data-act="admViewUser" data-id="${esc(u.id)}">${ico('book')}Ver perfil y biblioteca</button>
+        ${(target==='user' || isSuper() && target!=='superadmin' || me)?`<button class="btn sm" data-act="admPass" data-id="${esc(u.id)}" data-n="${esc(u.username)}" data-mail="${u.email?1:0}">${ico('lock')}Contraseña</button>`:''}
         ${isSuper() && target!=='superadmin' ? `<button class="btn sm" data-act="admRole" data-id="${esc(u.id)}" data-role="${target==='admin'?'user':'admin'}">${target==='admin'?'Quitar administrador':'Hacer administrador'}</button>`:''}
         ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Quitar suspensión':'Suspender'}</button>
           ${isSuper()?`<button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`
@@ -2198,6 +2199,21 @@ const ADM_ACT = {
     if(el.dataset.b!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:false}),'Suspensión quitada');
     const reason=await promptBox('Suspender cuenta','Motivo de la suspensión',{ok:'Suspender',hint:'La persona lo verá al entrar, junto con dónde puede reclamar.'});
     if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:true, reason}),'Cuenta suspendida');
+  },
+  admPass:el=>{
+    const id=el.dataset.id, hasMail=el.dataset.mail==='1';
+    const m=openModal(`${mHead('Contraseña de @'+el.dataset.n)}
+      <section style="display:grid;gap:10px"><b>Mandar correo para que la cambie</b>
+        <p class="muted" style="margin:0;font-size:14px">${hasMail?'Le llegará un enlace para elegir una contraseña nueva (caduca en una hora).':'Esta cuenta no tiene correo: ponle una contraseña nueva abajo.'}</p>
+        ${hasMail?`<div><button class="btn" id="apMail">${ico('mail')}Mandar correo de recuperación</button></div>`:''}</section>
+      <hr style="border:0;border-top:1px solid var(--line);margin:4px 0">
+      <form id="apF" style="display:grid;gap:10px"><b>Poner una contraseña nueva</b>
+        <div class="field"><label for="apP">Nueva contraseña</label><input id="apP" class="inp" type="password" minlength="6" required autocomplete="new-password"></div>
+        <label class="opt-line"><input type="checkbox" id="apOut" checked> Cerrar su sesión en todos sus dispositivos</label>
+        <div id="apS"></div><div class="row" style="justify-content:flex-end"><button class="btn pri">${ico('save')}Cambiar contraseña</button></div></form>`);
+    $('#apMail',m)?.addEventListener('click',async e=>{ const b=e.currentTarget; b.disabled=true; try{ const r=await api('POST',`/admin/users/${id}/reset-mail`); toast('Correo enviado a '+r.email); closeModal(); }catch(err){ b.disabled=false; $('#apS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } });
+    $('#apF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('PUT',`/admin/users/${id}/password`,{password:$('#apP',m).value, logout:$('#apOut',m).checked}); closeModal(); toast('Contraseña cambiada'); }catch(err){ $('#apS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
+    enhancePasswords?.(m);
   },
   admSuggestView:el=>{
     const u=(S.admUsersList||[]).find(x=>x.id===el.dataset.id); if(!u||!u.delete_suggested) return;
