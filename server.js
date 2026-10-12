@@ -132,7 +132,7 @@ function parseCookies(h) {
   const o = {}; (h || '').split(';').forEach(p => { const i = p.indexOf('='); if (i > 0) o[p.slice(0, i).trim()] = decodeURIComponent(p.slice(i + 1).trim()); }); return o;
 }
 function setSession(res, token) {
-  res.setHeader('Set-Cookie', `ef=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 400}${PROD ? '; Secure' : ''}`);
+  res.append('Set-Cookie', `ef=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 400}${PROD ? '; Secure' : ''}`);
 }
 async function newSession(res, userId) {
   const token = crypto.randomBytes(32).toString('hex');
@@ -145,7 +145,11 @@ async function auth(req, res, next) {
     if (token) {
       const r = await q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1', [token]);
       const u = r.rows[0];
-      if (u) {
+      if (u && u.blocked && u.username) {
+        await q('DELETE FROM sessions WHERE token=$1', [token]);
+        res.append('Set-Cookie', `ef_susp=${encodeURIComponent(JSON.stringify({ r: String(u.blocked_reason || '').slice(0, 300), at: Number(u.blocked_at) || 0 }))}; Path=/; Max-Age=300; SameSite=Lax`);
+      }
+      else if (u) {
         if (u.username && u.email && u.email.toLowerCase() === SUPERADMIN_EMAIL && u.role !== 'superadmin') { await q("UPDATE users SET role='superadmin' WHERE id=$1", [u.id]); u.role = 'superadmin'; }
         req.user = u; req.token = token;
         if (u.username && (!u.last_seen || now() - Number(u.last_seen) > 600e3)) q('UPDATE users SET last_seen=$1 WHERE id=$2', [now(), u.id]).catch(() => {});
@@ -318,6 +322,7 @@ api.post('/login', async (req, res, next) => {
     const r = await q('SELECT * FROM users WHERE username=$1 OR (email IS NOT NULL AND lower(email)=$1) LIMIT 1', [who]);
     const u = r.rows[0];
     if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
+    if (u.blocked) return res.status(403).json({ suspended: true, reason: u.blocked_reason || '', at: Number(u.blocked_at) || null, error: 'Tu cuenta está suspendida.' });
     await syncRole(u.id, u.email);
     await adoptAnon(req, u.id);
     await newSession(res, u.id);
@@ -1837,9 +1842,11 @@ adm.put('/users/:id/block', async (req, res, next) => {
     const reason = String(req.body.reason || '').trim().slice(0, 1000);
     if (blocked && !reason) return res.status(400).json({ error: 'Escribe el motivo de la suspensión. La persona lo verá.' });
     await q('UPDATE users SET blocked=$1, blocked_reason=$2, blocked_at=$3 WHERE id=$4', [blocked, blocked ? reason : null, blocked ? now() : null, req.params.id]);
+    if (blocked) { await q('DELETE FROM sessions WHERE user_id=$1', [req.params.id]); await q('DELETE FROM push_subs WHERE user_id=$1', [req.params.id]).catch(() => {}); }
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
+async function suggesterId(ds) { if (!ds) return null; if (ds.byId) return ds.byId; const r = (await q('SELECT id FROM users WHERE username=$1', [ds.by || ''])).rows[0]; return r ? r.id : null; }
 // Los administradores sugieren borrar una cuenta; solo el Superadministrador la borra
 adm.put('/users/:id/suggest-delete', async (req, res, next) => {
   try {
@@ -1851,8 +1858,8 @@ adm.put('/users/:id/suggest-delete', async (req, res, next) => {
     if (on) {
       const supers = (await q("SELECT id FROM users WHERE role='superadmin'")).rows.map(r => r.id);
       notifyUser(supers, 'admin', `@${req.user.username} sugiere borrar la cuenta @${t.username}`, (reason ? 'Motivo: ' + reason + '. ' : '') + 'Está pendiente de que decidas en Panel › Usuarios.', '/?v=admin&t=usuarios');
-    } else if (t.delete_suggested && t.delete_suggested.byId && t.delete_suggested.byId !== req.user.id) {
-      notifyUser(t.delete_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no borrar la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
+    } else if (t.delete_suggested && (await suggesterId(t.delete_suggested)) && (await suggesterId(t.delete_suggested)) !== req.user.id) {
+      notifyUser(await suggesterId(t.delete_suggested), 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no borrar la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
     }
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -1861,8 +1868,9 @@ adm.delete('/users/:id', needSuper, async (req, res, next) => {
   try {
     const err = await canModerate(req.user, req.params.id); if (err) return res.status(400).json({ error: err });
     const t = (await q('SELECT username, delete_suggested FROM users WHERE id=$1', [req.params.id])).rows[0];
-    if (t && t.delete_suggested && t.delete_suggested.byId && t.delete_suggested.byId !== req.user.id)
-      notifyUser(t.delete_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha borrado la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
+    const sid = t && t.delete_suggested ? await suggesterId(t.delete_suggested) : null;
+    if (sid && sid !== req.user.id)
+      notifyUser(sid, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha borrado la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
     await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [req.params.id])).rows);
     await q('DELETE FROM attachments WHERE owner=$1', [req.params.id]);
     await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);

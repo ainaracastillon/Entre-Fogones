@@ -247,7 +247,7 @@ async function boot(){
   const later=restoreFromUrl();
   // tras recargar se conserva la posición en el historial (para atrás y adelante)
   const hs=history.state&&history.state.ef; if(typeof hs==='number'){ NAV.i=NAV.top=hs; }
-  render(); later?.(); routeHash(); loadNotices();
+  render(); later?.(); routeHash(); loadNotices(); checkSuspendedCookie();
   setInterval(()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); }, 8000);
   setInterval(()=>{ if(document.visibilityState==='visible') loadNotices(); }, 60000);
   document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible') loadState().catch(()=>{}); });
@@ -1398,7 +1398,7 @@ function authModal(mode='login'){
       $('#lforgot',m).onclick=()=>views.forgot();
       $('#fl',m).onsubmit=async e=>{e.preventDefault(); $('#lgo',m).disabled=true;
         try{ await api('POST','/login',{username:$('#luser',m).value.trim(), password:$('#lpass',m).value}); await afterAuth('Hola de nuevo'); }
-        catch(err){ $('#lgo',m).disabled=false; $('#lstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
+        catch(err){ $('#lgo',m).disabled=false; if(err.suspended){ suspendedModal(err.reason, err.at); return; } $('#lstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
       };
     },
     signup:()=>{
@@ -2001,7 +2001,7 @@ function admResumen(d){
     <p class="muted" style="font-size:13px">${d.usuarios.admins} ${d.usuarios.admins===1?'persona administra':'personas administran'} la app${d.usuarios.bloqueados?` · ${d.usuarios.bloqueados} ${d.usuarios.bloqueados===1?'cuenta suspendida':'cuentas suspendidas'}`:''}.</p>`;
 }
 async function admUsers(){
-  const list=await api('GET','/admin/users?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
+  const list=await api('GET','/admin/users?q='+encodeURIComponent(S.admQ||'')); S.admUsersList=list; const box=$('#admList'); if(!box) return;
   if(!list.length){ box.innerHTML='<p class="muted">No hay cuentas con esa búsqueda.</p>'; return; }
   const roleLbl={superadmin:'Superadministrador',admin:'Administrador',user:'Usuario'};
   box.innerHTML=`<div class="adm-rows">${list.map(u=>{
@@ -2010,7 +2010,7 @@ async function admUsers(){
     const canMod = !me && target!=='superadmin' && (target!=='admin' || isSuper());
     return `<div class="adm-row ${u.blocked?'blocked':''}">
       ${avatar(u.id)}
-      <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-${target}">${roleLbl[target]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Suspendida</span>':''}${u.delete_suggested?'<span class="role r-blocked">Se sugiere borrar</span>':''}</div>
+      <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-${target}">${roleLbl[target]||'Usuario'}</span>${u.blocked?'<span class="role r-blocked">Suspendida</span>':''}${u.delete_suggested?`<button class="role r-blocked role-btn" data-act="admSuggestView" data-id="${esc(u.id)}" title="Ver la sugerencia">Se sugiere borrar ›</button>`:''}</div>
         <div class="ar-s">${esc(u.email||'sin correo')} · ${u.recetas} recetas · alta ${fmtDate(u.accepted_at)} · última vez ${fmtAgo(u.last_seen)}</div>
         ${u.blocked&&u.blocked_reason?`<div class="ar-s">Motivo de la suspensión: ${esc(u.blocked_reason)}</div>`:''}
         ${u.delete_suggested?`<div class="ar-s">@${esc(u.delete_suggested.by||'')} sugiere borrarla${u.delete_suggested.reason?': '+esc(u.delete_suggested.reason):''}</div>`:''}</div>
@@ -2198,6 +2198,21 @@ const ADM_ACT = {
     if(el.dataset.b!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:false}),'Suspensión quitada');
     const reason=await promptBox('Suspender cuenta','Motivo de la suspensión',{ok:'Suspender',hint:'La persona lo verá al entrar, junto con dónde puede reclamar.'});
     if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/block`,{blocked:true, reason}),'Cuenta suspendida');
+  },
+  admSuggestView:el=>{
+    const u=(S.admUsersList||[]).find(x=>x.id===el.dataset.id); if(!u||!u.delete_suggested) return;
+    const ds=u.delete_suggested, mine=ds.by===S.profile?.username;
+    const m=openModal(`${mHead('Sugerencia de borrar la cuenta')}
+      <div class="person">${avatar(u.id)}<div class="pb"><div class="pn">${esc(u.display||'')}</div><div class="pu">@${esc(u.username)}${u.email?' · '+esc(u.email):''}</div></div></div>
+      <div class="card" style="padding:14px 16px"><p style="margin:0"><b>@${esc(ds.by||'?')}</b> sugiere borrar esta cuenta${ds.at?` (${esc(fmtDate(ds.at))})`:''}.</p>
+        <p style="margin:6px 0 0;white-space:pre-wrap">${ds.reason?esc(ds.reason):'<span class="muted">Sin motivo indicado.</span>'}</p></div>
+      ${isSuper()?`<p class="muted" style="margin:0;font-size:14px">Si apruebas, la cuenta se borra al momento (sus recetas pasan a Recomendadas) y se avisa a @${esc(ds.by||'')}. Si la rechazas, también se le avisa.</p>
+        <div class="row" style="justify-content:flex-end"><button class="btn" id="sgNo">${ico('x')}Rechazar</button><button class="btn danger" id="sgYes">${ico('check')}Aprobar y borrar la cuenta</button></div>`
+      :`<p class="muted" style="margin:0;font-size:14px">Está pendiente de que decida el Superadministrador.</p>
+        <div class="row" style="justify-content:flex-end">${mine?`<button class="btn" id="sgWd">Retirar mi sugerencia</button>`:''}<button class="btn pri" data-act="closeModal">Cerrar</button></div>`}`);
+    $('#sgYes',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('DELETE','/admin/users/'+u.id),'Aprobada: cuenta borrada'); });
+    $('#sgNo',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('PUT',`/admin/users/${u.id}/suggest-delete`,{on:false}),'Sugerencia rechazada'); });
+    $('#sgWd',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('PUT',`/admin/users/${u.id}/suggest-delete`,{on:false}),'Sugerencia retirada'); });
   },
   admSuggestDel:async el=>{
     if(el.dataset.on!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-delete`,{on:false}),'Sugerencia retirada');
@@ -2421,6 +2436,21 @@ function orderFoldersModal(){
   list.addEventListener('mousedown',start);
   $('#ordOk',m).onclick=async()=>{ try{ await api('PUT','/folders-order',{ids}); await loadState(); closeModal(); toast('Orden guardado'); }catch(err){ toast(err.error||'No se ha podido guardar'); } };
   draw();
+}
+/* ===== Cuenta suspendida: no se puede entrar; se explica el motivo y dónde reclamar ===== */
+function suspendedModal(reason, at){
+  openModal(`${mHead('Tu cuenta está suspendida')}
+    <div class="susp-box">${ico('lock')}<div>
+      ${at?`<p class="muted" style="margin:0 0 6px">Desde el ${esc(new Date(at).toLocaleDateString('es-ES',{day:'numeric',month:'long',year:'numeric'}))}</p>`:''}
+      <b>Motivo</b><p style="margin:4px 0 0;white-space:pre-wrap">${esc(reason||'No se ha indicado un motivo.')}</p></div></div>
+    <p style="margin:0">No puedes iniciar sesión mientras dure la suspensión. Si crees que es un error o quieres reclamar, escríbenos desde el formulario de contacto indicando tu usuario. Revisaremos tu caso y te contestaremos por correo.</p>
+    <div class="row" style="justify-content:flex-end"><button class="btn" data-act="closeModal">Cerrar</button><a class="btn pri" href="/legal/contacto">${ico('mail')}Reclamar en Contacto</a></div>`);
+}
+function checkSuspendedCookie(){
+  const m=document.cookie.match(/(?:^|; )ef_susp=([^;]*)/); if(!m) return;
+  document.cookie='ef_susp=; Path=/; Max-Age=0';
+  let d={}; try{ d=JSON.parse(decodeURIComponent(m[1])); }catch{}
+  suspendedModal(d.r, d.at);
 }
 /* ===== Cuenta suspendida ===== */
 function viewSuspended(){
