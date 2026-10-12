@@ -565,7 +565,7 @@ async function runRecipeQueue() {
 }
 async function aiNutrition(d) {
   countAi();
-  const out = parseJson(await llm({ maxTokens: 700, messages: [{ role: 'user', text: `Calcula la información nutricional aproximada POR RACIÓN de esta receta (${parseInt(d.servings) || 'calcula tú las'} raciones), con valores típicos de tablas de composición de alimentos.
+  const out = parseJson(await llm({ bg: true, maxTokens: 700, messages: [{ role: 'user', text: `Calcula la información nutricional aproximada POR RACIÓN de esta receta (${parseInt(d.servings) || 'calcula tú las'} raciones), con valores típicos de tablas de composición de alimentos.
 Devuelve SOLO un objeto JSON: {"grams": peso en gramos de una ración ya cocinada, "kcal": número, "carbs": gramos de hidratos de carbono, "sugars": gramos de azúcares, "fat": gramos de grasas, "satfat": gramos de grasas saturadas, "protein": gramos de proteínas, "fiber": gramos de fibra, "salt": gramos de sal}.
 Receta: ${String(d.title || '').slice(0, 160)}
 Ingredientes:
@@ -1102,31 +1102,44 @@ async function openaiCompat({ url, key, model, system, messages, maxTokens, plai
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify(plain
       ? { model, messages: msgs, max_tokens: maxTokens, temperature: 0.6 }
-      : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : {}) })
+      : { model, messages: msgs, response_format: { type: 'json_object' }, max_completion_tokens: maxTokens + (/gpt-oss/.test(model) ? 2000 : 0), temperature: 0.6, ...(/gpt-oss/.test(model) ? { reasoning_effort: 'low' } : /qwen3/.test(model) ? { reasoning_effort: 'none' } : {}) })
   });
   if (!r.ok) { const e = new Error(model + ' ' + r.status + ' ' + (await r.text()).slice(0, 300)); e.status = r.status; throw e; }
   const j = await r.json();
   return j.choices?.[0]?.message?.content || '';
 }
-// Un proveedor que llega a su límite descansa un rato y mientras tanto se usa el siguiente
-const aiRest = {};
+// Un proveedor (o un modelo) que llega a su límite descansa un rato y mientras tanto se usa el siguiente.
+// Cada modelo de Groq tiene su propio cupo diario, así que se van probando por orden.
+// Las tareas de fondo (bg) usan solo modelos pequeños para no gastar el cupo que necesitan las personas.
+const aiRest = {}, modelRest = {};
+const uniq = a => [...new Set(a.filter(Boolean))];
+const GROQ_TEXT = uniq([GROQ_MODEL, 'llama-3.3-70b-versatile', 'moonshotai/kimi-k2-instruct-0905', 'qwen/qwen3-32b', 'meta-llama/llama-4-maverick-17b-128e-instruct', GROQ_FALLBACK, 'meta-llama/llama-4-scout-17b-16e-instruct', 'llama-3.1-8b-instant']);
+const GROQ_BG = uniq(['llama-3.1-8b-instant', 'meta-llama/llama-4-scout-17b-16e-instruct', GROQ_FALLBACK]);
+const GROQ_VISION = uniq([GROQ_VISION_MODEL, 'meta-llama/llama-4-maverick-17b-128e-instruct', 'meta-llama/llama-4-scout-17b-16e-instruct']);
+function restFor(e) {
+  const m = String(e.message || '');
+  if (e.status === 429) return /per day|TPD|RPD|daily/i.test(m) ? 60 * 60e3 : 90e3;
+  if (e.status === 404 || /model_not_found|decommissioned|does not exist|not supported/i.test(m)) return 12 * 3600e3;
+  return 0;
+}
 async function llm(opts) {
   let last;
-  const live = PROVIDERS.filter(p => !(aiRest[p] > Date.now()));
-  for (const p of live.length ? live : PROVIDERS) {
+  const provs = opts.bg ? PROVIDERS.filter(p => p !== 'cloudflare') : PROVIDERS;
+  const live = provs.filter(p => !(aiRest[p] > Date.now()));
+  for (const p of live.length ? live : provs) {
     try {
       const t = await llmWith(p, opts);
       if (String(t || '').trim()) return t;
       last = new Error(p + ' sin respuesta');
     } catch (e) {
       console.error('IA', p, String(e.message).slice(0, 200));
-      if (e.status === 429) aiRest[p] = Date.now() + 90e3;
+      if (e.status === 429) aiRest[p] = Date.now() + (p === 'cloudflare' && /daily/i.test(e.message) ? 60 * 60e3 : p === 'groq' ? 60e3 : 90e3);
       last = e;
     }
   }
   throw last || new Error('IA no disponible');
 }
-async function llmWith(provider, { system = '', messages, maxTokens = 3000 }) {
+async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }) {
   if (provider === 'cloudflare') {
     const hasImage = messages.some(m => m.image);
     return await openaiCompat({ url: `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/v1/chat/completions`, key: CF_TOKEN,
@@ -1135,13 +1148,19 @@ async function llmWith(provider, { system = '', messages, maxTokens = 3000 }) {
   if (provider === 'groq') {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
     const hasImage = messages.some(m => m.image);
-    const model = hasImage ? GROQ_VISION_MODEL : GROQ_MODEL;
-    try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages, maxTokens }); }
-    catch (e) {
-      if (hasImage || e.status === 429 || !GROQ_FALLBACK || GROQ_FALLBACK === model) throw e;
-      console.error(e.message, '→ probando', GROQ_FALLBACK);
-      return await openaiCompat({ url, key: GROQ_KEY, model: GROQ_FALLBACK, system, messages, maxTokens });
+    const list = hasImage ? GROQ_VISION : bg ? GROQ_BG : GROQ_TEXT;
+    let last, rateLimited = false;
+    for (const model of list) {
+      if (modelRest[model] > Date.now()) { rateLimited = true; continue; }
+      try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages, maxTokens: /8b-instant/.test(model) ? Math.min(maxTokens, 7000) : maxTokens }); }
+      catch (e) {
+        const r = restFor(e); if (r) modelRest[model] = Date.now() + r;
+        if (e.status === 429) rateLimited = true;
+        console.error('groq', model, e.status || '', String(e.message).slice(0, 120));
+        last = e;
+      }
     }
+    const e = last || new Error('groq: todos los modelos descansando'); if (rateLimited) e.status = 429; throw e;
   }
   if (provider === 'openai') {
     const msgs = system ? [{ role: 'system', content: system }] : [];
@@ -1424,7 +1443,7 @@ async function rewriteRecipe(r) {
   if (!PROVIDER) return r;
   try {
     countAi();
-    const out = cleanAi(parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Reescribe esta receta con tus propias palabras para un recetario casero en español de España. Mantén los mismos ingredientes y cantidades, y los mismos pasos, pero redactados de nuevo, claros y directos. ${TITLE_RULES} En "notes" pon un consejo breve propio. Devuelve SOLO un objeto JSON con esta forma:
+    const out = cleanAi(parseJson(await llm({ bg: true, maxTokens: 3000, messages: [{ role: 'user', text: `Reescribe esta receta con tus propias palabras para un recetario casero en español de España. Mantén los mismos ingredientes y cantidades, y los mismos pasos, pero redactados de nuevo, claros y directos. ${TITLE_RULES} En "notes" pon un consejo breve propio. Devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
 Receta:
 ${JSON.stringify({ title: r.title, servings: r.servings, time: r.time, ingredients: r.ingredients, steps: r.steps }).slice(0, 20000)}` }] })));
@@ -1457,7 +1476,7 @@ const SUGG_CATS = ['Postres', 'Pasta', 'Carne', 'Pescado y marisco', 'Arroces', 
 async function categorize(rows) {
   if (!PROVIDER || !rows.length) return {};
   countAi();
-  const out = parseJson(await llm({ maxTokens: 1200, messages: [{ role: 'user', text: `Clasifica cada receta en UNO de estos tipos: ${SUGG_CATS.join(', ')}.
+  const out = parseJson(await llm({ bg: true, maxTokens: 1200, messages: [{ role: 'user', text: `Clasifica cada receta en UNO de estos tipos: ${SUGG_CATS.join(', ')}.
 Devuelve SOLO un objeto JSON {"tipos": {"<id>": "<tipo>"}}.
 ${rows.map(r => `${r.id}: ${r.title} (${(r.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
   const m = (out && out.tipos) || {}; const res = {};
@@ -1473,7 +1492,7 @@ async function dishPrompt(d) {
   if (!PROVIDER) return fallback;
   try {
     countAi();
-    const out = parseJson(await llm({ maxTokens: 500, messages: [{ role: 'user', text: `Describe en INGLÉS, para un generador de imágenes, cómo se ve exactamente el plato terminado de esta receta tal y como se sirve: qué es (tipo de plato), forma, colores, textura, ingredientes que se ven, en qué recipiente se sirve (plato, cuenco, vaso, bandeja, molde) y la guarnición si la tiene. Debe ser fiel a la receta: no añadas ingredientes que no lleva ni cambies el tipo de plato (si es una bebida, una bebida; si es un postre, ese postre; si es una salsa, la salsa en un cuenco). Máximo 60 palabras, sin nombres propios.
+    const out = parseJson(await llm({ bg: true, maxTokens: 500, messages: [{ role: 'user', text: `Describe en INGLÉS, para un generador de imágenes, cómo se ve exactamente el plato terminado de esta receta tal y como se sirve: qué es (tipo de plato), forma, colores, textura, ingredientes que se ven, en qué recipiente se sirve (plato, cuenco, vaso, bandeja, molde) y la guarnición si la tiene. Debe ser fiel a la receta: no añadas ingredientes que no lleva ni cambies el tipo de plato (si es una bebida, una bebida; si es un postre, ese postre; si es una salsa, la salsa en un cuenco). Máximo 60 palabras, sin nombres propios.
 Devuelve SOLO un objeto JSON: {"prompt": "..."}
 Receta: ${String(d.title || '').slice(0, 160)}
 Ingredientes: ${(d.ingredients || []).slice(0, 25).join('; ').slice(0, 1500)}
@@ -1537,7 +1556,7 @@ async function processSuggestionArt() {
       let names = {};
       if (PROVIDER) try {
         countAi();
-        const out = parseJson(await llm({ maxTokens: 1500, messages: [{ role: 'user', text: `Pon a cada receta un título entendible. ${TITLE_RULES}
+        const out = parseJson(await llm({ bg: true, maxTokens: 1500, messages: [{ role: 'user', text: `Pon a cada receta un título entendible. ${TITLE_RULES}
 Usa los ingredientes para saber qué plato es. Devuelve SOLO un objeto JSON {"titulos": {"<id>": "<título>"}}.
 ${rows.map(r => `${r.id}: ${r.title} (${(r.data.ingredients || []).slice(0, 6).join(', ')})`).join('\n')}` }] }));
         names = (out && out.titulos) || {};

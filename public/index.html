@@ -779,9 +779,11 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
   .tabbar .tab[aria-current="page"]::before{content:"";position:absolute;top:-7px;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
   .tabbar .badge{position:absolute;top:0;left:calc(50% + 6px);margin:0;min-width:16px;height:16px;font-size:10px}
   /* la página se desplaza solo entre la cabecera y la barra: debajo de la barra no hay nada */
-  html,body{height:100%;overflow:hidden}
-  body{min-height:0}
-  body>main{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior-y:contain}
+  /* la página no se mueve nunca al tirar de arriba o de abajo: solo se desplaza el contenido */
+  :root{padding:0!important}
+  html{height:100%;overflow:hidden;overscroll-behavior:none;background:var(--bg)}
+  body{position:fixed;inset:0;height:auto;min-height:0;overflow:hidden;overscroll-behavior:none;padding-top:env(safe-area-inset-top,0px);box-sizing:border-box}
+  body>main{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:none}
   .in-chat body>main{overflow:hidden}
   .in-chat body>main>#main{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
   .in-chat .chat{flex:1;min-height:0}
@@ -801,6 +803,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <div id="modal-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=42"></script>
+<script src="/app.js?v=43"></script>
 </body>
 </html>
