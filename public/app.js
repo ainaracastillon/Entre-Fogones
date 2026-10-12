@@ -461,21 +461,33 @@ function go(v){
 /* ===== Biblioteca ===== */
 function spineH(id,name=''){let h=0;for(const c of String(id))h=(h*31+c.charCodeAt(0))>>>0;return Math.min(268,178+(h%34)+Math.max(0,String(name).length-12)*5)}
 /* Ajusta el título de cada lomo para que se vea entero: mide el texto y lo reparte en líneas */
+/* Ajusta el título de cada lomo para que se vea entero; si el nombre es largo, el libro crece en altura */
 function fitSpines(){
   const ctx=(fitSpines.c ||= document.createElement('canvas').getContext('2d'));
-  document.querySelectorAll('.spine .st').forEach(st=>{
-    const words=st.textContent.trim().split(/\s+/).filter(Boolean);
+  const tryFit=(st,words,minFs)=>{
     const L=(st.clientHeight-6)*0.9, W=st.clientWidth-6;
-    if(L<20||W<10) return;
-    for(let fs=16; fs>=7.5; fs-=.5){
+    if(L<20||W<10) return 0;
+    for(let fs=16; fs>=minFs; fs-=.5){
       ctx.font=`${fs}px "Young Serif", Georgia, serif`;
       const maxLines=Math.max(1, Math.floor(W/(fs*1.22)));
       const sp=ctx.measureText(' ').width; let lines=1, cur=0, ok=true;
       for(const w of words){ const ww=ctx.measureText(w).width; if(ww>L){ ok=false; break; }
         if(!cur) cur=ww; else if(cur+sp+ww<=L) cur+=sp+ww; else { lines++; cur=ww; } }
-      if(ok && lines<=maxLines){ st.style.fontSize=fs+'px'; return; }
+      if(ok && lines<=maxLines) return fs;
     }
-    st.style.fontSize='7.5px';
+    return 0;
+  };
+  document.querySelectorAll('.spine .st').forEach(st=>{
+    const sp=st.closest('.spine'), words=st.textContent.trim().split(/\s+/).filter(Boolean);
+    const minGood = innerWidth<=640 ? 10 : 12;
+    let fs=tryFit(st,words,minGood);
+    // no cabe bien: el libro se hace más alto (hasta el alto del estante)
+    if(!fs && sp && !sp.classList.contains('add')){
+      let h=parseFloat(getComputedStyle(sp).getPropertyValue('--h'))||200;
+      while(!fs && h<268){ h=Math.min(268,h+8); sp.style.setProperty('--h',h); fs=tryFit(st,words,minGood); }
+    }
+    if(!fs) fs=tryFit(st,words,7.5)||7.5;
+    st.style.fontSize=fs+'px';
   });
 }
 function viewLibrary(){
