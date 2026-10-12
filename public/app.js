@@ -477,9 +477,14 @@ function fitSpines(){
     }
     return 0;
   };
+  // la letra de «TODAS» marca el tamaño mínimo para el resto de lomos
+  const all=document.querySelector('.spine.all .st');
+  const allFs = all ? (tryFit(all, all.textContent.trim().split(/\s+/), 7.5) || 12) : 12;
+  if(all) all.style.fontSize=allFs+'px';
   document.querySelectorAll('.spine .st').forEach(st=>{
+    if(st===all) return;
     const sp=st.closest('.spine'), words=st.textContent.trim().split(/\s+/).filter(Boolean);
-    const minGood = innerWidth<=640 ? 10 : 12;
+    const minGood = allFs;
     let fs=tryFit(st,words,minGood);
     // no cabe bien: el libro se hace más alto (hasta el alto del estante)
     if(!fs && sp && !sp.classList.contains('add')){
