@@ -2105,18 +2105,17 @@ async function videoRecipes(title, text) {
 }
 // diagnóstico temporal de TikTok
 app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
-  const url = String(req.query.u || ''); const out = {};
-  const tries = [
-    ['tikwm-post', 'https://www.tikwm.com/api/', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA }, body: 'hd=0&url=' + encodeURIComponent(url) }],
-    ['tikwm-get', 'https://tikwm.com/api/?url=' + encodeURIComponent(url), { headers: { 'User-Agent': BROWSER_UA } }],
-    ['lovetik', 'https://lovetik.com/api/ajax/search', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA }, body: 'query=' + encodeURIComponent(url) }],
-    ['unshorten', 'https://unshorten.me/json/' + encodeURIComponent(url), {}],
-    ['tt-mobile', url, { redirect: 'manual', headers: { 'User-Agent': 'com.zhiliaoapp.musically/2023600040 (Linux; U; Android 13; es_ES; Pixel 7; Build/TQ3A.230805.001; Cronet/TTNetVersion:5f9640e3 2023-08-24 QuicVersion:47555d5a 2023-07-06)' } }],
-  ];
-  for (const [k, u, o] of tries) {
-    try { const r = await fetch(u, { signal: AbortSignal.timeout(20000), ...o }); const t = await r.text();
-      out[k] = { status: r.status, loc: r.headers.get('location'), body: t.slice(0, 400) }; } catch (e) { out[k] = 'err ' + e.message; }
+  const out = {};
+  const jar = {};
+  try { const r = await jarFetch('https://www.tiktok.com/', jar); await r.text(); out.cookies = Object.keys(jar); } catch (e) { out.homeErr = e.message; }
+  const cookie = Object.entries(jar).map(([k, v]) => k + '=' + v).join('; ');
+  for (const c of ['ZGe9CPS49', 'ZGeHMFU6t', 'ZGe9Qttcu', 'ZMh4bU5yk']) {
+    for (const [k, h] of [['plain', {}], ['cookie', { cookie }], ['iphone+cookie', { cookie, 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1' }]]) {
+      try { const r = await fetch('https://vm.tiktok.com/' + c + '/', { redirect: 'manual', signal: AbortSignal.timeout(10000), headers: { 'User-Agent': BROWSER_UA, ...h } });
+        out[c + ' ' + k] = r.status + ' ' + (r.headers.get('location') || '').slice(0, 160); } catch (e) { out[c + ' ' + k] = 'err ' + e.message; }
+    }
   }
+  try { const r = await fetch('https://ipinfo.io/json', { signal: AbortSignal.timeout(8000) }); const j = await r.json(); out.ip = j.country + ' ' + j.region + ' ' + j.org; } catch (e) { out.ipErr = e.message; }
   res.json(out);
 });
 // Enlace (web o vídeo): todas las recetas que tenga
