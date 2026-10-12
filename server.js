@@ -2115,6 +2115,18 @@ app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
   try { out.data = await tiktokData(url); out.data.speech = (out.data.speech || '').slice(0, 100); } catch (e) { out.dataErr = e.message; }
   res.json(out);
 });
+// diagnóstico temporal de TikTok
+app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
+  const url = String(req.query.u || ''); const out = {};
+  try { const jar = {}; const r = await jarFetch(url, jar, { Accept: 'text/html,application/xhtml+xml' }); const h = await r.text();
+    out.page = { status: r.status, final: r.finalUrl, len: h.length, rehyd: /__UNIVERSAL_DATA_FOR_REHYDRATION__/.test(h), sigi: /SIGI_STATE/.test(h), ogd: metaTag(h, 'og:description').slice(0, 100), head: h.slice(0, 300) };
+    const m = h.match(/<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>([\s\S]*?)<\/script>/);
+    if (m) { try { const j = JSON.parse(m[1]); const d = j.__DEFAULT_SCOPE__?.['webapp.video-detail']; out.page.detail = d ? { status: d.statusCode, msg: d.statusMsg, hasItem: !!d.itemInfo } : Object.keys(j.__DEFAULT_SCOPE__ || {}); } catch (e) { out.page.parse = e.message; } }
+  } catch (e) { out.pageErr = e.message; }
+  try { const r = await fetch('https://www.tiktok.com/oembed?url=' + encodeURIComponent(out.page?.final || url), { signal: AbortSignal.timeout(15000) }); out.oembed = { status: r.status, body: (await r.text()).slice(0, 300) }; } catch (e) { out.oembedErr = e.message; }
+  try { out.data = await tiktokData(url); out.data.speech = (out.data.speech || '').slice(0, 100); } catch (e) { out.dataErr = e.message; }
+  res.json(out);
+});
 // Enlace (web o vídeo): todas las recetas que tenga
 adm.post('/bulk/url', async (req, res) => {
   try {
