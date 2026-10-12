@@ -752,6 +752,24 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 .susp-box{display:flex;gap:12px;align-items:flex-start;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px}
 .susp-box>svg{width:28px;height:28px;color:var(--danger);flex:none;margin-top:2px}
 .adm-sub{max-width:420px;margin-bottom:12px}.adm-sub svg{width:15px;height:15px;vertical-align:-2px;margin-right:4px}
+.bk-log li.dup{color:var(--muted)}
+.av.grp svg{width:58%;height:58%}
+.msender{display:block;font-size:12px;font-weight:700;margin-bottom:2px}
+.grp-names{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.reload-btn svg{width:20px;height:20px}
+@media (max-width:400px){
+  .top .wrap{gap:4px}
+  .nav{gap:0}
+  .nav button{padding:4px 2px;font-size:10px}
+  .nav .ico{width:19px;height:19px}
+  .nav .bell{width:27px;height:34px;padding:0}
+  .nav .bell .ico,.nav .bell svg{width:19px;height:19px}
+  .nav .userbox .user-btn{padding:4px 2px}
+  .top .brand svg{width:22px;height:auto}
+  .top .brand .w1{font-size:9px}
+  .top .brand .w2{font-size:15px}
+  .top .brand{gap:3px}
+}
 </style>
 </head>
 <body>
@@ -762,6 +780,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=38"></script>
+<script src="/app.js?v=39"></script>
 </body>
 </html>

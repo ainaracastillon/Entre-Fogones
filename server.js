@@ -78,6 +78,10 @@ async function migrate() {
   ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_by TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS restore_suggested JSONB;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
+  CREATE TABLE IF NOT EXISTS groups(id TEXT PRIMARY KEY, name TEXT NOT NULL, owner TEXT, color TEXT, created BIGINT NOT NULL, ts BIGINT, last JSONB);
+  CREATE TABLE IF NOT EXISTS group_members(group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, added BIGINT, added_by TEXT, PRIMARY KEY(group_id, user_id));
+  CREATE TABLE IF NOT EXISTS bulk_log(id TEXT PRIMARY KEY, created BIGINT NOT NULL, by_user TEXT, origin TEXT, kind TEXT, title TEXT, dest JSONB, sugg_id TEXT, recipe_ids JSONB);
+  CREATE INDEX IF NOT EXISTS bulk_log_origin ON bulk_log(origin);
   CREATE TABLE IF NOT EXISTS user_notifs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT, title TEXT, body TEXT, url TEXT, created BIGINT NOT NULL, read_at BIGINT);
   CREATE INDEX IF NOT EXISTS user_notifs_user ON user_notifs(user_id, created);
   ALTER TABLE folders ADD COLUMN IF NOT EXISTS position INT;
@@ -217,6 +221,8 @@ api.get('/config', (req, res) => res.json({ mail: mailReady(), ai: !!PROVIDER, a
 api.get('/state', async (req, res, next) => {
   try {
     const me = req.user.id;
+    const groupsQ = q(`SELECT g.*, (SELECT json_agg(m.user_id) FROM group_members m JOIN users x ON x.id=m.user_id AND x.deleted_at IS NULL WHERE m.group_id=g.id) members
+      FROM groups g WHERE EXISTS (SELECT 1 FROM group_members m WHERE m.group_id=g.id AND m.user_id=$1) ORDER BY g.ts DESC NULLS LAST`, [me]);
     const [folders, recipes, reqs, chats] = await Promise.all([
       q('SELECT * FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [me]),
       q('SELECT * FROM recipes WHERE user_id=$1 ORDER BY updated DESC', [me]),
@@ -227,6 +233,7 @@ api.get('/state', async (req, res, next) => {
     reqs.rows.forEach(r => { ids.add(r.from_id); ids.add(r.to_id); });
     chats.rows.forEach(c => { ids.add(c.a); ids.add(c.b); });
     recipes.rows.forEach(r => r.data.fromUid && ids.add(r.data.fromUid));
+    const groups = (await groupsQ).rows; groups.forEach(g => (g.members || []).forEach(id => ids.add(id)));
     ids.delete(me);
     const people = ids.size ? (await q('SELECT id,username,display,color,avatar FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [[...ids]])).rows : [];
     const gone = new Set([...ids].filter(id => !people.some(p => p.id === id)));
@@ -238,7 +245,8 @@ api.get('/state', async (req, res, next) => {
       folders: folders.rows.map(f => ({ id: f.id, name: f.name, color: f.color, created: Number(f.created) })),
       recipes: recipes.rows.map(recipeOut),
       requests: reqs.rows.map(r => ({ from: r.from_id, to: r.to_id, status: r.status, ts: Number(r.ts) })),
-      chats: chats.rows.map(c => ({ id: c.id, members: [c.a, c.b], ts: Number(c.ts), last: c.last }))
+      chats: chats.rows.map(c => ({ id: c.id, members: [c.a, c.b], ts: Number(c.ts), last: c.last })),
+      groups: groups.map(g => ({ id: 'g:' + g.id, name: g.name, color: g.color, owner: g.owner, members: g.members || [], ts: Number(g.ts) || Number(g.created), last: g.last }))
     });
   } catch (e) { next(e); }
 });
@@ -678,20 +686,62 @@ api.post('/push/unsubscribe', needProfile, async (req, res, next) => {
 });
 api.post('/push/test', needProfile, async (req, res) => { await sendPush(req.user.id, 'notices', { title: 'Entre Fogones', body: '¡Listo! Así te llegarán los avisos al móvil.', url: '/' }); res.json({ ok: true }); });
 
+/* Grupos de chat: quien está en el grupo puede invitar a sus amigos */
+async function friendIds(me) { return (await q("SELECT CASE WHEN from_id=$1 THEN to_id ELSE from_id END id FROM requests WHERE status='accepted' AND (from_id=$1 OR to_id=$1)", [me])).rows.map(r => r.id); }
+api.post('/groups', needProfile, async (req, res, next) => {
+  try {
+    const name = String(req.body.name || '').trim().slice(0, 60);
+    if (!name) return res.status(400).json({ error: 'Ponle un nombre al grupo.' });
+    const fr = new Set(await friendIds(req.user.id));
+    const members = [...new Set((Array.isArray(req.body.members) ? req.body.members : []).map(String))].filter(id => fr.has(id)).slice(0, 100);
+    if (!members.length) return res.status(400).json({ error: 'Elige al menos a un amigo.' });
+    const id = gid(), t = now();
+    await q('INSERT INTO groups(id,name,owner,color,created,ts,last) VALUES($1,$2,$3,$4,$5,$5,$6)', [id, name, req.user.id, String(req.body.color || '#2F5D46').slice(0, 9), t, { from: req.user.id, text: 'Ha creado el grupo' }]);
+    for (const u of [req.user.id, ...members]) await q('INSERT INTO group_members(group_id,user_id,added,added_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [id, u, t, req.user.id]);
+    notifyUser(members, 'messages', `${req.user.display || '@' + req.user.username} te ha añadido a «${name}»`, 'Ya puedes chatear con el grupo.', `/?v=chat&c=g:${id}`);
+    res.json({ ok: true, id: 'g:' + id });
+  } catch (e) { next(e); }
+});
+api.put('/groups/:id', needProfile, async (req, res, next) => {
+  try {
+    const gid_ = req.params.id.replace(/^g:/, ''), gk = 'g:' + gid_;
+    const ms = await groupMembers(gk); if (!ms.includes(req.user.id)) return res.status(403).json({ error: 'No estás en este grupo.' });
+    const g = (await q('SELECT * FROM groups WHERE id=$1', [gid_])).rows[0];
+    if (req.body.name !== undefined) { const name = String(req.body.name || '').trim().slice(0, 60); if (name) await q('UPDATE groups SET name=$1 WHERE id=$2', [name, gid_]); }
+    if (Array.isArray(req.body.add) && req.body.add.length) {
+      const fr = new Set(await friendIds(req.user.id)); const add = req.body.add.map(String).filter(id => fr.has(id) && !ms.includes(id)).slice(0, 100);
+      for (const u of add) await q('INSERT INTO group_members(group_id,user_id,added,added_by) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [gid_, u, now(), req.user.id]);
+      if (add.length) notifyUser(add, 'messages', `${req.user.display || '@' + req.user.username} te ha añadido a «${g.name}»`, 'Ya puedes chatear con el grupo.', `/?v=chat&c=${gk}`);
+    }
+    if (req.body.remove && g.owner === req.user.id) await q('DELETE FROM group_members WHERE group_id=$1 AND user_id=$2 AND user_id<>$3', [gid_, String(req.body.remove), req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+api.delete('/groups/:id/me', needProfile, async (req, res, next) => {
+  try {
+    const gid_ = req.params.id.replace(/^g:/, '');
+    await q('DELETE FROM group_members WHERE group_id=$1 AND user_id=$2', [gid_, req.user.id]);
+    const left = (await q('SELECT user_id FROM group_members WHERE group_id=$1 ORDER BY added', [gid_])).rows;
+    if (!left.length) await q('DELETE FROM groups WHERE id=$1', [gid_]);
+    else await q('UPDATE groups SET owner=$1 WHERE id=$2 AND owner=$3', [left[0].user_id, gid_, req.user.id]);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+
 /* Chat */
 api.get('/chats/:other/messages', needProfile, async (req, res, next) => {
   try {
-    const key = pairKey(req.user.id, req.params.other);
+    const key = await chatKeyFor(req.user.id, req.params.other);
     const after = Number(req.query.after) || 0;
     const r = after
       ? await q('SELECT * FROM messages WHERE chat_id=$1 AND ts>$2 ORDER BY ts ASC LIMIT 200', [key, after])
       : await q('SELECT * FROM (SELECT * FROM messages WHERE chat_id=$1 ORDER BY ts DESC LIMIT 200) t ORDER BY ts ASC', [key]);
     res.json(r.rows.map(m => ({ ...m.data, id: m.id, from: m.from_id, ts: Number(m.ts) })));
-  } catch (e) { next(e); }
+  } catch (e) { if (e.status === 403) return res.status(403).json({ error: e.message }); next(e); }
 });
 // Guarda un mensaje (texto, receta, recetario, foto o archivo), con la respuesta a otro mensaje si la hay
 async function saveMessage(me, other, b, file) {
-  const key = pairKey(me, other), ts = now();
+  const key = await chatKeyFor(me, other), ts = now(), group = isGroupKey(other);
   const type = ['text', 'ask', 'recipe', 'folder', 'image', 'file'].includes(b.type) ? b.type : 'text';
   const data = { type, text: String(b.text || '').slice(0, 4000) };
   if (b.purpose) data.purpose = String(b.purpose).slice(0, 20);
@@ -706,10 +756,17 @@ async function saveMessage(me, other, b, file) {
   if (type === 'text' && !data.text) { const e = new Error('Mensaje vacío'); e.status = 400; throw e; }
   const id = gid();
   await q('INSERT INTO messages(id,chat_id,from_id,ts,data) VALUES($1,$2,$3,$4,$5)', [id, key, me, ts, data]);
+  const shared = ['recipe', 'folder'].includes(type);
+  if (group) {
+    await q('UPDATE groups SET ts=$1, last=$2 WHERE id=$3', [ts, { from: me, text: msgPreview(data).slice(0, 140) }, key.slice(2)]);
+    Promise.all([q('SELECT display, username FROM users WHERE id=$1', [me]), q('SELECT name FROM groups WHERE id=$1', [key.slice(2)]), groupMembers(key)]).then(([u, g, ms]) => {
+      const who = u.rows[0] ? (u.rows[0].display || '@' + u.rows[0].username) : '';
+      sendPush(ms.filter(x => x !== me), shared ? 'shares' : 'messages', { title: (g.rows[0] ? g.rows[0].name : 'Grupo'), body: `${who}: ${msgPreview(data)}`.slice(0, 160), url: `/?v=chat&c=${key}`, tag: 'chat-' + key }); }).catch(() => {});
+    return { id, ts };
+  }
   const [a, bb] = [me, other].sort();
   await q(`INSERT INTO chats(id,a,b,ts,last) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET ts=$4, last=$5`, [key, a, bb, ts, { from: me, text: msgPreview(data).slice(0, 140) }]);
   q('SELECT display, username FROM users WHERE id=$1', [me]).then(r => { const u = r.rows[0] || {};
-    const shared = ['recipe', 'folder'].includes(type);
     sendPush(other, shared ? 'shares' : 'messages', { title: (u.display || '@' + u.username) + (shared ? ' te ha mandado una receta' : ''), body: msgPreview(data).slice(0, 140), url: `/?v=chat&c=${me}`, tag: 'chat-' + me }); }).catch(() => {});
   return { id, ts };
 }
@@ -720,13 +777,20 @@ function msgPreview(d) {
   if (d.type === 'file') return '📎 ' + (d.file?.name || 'Archivo') + (d.text ? ': ' + d.text : '');
   return (d.type === 'ask' ? 'Pide una receta: ' : '') + (d.text || '');
 }
-async function chatTarget(other) { const o = (await q('SELECT username FROM users WHERE id=$1 AND deleted_at IS NULL', [other])).rows[0]; return o && o.username; }
+/* Grupos: el chat se llama «g:<id>»; con una persona, la pareja de ids */
+const isGroupKey = k => /^g:[A-Za-z0-9]{6,40}$/.test(String(k || ''));
+async function groupMembers(gk) { return (await q('SELECT user_id FROM group_members WHERE group_id=$1', [String(gk).slice(2)])).rows.map(r => r.user_id); }
+async function chatKeyFor(me, other) {
+  if (isGroupKey(other)) { const ms = await groupMembers(other); if (!ms.includes(me)) { const e = new Error('No estás en este grupo.'); e.status = 403; throw e; } return other; }
+  return pairKey(me, other);
+}
+async function chatTarget(other) { if (isGroupKey(other)) return (await q('SELECT 1 FROM groups WHERE id=$1', [other.slice(2)])).rows[0] ? 'grupo' : null; const o = (await q('SELECT username FROM users WHERE id=$1 AND deleted_at IS NULL', [other])).rows[0]; return o && o.username; }
 api.post('/chats/:other/messages', needProfile, async (req, res, next) => {
   try {
     if (!(await chatTarget(req.params.other))) return res.status(404).json({ error: 'Esa persona no existe.' });
     const b = { ...(req.body || {}) }; if (['image', 'file'].includes(b.type)) b.type = 'text';
     res.json({ ok: true, ...(await saveMessage(req.user.id, req.params.other, b)) });
-  } catch (e) { if (e.status === 400) return res.status(400).json({ error: e.message }); next(e); }
+  } catch (e) { if (e.status === 400 || e.status === 403) return res.status(e.status).json({ error: e.message }); next(e); }
 });
 // Fotos y archivos en el chat (hasta 10 MB)
 api.post('/chats/:other/attach', needProfile, express.raw({ type: () => true, limit: '10mb' }), async (req, res, next) => {
@@ -737,7 +801,7 @@ api.post('/chats/:other/attach', needProfile, express.raw({ type: () => true, li
     const type = String(req.headers['content-type'] || 'application/octet-stream').split(';')[0].slice(0, 100);
     const name = String(req.query.name || 'archivo').replace(/[\\/\r\n"]/g, '_').slice(0, 140) || 'archivo';
     const id = gid();
-    await q('INSERT INTO attachments(id,chat_id,owner,name,type,size,data,created) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, pairKey(me, other), me, name, type, req.body.length, req.body, now()]);
+    await q('INSERT INTO attachments(id,chat_id,owner,name,type,size,data,created) VALUES($1,$2,$3,$4,$5,$6,$7,$8)', [id, await chatKeyFor(me, other), me, name, type, req.body.length, req.body, now()]);
     const isImg = /^image\/(jpeg|png|gif|webp)$/.test(type);
     const out = await saveMessage(me, other, { type: isImg ? 'image' : 'file', text: req.query.text || '', reply: req.query.reply ? { id: String(req.query.reply) } : null },
       { id, name, type, size: req.body.length, ...(isImg && req.query.w ? { w: Number(req.query.w) || 0, h: Number(req.query.h) || 0 } : {}) });
@@ -747,7 +811,7 @@ api.post('/chats/:other/attach', needProfile, express.raw({ type: () => true, li
 api.get('/files/:id', needProfile, async (req, res, next) => {
   try {
     const f = (await q('SELECT chat_id,name,type,data FROM attachments WHERE id=$1', [req.params.id])).rows[0];
-    if (!f || !f.chat_id.split('+').includes(req.user.id)) return res.status(404).json({ error: 'Ese archivo ya no existe.' });
+    if (!f || !(isGroupKey(f.chat_id) ? (await groupMembers(f.chat_id)).includes(req.user.id) : f.chat_id.split('+').includes(req.user.id))) return res.status(404).json({ error: 'Ese archivo ya no existe.' });
     const safeType = /^image\/(jpeg|png|gif|webp)$/.test(f.type) || f.type === 'application/pdf' ? f.type : 'application/octet-stream';
     res.setHeader('Content-Type', safeType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -759,7 +823,7 @@ api.get('/files/:id', needProfile, async (req, res, next) => {
 });
 api.post('/chats/:other/read', needProfile, async (req, res, next) => {
   try {
-    const key = pairKey(req.user.id, req.params.other);
+    const key = isGroupKey(req.params.other) ? req.params.other : pairKey(req.user.id, req.params.other);
     await q(`UPDATE users SET last_read = jsonb_set(last_read, ARRAY[$1::text], to_jsonb($2::bigint)) WHERE id=$3`, [key, Number(req.body.ts) || now(), req.user.id]);
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -1905,7 +1969,7 @@ adm.delete('/users/:id', needSuper, async (req, res, next) => {
     const t = (await q('SELECT username, delete_suggested FROM users WHERE id=$1', [req.params.id])).rows[0];
     const sid = t && t.delete_suggested ? await suggesterId(t.delete_suggested) : null;
     if (sid && sid !== req.user.id)
-      notifyUser(sid, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha borrado la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
+      notifyUser(sid, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha eliminado la cuenta @${t.username} que sugeriste eliminar.`, '/?v=admin&t=usuarios&s=del');
     await softDeleteUser(req.params.id, req.user.username);
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -1934,9 +1998,9 @@ adm.put('/users/:id/suggest-restore', async (req, res, next) => {
     if (!t) return res.status(404).json({ error: 'Esa cuenta no está eliminada.' });
     const on = req.body.on !== false, reason = String(req.body.reason || '').slice(0, 500);
     await q('UPDATE users SET restore_suggested=$1 WHERE id=$2', [on ? { by: req.user.username, byId: req.user.id, reason, at: now() } : null, req.params.id]);
-    if (on) notifyUser((await q("SELECT id FROM users WHERE role='superadmin'")).rows.map(r => r.id), 'admin', `@${req.user.username} sugiere recuperar la cuenta @${t.username}`, (reason ? 'Motivo: ' + reason + '. ' : '') + 'Está pendiente de que decidas en Panel › Usuarios › Eliminados.', '/?v=admin&t=usuarios');
+    if (on) notifyUser((await q("SELECT id FROM users WHERE role='superadmin'")).rows.map(r => r.id), 'admin', `@${req.user.username} sugiere recuperar la cuenta @${t.username}`, (reason ? 'Motivo: ' + reason + '. ' : '') + 'Está pendiente de que decidas en Panel › Usuarios › Eliminados.', '/?v=admin&t=usuarios&s=del');
     else if (t.restore_suggested && t.restore_suggested.byId && t.restore_suggested.byId !== req.user.id)
-      notifyUser(t.restore_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no recuperar la cuenta @${t.username}.`, '/?v=admin&t=usuarios');
+      notifyUser(t.restore_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no recuperar la cuenta @${t.username}.`, '/?v=admin&t=usuarios&s=del');
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -2100,6 +2164,7 @@ adm.post('/bulk/save', async (req, res, next) => {
       const missing = names.filter(n => !users.some(u => u.username === n));
       if (missing.length) return res.status(404).json({ error: `No existe: ${missing.map(n => '@' + n).join(', ')}.` });
       const fname = String(dest.folder || '').trim().slice(0, 40);
+      const rids = [];
       for (const u of users) {
         let fid = null;
         if (fname) {
@@ -2108,15 +2173,41 @@ adm.post('/bulk/save', async (req, res, next) => {
         }
         const id = gid();
         await q('INSERT INTO recipes(id,user_id,folder_id,data,created,updated) VALUES($1,$2,$3,$4,$5,$5)', [id, u.id, fid, { ...d, public: !!dest.public }, now()]);
-        queueRecipeWork(id);
+        queueRecipeWork(id); rids.push(id);
       }
+      await bulkLog(req, d.title, { type: 'user', users: users.map(u => u.username), folder: fname, public: !!dest.public }, null, rids);
       return res.json({ ok: true, n: users.length });
     }
     // por defecto, a Recetas recomendadas (visibles para todo el mundo)
     const id = gid(), pos = (await q('SELECT coalesce(max(position),0)+1 p FROM suggestions')).rows[0].p;
     await q('INSERT INTO suggestions(id,url,title,position,created,data,rewritten,title_ok,credit) VALUES($1,$2,$3,$4,$5,$6,true,true,$7)', [id, d.source || 'manual:' + id, cleanTitle(d.title), pos, now(), { ...d, title: cleanTitle(d.title), image: '' }, d.credit || null]);
     processSuggestionArt().catch(() => {});
+    await bulkLog(req, cleanTitle(d.title), { type: 'sugg' }, id, []);
     res.json({ ok: true, id });
+  } catch (e) { next(e); }
+});
+/* Historial de la subida masiva y aviso de enlaces repetidos */
+const normUrl = u => String(u || '').trim().replace(/#.*$/, '').replace(/[?&](utm_[^=&]+|fbclid|igsh|is_from_webapp|sender_device|_r|_t)=[^&]*/g, '').replace(/\/+$/, '').toLowerCase();
+async function bulkLog(req, title, dest, suggId, recipeIds) {
+  try { await q('INSERT INTO bulk_log(id,created,by_user,origin,kind,title,dest,sugg_id,recipe_ids) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+    [gid(), now(), req.user.username, String(req.body.origin || '').slice(0, 800), String(req.body.kind || '').slice(0, 20), String(title || '').slice(0, 200), dest, suggId, JSON.stringify(recipeIds || [])]); } catch (e) { console.error('bulk log', e.message); }
+}
+adm.post('/bulk/check', async (req, res, next) => {
+  try {
+    const urls = (Array.isArray(req.body.urls) ? req.body.urls : []).map(String).slice(0, 500);
+    const seen = new Map();
+    for (const r of (await q("SELECT origin, created, by_user, title FROM bulk_log WHERE origin LIKE 'http%' ORDER BY created DESC")).rows) { const k = normUrl(r.origin); if (!seen.has(k)) seen.set(k, { at: Number(r.created), by: r.by_user, title: r.title }); }
+    for (const r of (await q("SELECT url, created, title FROM suggestions WHERE url LIKE 'http%'")).rows) { const k = normUrl(r.url); if (!seen.has(k)) seen.set(k, { at: Number(r.created), by: null, title: r.title }); }
+    const out = {}; for (const u of urls) { const hit = seen.get(normUrl(u)); if (hit) out[u] = hit; }
+    res.json(out);
+  } catch (e) { next(e); }
+});
+adm.get('/bulk/history', async (req, res, next) => {
+  try {
+    const term = String(req.query.q || '').trim().toLowerCase().slice(0, 80);
+    const rows = (await q(`SELECT b.*, (s.id IS NOT NULL) sugg_ok, (s.img IS NOT NULL) has_img FROM bulk_log b LEFT JOIN suggestions s ON s.id=b.sugg_id
+      WHERE ($1='' OR lower(b.title) LIKE '%'||$1||'%' OR lower(b.origin) LIKE '%'||$1||'%' OR lower(b.by_user) LIKE '%'||$1||'%') ORDER BY b.created DESC LIMIT 300`, [term])).rows;
+    res.json(rows.map(r => ({ ...r, created: Number(r.created), image: r.has_img ? `/img/s/${r.sugg_id}` : '' })));
   } catch (e) { next(e); }
 });
 adm.get('/recipes', async (req, res, next) => {

@@ -44,6 +44,7 @@ const ICONS = {
   doc:'<path d="M6 3h9l4 4v14H6z"/><path d="M14 3v5h5M9 13h7M9 17h5"/>',
   mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
   check:'<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+  reload:'<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
   calendar:'<rect x="4" y="5" width="16" height="15" rx="2"/><path d="M4 10h16M9 3v4M15 3v4"/>',
   search:'<circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/>',
   help:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.7M12 17h.01"/>',
@@ -74,6 +75,7 @@ function avatar(id, cls=''){
   const name = p.display||p.username||'?';
   const ini = name.trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
   if(p.avatar) return `<span class="av ${cls} has-photo"><img src="${esc(p.avatar)}" alt=""></span>`;
+  if(p.group) return `<span class="av grp ${cls}" style="background:${esc(p.color)};color:${inkOn(p.color)}">${ico('users')}</span>`;
   return `<span class="av ${cls}" style="background:${esc(p.color||'#7A5C4C')};color:${inkOn(p.color||'#7A5C4C')}">${esc(ini)}</span>`;
 }
 const pname = id => S.profiles[id]?.display || (S.profiles[id]?.username ? '@'+S.profiles[id].username : 'Alguien');
@@ -222,6 +224,8 @@ async function loadState(){
   S.folders = st.folders; S.recipes = st.recipes;
   S.reqIn = st.requests.filter(r=>r.to===S.uid); S.reqOut = st.requests.filter(r=>r.from===S.uid);
   S.chats = st.chats;
+  S.groups = st.groups||[];
+  S.groups.forEach(g=>{ S.profiles[g.id]={id:g.id, display:g.name, color:g.color||'#2F5D46', group:true}; });
   document.documentElement.style.setProperty('--rfs', String(S.me?.prefs?.fontScale||1));
   refresh();
 }
@@ -261,7 +265,8 @@ function friends(){
 }
 function unreadCount(){
   const lr = S.me?.lastRead||{};
-  return S.chats.filter(c=>c.last && c.last.from!==S.uid && (c.ts||0)>(lr[c.id]||0)).length;
+  return S.chats.filter(c=>c.last && c.last.from!==S.uid && (c.ts||0)>(lr[c.id]||0)).length
+    + (S.groups||[]).filter(g=>g.last && g.last.from!==S.uid && (g.ts||0)>(lr[g.id]||0)).length;
 }
 const pendingIn = () => S.reqIn.filter(r=>r.status==='pending');
 const canSocial = () => !!S.profile;
@@ -295,6 +300,7 @@ function renderTop(){
       <button data-act="go" data-v="menu" ${cur==='menu'?'aria-current="page"':''}>${ico('calendar')}<span class="nl">Menú</span></button>
       <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
       <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
+      <button class="bell reload-btn" data-act="reload" aria-label="Recargar" title="Recargar">${ico('reload')}</button>
       ${S.booted?bellHtml():''}${userBox}
     </nav>`;
   const btn=$('#userBtn'), menu=$('#userMenu');
@@ -355,6 +361,8 @@ function navUrl(){
   if(S.view==='book' && S.book){ p.set('b',S.book.id); if(S.page) p.set('p',S.page); }
   if(S.view==='chat' && S.chatWith) p.set('c',S.chatWith);
   if(S.view==='admin' && S.admTab && S.admTab!=='resumen') p.set('t',S.admTab);
+  if(S.view==='admin' && S.admTab==='usuarios' && S.admUsersDel) p.set('s','del');
+  if(S.view==='admin' && S.admTab==='recetas' && S.admRecSub==='bulk') p.set('s','bulk');
   if((S.view==='admuser'||S.view==='friendlib') && S.admUserId) p.set('u',S.admUserId);
   const q=p.toString(); return location.pathname+(q?'?'+q:'');
 }
@@ -372,7 +380,7 @@ function restoreFromUrl(){
   const ok=['book','chat','friends','account','admin','famous','community','menu','help','equiv','admuser','friendlib'];
   if(v==='admuser'||v==='friendlib'){ S.admUserId=p.get('u'); S.admUser=null; }
   if(!v || !ok.includes(v)) return null;
-  if(v==='admin' && p.get('t')) S.admTab=p.get('t');
+  if(v==='admin' && p.get('t')){ S.admTab=p.get('t'); S.admUsersDel=p.get('s')==='del'; S.admRecSub=p.get('s')==='bulk'?'bulk':'users'; }
   if(v==='chat'){ S.chatWith=p.get('c')||null; S.view='chat'; return null; }
   if(v==='book'){
     const id=p.get('b')||'', page=Math.max(0,parseInt(p.get('p'))||0);
@@ -1579,7 +1587,7 @@ function viewAccount(){
 
     ${me.role==='superadmin'?'':`<section class="card danger-zone">
       <h2>Eliminar cuenta</h2>
-      <p class="muted">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a las Recetas recomendadas, sin tu nombre. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla.</p>
+      <p class="muted">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a ser de dominio público en las Recetas recomendadas, sin tu nombre, y se quedarán ahí aunque recuperes la cuenta. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla.</p>
       <button class="btn danger" id="accDel">${ico('trash')}Eliminar mi cuenta</button>
     </section>`}
 
@@ -1667,7 +1675,7 @@ function accountModal(){ go('account'); }
 function deleteAccountModal(){
   const m=openModal(`${mHead('Eliminar tu cuenta')}
     <form id="fd" style="display:grid;gap:14px">
-      <p style="margin:0">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a las Recetas recomendadas, sin tu nombre. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla. Si quieres una copia de tus datos, descárgala antes desde «Tus datos».</p>
+      <p style="margin:0">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a ser de dominio público en las Recetas recomendadas, sin tu nombre, y se quedarán ahí aunque recuperes la cuenta. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla. Si quieres una copia de tus datos, descárgala antes desde «Tus datos».</p>
       <div class="field"><label for="dpass">Escribe tu contraseña para confirmarlo</label><input id="dpass" class="inp" type="password" required autocomplete="current-password"></div>
       <div id="dstatus"></div>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="dgo">${ico('trash')}Eliminar definitivamente</button></div>
@@ -1764,6 +1772,25 @@ async function unfriend(id){
   await api('DELETE','/friends/'+id); await loadState();
 }
 
+/* ===== Grupos: crear uno o invitar a más amigos ===== */
+function groupModal(g){
+  const fr=friends().filter(id=>!g||!g.members.includes(id));
+  if(!fr.length){ openModal(`${mHead(g?'Invitar al grupo':'Nuevo grupo')}<p style="margin:0">${g?'Todos tus amigos ya están en el grupo.':'Para crear un grupo necesitas tener amigos en la app. Añádelos desde Amigos.'}</p><div class="row" style="justify-content:flex-end"><button class="btn pri" data-act="${g?'closeModal':'go'}" data-v="friends">${g?'Vale':'Ir a Amigos'}</button></div>`); return; }
+  const sel=new Set();
+  const m=openModal(`${mHead(g?'Invitar a «'+g.name+'»':'Nuevo grupo')}<form id="gF" style="display:grid;gap:12px">
+    ${g?'':`<div class="field"><label for="gN">Nombre del grupo</label><input id="gN" class="inp" maxlength="60" required placeholder="Por ejemplo: Cocina en familia"></div>`}
+    <div class="field"><label>Elige a tus amigos</label><input id="gQ" class="inp" type="search" placeholder="Buscar" aria-label="Buscar amigos"><div class="pick" id="gL"></div></div>
+    <div id="gS"></div><div class="row" style="justify-content:flex-end"><button class="btn pri" id="gGo">${ico(g?'plus':'users')}${g?'Invitar':'Crear grupo'}</button></div></form>`);
+  const draw=()=>{ const q=($('#gQ',m).value||'').toLowerCase();
+    $('#gL',m).innerHTML=fr.filter(id=>(pname(id)+' '+puser(id)).toLowerCase().includes(q)).map(id=>`<label class="bp-row"><input type="checkbox" data-id="${esc(id)}" ${sel.has(id)?'checked':''}>${avatar(id)}<span class="bp-t">${esc(pname(id))}<small>${esc(puser(id))}</small></span></label>`).join('')||'<p class="muted" style="margin:0">Nadie con ese nombre.</p>'; };
+  $('#gQ',m).oninput=draw; $('#gL',m).onchange=e=>{ const c=e.target.closest('[data-id]'); if(c) c.checked?sel.add(c.dataset.id):sel.delete(c.dataset.id); };
+  $('#gF',m).onsubmit=async e=>{ e.preventDefault(); if(!sel.size){ $('#gS',m).innerHTML='<p class="err">Elige al menos a un amigo.</p>'; return; }
+    try{
+      if(g){ await api('PUT','/groups/'+encodeURIComponent(g.id),{add:[...sel]}); await loadState(); closeModal(); updateConvHeader(); toast(sel.size===1?'Invitación enviada':'Invitaciones enviadas'); }
+      else { const r=await api('POST','/groups',{name:$('#gN',m).value, members:[...sel]}); await loadState(); closeModal(); openChat(r.id); toast('Grupo creado'); }
+    }catch(err){ $('#gS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
+  draw();
+}
 /* ===== Chat ===== */
 let msgTimer=null;
 const EMOJIS='😀 😂 🥹 😊 😍 🥰 😘 😋 😜 🤤 😎 🤩 🥳 😅 😉 🙃 🤔 🤗 😮 😢 😭 😡 🙈 🙏 👏 👍 👎 👌 💪 🤝 ✌️ 🫶 ❤️ 🧡 💛 💚 💙 💜 🤍 💯 ✨ 🔥 🎉 ⭐ 🍳 🥘 🍲 🍝 🍕 🍔 🌮 🥗 🍰 🎂 🧁 🍪 🍫 🍩 🍓 🍋 🥑 🍅 🧄 🧅 🌶️ 🥖 🧀 🥚 🍷 ☕ 🍽️'.split(' ');
@@ -1814,7 +1841,9 @@ function stopChat(){ clearInterval(msgTimer); msgTimer=null; S.chatWith=null; S.
 function convPeople(){
   const fr=friends(); const lr=S.me?.lastRead||{};
   const ids=new Set([...fr, ...S.chats.map(c=>c.members.find(x=>x!==S.uid)).filter(Boolean)]);
-  return [...ids].map(id=>{const c=S.chats.find(c=>c.id===pairKey(S.uid,id));return {id,c,unread:c&&c.last&&c.last.from!==S.uid&&(c.ts||0)>(lr[c.id]||0)}})
+  const people=[...ids].map(id=>{const c=S.chats.find(c=>c.id===pairKey(S.uid,id));return {id,c,unread:c&&c.last&&c.last.from!==S.uid&&(c.ts||0)>(lr[c.id]||0)}});
+  const groups=(S.groups||[]).map(g=>({id:g.id, group:true, c:{ts:g.ts, last:g.last}, unread:g.last&&g.last.from!==S.uid&&(g.ts||0)>(lr[g.id]||0)}));
+  return [...groups,...people]
     .sort((a,b)=>(b.c?.ts||0)-(a.c?.ts||0));
 }
 function convListHtml(){
@@ -1826,7 +1855,7 @@ function viewChat(){
   if(!canSocial()) return needProfileView('Chat');
   const w=S.chatWith;
   return `<div class="chat ${w?'open':''}">
-    <section class="panel list-pane"><div class="panel-h"><h2>Conversaciones</h2></div><div class="convs" id="convList">${convListHtml()}</div></section>
+    <section class="panel list-pane"><div class="panel-h"><h2>Conversaciones</h2><button class="btn sm" data-act="groupNew" style="margin-left:auto">${ico('users')}Nuevo grupo</button></div><div class="convs" id="convList">${convListHtml()}</div></section>
     <section class="panel conv-pane">${w?`
       <div class="panel-h" id="convHead"></div>
       <div class="msgs" id="msgs" aria-live="polite"><div class="chat-empty"><span class="spin"></span></div></div>
@@ -1847,8 +1876,13 @@ function viewChat(){
       </div>`:`<div class="chat-empty"><div>${spoon(54,'var(--muted)','var(--surface)')}<p>Elige una conversación para chatear, pedir recetas o sugerir alguna.</p></div></div>`}
     </section></div>`;
 }
+const chatKey = w => String(w).startsWith('g:') ? w : pairKey(S.uid,w);
+const groupOf = id => (S.groups||[]).find(g=>g.id===id);
 function updateConvHeader(){
   const h=$('#convHead'); if(!h||!S.chatWith) return;
+  const g=groupOf(S.chatWith);
+  if(g){ const names=g.members.filter(x=>x!==S.uid).map(pname); h.innerHTML=`<button class="x" data-act="chatBack" aria-label="Volver a conversaciones">${ico('back')}</button>${avatar(g.id)}<div style="min-width:0;flex:1"><h2>${esc(g.name)}</h2><div class="muted grp-names" style="font-size:13px">Tú${names.length?', '+esc(names.join(', ')):''}</div></div>
+    <button class="btn sm" data-act="groupInvite">${ico('plus')}<span class="lbl-long">Invitar</span></button><button class="x" data-act="groupMenu" aria-label="Opciones del grupo" title="Opciones del grupo">${ico('edit')}</button>`; return; }
   h.innerHTML=`<button class="x" data-act="chatBack" aria-label="Volver a conversaciones">${ico('back')}</button>${avatar(S.chatWith)}<div style="min-width:0"><h2>${esc(pname(S.chatWith))}</h2><div class="muted" style="font-size:13px">${esc(puser(S.chatWith))}${friends().includes(S.chatWith)?'':' · no sois amigos'}</div></div>`;
 }
 async function pollMsgs(){
@@ -1859,7 +1893,7 @@ async function pollMsgs(){
     if(w!==S.chatWith) return;
     if(!after){ S.msgs=got; renderMsgs(true); } else if(got.length){ S.msgs.push(...got); renderMsgs(); }
     const last=S.msgs[S.msgs.length-1];
-    const key=pairKey(S.uid,w);
+    const key=chatKey(w);
     if(last && last.ts>(S.me.lastRead?.[key]||0)){ S.me.lastRead={...(S.me.lastRead||{}),[key]:last.ts}; api('POST',`/chats/${w}/read`,{ts:last.ts}).catch(()=>{}); renderTop(); const l=$('#convList'); if(l) l.innerHTML=convListHtml(); }
   }catch{}
 }
@@ -1924,7 +1958,8 @@ function renderMsgs(forceBottom){
     } else inner=fmt(m.text);
     const rq = m.reply ? `<button class="mquote" data-act="gotoMsg" data-id="${esc(m.reply.id)}"><b>${esc(m.reply.from===S.uid?'Tú':pname(m.reply.from))}</b><span>${esc(m.reply.text||'')}</span></button>` : '';
     const emo = m.type==='text' && !m.reply && isOnlyEmoji(m.text);
-    return `${sep}<div class="msg ${mine?'mine':''} ${m.type==='ask'?'ask':''} ${m.type==='image'?'pic':''} ${emo?'emo':''}" data-mid="${esc(m.id)}">${rq}${inner}<span class="when">${esc(new Date(m.ts).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}))}</span><button class="mreply" data-act="replyMsg" data-id="${esc(m.id)}" aria-label="Responder" title="Responder">${ico('reply')}</button></div>`;
+    const sender = String(S.chatWith).startsWith('g:') && !mine ? `<span class="msender" style="color:${esc(S.profiles[m.from]?.color||'var(--accent)')}">${esc(pname(m.from))}</span>` : '';
+    return `${sep}<div class="msg ${mine?'mine':''} ${m.type==='ask'?'ask':''} ${m.type==='image'?'pic':''} ${emo?'emo':''}" data-mid="${esc(m.id)}">${sender}${rq}${inner}<span class="when">${esc(new Date(m.ts).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'}))}</span><button class="mreply" data-act="replyMsg" data-id="${esc(m.id)}" aria-label="Responder" title="Responder">${ico('reply')}</button></div>`;
   }).join('');
   if(atBottom) box.scrollTop=box.scrollHeight;
 }
@@ -1978,14 +2013,31 @@ async function adminLoad(){
       box.innerHTML=`<div class="tabs adm-sub" role="tablist"><button role="tab" data-act="admUsersSub" data-d="0" aria-selected="${!del}">Activos</button><button role="tab" data-act="admUsersSub" data-d="1" aria-selected="${!!del}">${ico('trash')}Usuarios eliminados</button></div>`
         +(del?`<div id="admList"></div>`:`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"><button class="btn pri" data-act="admNewUser">${ico('plus')}Crear cuenta</button></div><div id="admList"></div>`);
       if(del) await admDeletedUsers(); else { bindAdmSearch('usuarios'); await admUsers(); } }
-    else if(tab==='recetas'){ box.innerHTML=`${admBulkHtml()}<h2 class="below-h">Recetas de las cuentas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); bindAdmBulk(); await admRecipes(); }
+    else if(tab==='recetas'){ const bulk=S.admRecSub==='bulk';
+      box.innerHTML=`<div class="tabs adm-sub" role="tablist"><button role="tab" data-act="admRecSub" data-s="users" aria-selected="${!bulk}">Recetas de los usuarios</button><button role="tab" data-act="admRecSub" data-s="bulk" aria-selected="${bulk}">${ico('upload')}Subidas masivas</button></div>`
+        +(bulk?`${admBulkHtml()}<h2 class="below-h">Historial de subidas masivas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título, enlace o quién la subió" value="${esc(S.admQ||'')}" aria-label="Buscar en el historial"></div><div id="admList"></div>`
+          :`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`);
+      if(bulk){ bindAdmBulk(); bindAdmSearch('bulk'); await admBulkHistory(); } else { bindAdmSearch('recetas'); await admRecipes(); } }
     else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
     else if(tab==='avisos'){ box.innerHTML=admNotices(await api('GET','/admin/notices')); bindAdmNotices(); }
     else if(tab==='sugerencias'){ box.innerHTML=admSugg(await api('GET','/admin/suggestions')); bindAdmSugg(); }
   }catch(err){ box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido cargar.')}</p>`; }
 }
 let admT=null;
-function bindAdmSearch(kind){ const i=$('#admQ'); i.oninput=()=>{ S.admQ=i.value; clearTimeout(admT); admT=setTimeout(()=>kind==='usuarios'?admUsers():admRecipes(),250); }; }
+function bindAdmSearch(kind){ const i=$('#admQ'); i.oninput=()=>{ S.admQ=i.value; clearTimeout(admT); admT=setTimeout(()=>kind==='usuarios'?admUsers():kind==='bulk'?admBulkHistory():admRecipes(),250); }; }
+async function admBulkHistory(){
+  const list=await api('GET','/admin/bulk/history?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
+  if(!list.length){ box.innerHTML='<p class="muted">Todavía no hay recetas subidas de forma masiva.</p>'; return; }
+  const kindLbl={url:'Enlace',photo:'Foto',video:'Vídeo',file:'Archivo',text:'Texto'};
+  box.innerHTML=`<div class="adm-rows">${list.map(r=>{ const d=r.dest||{}; const where=d.type==='user'?`en ${(d.users||[]).map(u=>'@'+esc(u)).join(', ')}${d.folder?' › '+esc(d.folder):''}${d.public?' (públicas)':''}`:'en Recetas recomendadas';
+    const isUrl=/^https?:/.test(r.origin||'');
+    return `<div class="adm-row">
+      <span class="thumb sm">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
+      <div class="ar-main"><div class="ar-t">${esc(r.title||'Sin título')} <span class="role">${esc(kindLbl[r.kind]||'Subida')}</span>${d.type==='sugg'&&!r.sugg_ok?' <span class="role r-blocked">Ya no está</span>':''}</div>
+        <div class="ar-s">${fmtDate(r.created)} · por @${esc(r.by_user||'?')} · ${where}</div>
+        ${r.origin?`<div class="ar-s">${isUrl?`<a href="${esc(r.origin)}" target="_blank" rel="noopener">${esc(r.origin)}</a>`:esc(r.origin)}</div>`:''}</div>
+      <div class="ar-act">${d.type==='sugg'&&r.sugg_ok?`<button class="btn sm" data-act="openSugg" data-id="${esc(r.sugg_id)}">Ver</button>`:''}</div></div>`; }).join('')}</div>`;
+}
 function admResumen(d){
   const kpi=(n,l,sub='')=>`<div class="kpi"><b>${n.toLocaleString('es-ES')}</b><span>${l}</span>${sub?`<small>${sub}</small>`:''}</div>`;
   const bars=(rows,label)=>{ const max=Math.max(1,...rows.map(r=>r.n)); return `<figure class="bars" aria-label="${label}"><figcaption>${label}</figcaption><div class="bw">${rows.map(r=>`<span title="${new Date(r.d).toLocaleDateString('es-ES',{day:'numeric',month:'short'})}: ${r.n}" style="height:${Math.max(2,r.n/max*100)}%"></span>`).join('')}</div><div class="bx"><span>hace 30 días</span><span>hoy</span></div></figure>`; };
@@ -2184,8 +2236,11 @@ function bindAdmBulk(){
     const raw=(path,blob)=>call(path,{method:'POST',headers:{'content-type':'application/octet-stream'},body:blob});
     const post=(path,body)=>call('/api'+path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});
     let ok=0, done=0;
+    // enlaces que ya se subieron antes: se indica y no se vuelven a subir
+    let dup={}; if(urls.length){ try{ dup=await post('/admin/bulk/check',{urls}); }catch{} }
     for(const j of jobs){
       if(stopped) break;
+      if(j.k==='url' && dup[j.v]){ const d=dup[j.v]; const li=document.createElement('li'); li.className='dup'; li.innerHTML=`${ico('check')} ${esc(j.l)} — ya se añadió el ${esc(fmtDate(d.at))}${d.by?' por @'+esc(d.by):''}${d.title?' («'+esc(d.title)+'»)':''}. No se vuelve a subir.`; log.append(li); done++; continue; }
       prog.textContent=`${done+1} de ${jobs.length}`;
       const li=document.createElement('li'); li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — leyendo…`; log.append(li);
       try{
@@ -2197,14 +2252,14 @@ function bindAdmBulk(){
         else out=await raw('/api/admin/bulk/file?name='+encodeURIComponent(j.v.name)+'&type='+encodeURIComponent(j.v.type||''), j.v);
         const recs=out.recipes||[]; let n=0;
         li.innerHTML=`<span class="spin"></span> ${esc(j.l)} — ${recs.length} ${recs.length===1?'receta encontrada':'recetas encontradas'}, guardando…`;
-        for(const rec of recs){ if(stopped) break; try{ await post('/admin/bulk/save',{recipe:rec, dest, credit}); n++; ok++; }catch(e){ if(stopped) break; } }
+        for(const rec of recs){ if(stopped) break; try{ await post('/admin/bulk/save',{recipe:rec, dest, credit, origin:j.k==='url'?j.v:(j.k==='text'?'Texto pegado':j.v.name), kind:j.k}); n++; ok++; }catch(e){ if(stopped) break; } }
         li.innerHTML=`${ico('check')} ${esc(j.l)} — ${n} ${n===1?'receta':'recetas'}: ${esc(recs.slice(0,8).map(x=>x.title).join(', '))}${recs.length>8?'…':''}${stopped&&n<recs.length?' (cancelado)':''}`; li.className='ok';
       }catch(err){ li.innerHTML=stopped?`${ico('x')} ${esc(j.l)} — cancelado`:`${ico('x')} ${esc(j.l)} — ${esc(err.error||'no se ha podido leer')}`; li.className='bad'; }
       done++;
     }
     if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); }); }
     stop.hidden=true; stop.disabled=false; prog.textContent=stopped?'Subida cancelada':'';
-    b.disabled=false; toast(`${stopped?'Cancelado. ':''}${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null;
+    b.disabled=false; toast(`${stopped?'Cancelado. ':''}${ok} ${ok===1?'receta subida':'recetas subidas'}`); S.sugg=null; admBulkHistory().catch(()=>{});
   };
 }
 const admDo = async (fn,msg) => { try{ await fn(); toast(msg); adminLoad(); }catch(err){ toast(err.error||'No se ha podido hacer'); } };
@@ -2231,7 +2286,9 @@ const ADM_ACT = {
     enhancePasswords?.(m);
   },
   admUsersSub:el=>{ S.admUsersDel=el.dataset.d==='1'; adminLoad(); },
-  admRestore:async el=>{ if(await confirmBox(`Se recuperará la cuenta @${el.dataset.n} con todas sus recetas, recetarios, amistades y mensajes. Podrá volver a entrar.`,'Recuperar')) admDo(()=>api('POST',`/admin/users/${el.dataset.id}/restore`),'Cuenta recuperada'); },
+  admRecSub:el=>{ S.admRecSub=el.dataset.s; S.admQ=''; adminLoad(); },
+  reload:()=>location.reload(),
+  admRestore:async el=>{ if(await confirmBox(`Se recuperará la cuenta @${el.dataset.n} con todas sus recetas, recetarios, amistades y mensajes, y podrá volver a entrar. Las recetas que pasaron a Recetas recomendadas al eliminarla se quedan allí (ya son de dominio público).`,'Recuperar')) admDo(()=>api('POST',`/admin/users/${el.dataset.id}/restore`),'Cuenta recuperada'); },
   admSuggestRestore:async el=>{
     if(el.dataset.on!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-restore`,{on:false}),'Sugerencia retirada');
     const reason=await promptBox('Sugerir recuperar la cuenta','¿Por qué se debería recuperar?',{ok:'Sugerir',hint:'El Superadministrador lo verá y decidirá.'});
@@ -2282,7 +2339,7 @@ const ADM_ACT = {
     $('#nuU',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
     $('#nuF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('POST','/admin/users',{username:$('#nuU',m).value,display:$('#nuD',m).value,email:$('#nuE',m).value,password:$('#nuP',m).value}); closeModal(); toast('Cuenta creada'); adminLoad(); }catch(err){ $('#nuS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
   },
-  admDelUser:async el=>{ if(await confirmBox(`La cuenta @${el.dataset.n} pasará a «Usuarios eliminados»: no podrá entrar y nadie la verá. Desde ahí podrás recuperarla con todo su contenido.`,'Eliminar')) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
+  admDelUser:async el=>{ if(await confirmBox(`La cuenta @${el.dataset.n} pasará a «Usuarios eliminados»: no podrá entrar y nadie la verá. Sus recetas propias pasan a Recetas recomendadas (dominio público) y se quedan ahí aunque la recuperes. Desde «Usuarios eliminados» podrás recuperar la cuenta con todo su contenido.`,'Eliminar')) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
   admDelRecipe:async el=>{ if(await confirmBox(`Se borrará la receta «${el.dataset.n}» de su recetario.`)) admDo(()=>api('DELETE','/admin/recipes/'+el.dataset.id),'Receta borrada'); },
   admMsg:el=>admDo(()=>api('PUT','/admin/contact/'+el.dataset.id,{status:el.dataset.s}),'Mensaje actualizado'),
   admDelMsg:async el=>{ if(await confirmBox('Se borrará este mensaje de contacto.')) admDo(()=>api('DELETE','/admin/contact/'+el.dataset.id),'Mensaje borrado'); },
@@ -2738,6 +2795,16 @@ const ACT = {
   unfriend:el=>unfriend(el.dataset.id).catch(fail),
   chatWith:el=>openChat(el.dataset.id),
   chatBack:()=>{ stopChat(); render(); },
+  groupNew:()=>groupModal(),
+  groupInvite:()=>{ const g=groupOf(S.chatWith); if(g) groupModal(g); },
+  groupMenu:()=>{ const g=groupOf(S.chatWith); if(!g) return;
+    const m=openModal(`${mHead(g.name)}<form id="gmF" style="display:grid;gap:12px"><div class="field"><label for="gmN">Nombre del grupo</label><input id="gmN" class="inp" maxlength="60" value="${esc(g.name)}"></div>
+      <div class="row" style="justify-content:space-between"><button type="button" class="btn danger" id="gmLeave">${ico('out')}Salir del grupo</button><button class="btn pri">${ico('save')}Guardar</button></div>
+      <div><b>Personas (${g.members.length})</b><div class="pick" style="margin-top:6px">${g.members.map(id=>`<div class="person">${avatar(id)}<div class="pb"><div class="pn">${id===S.uid?'Tú':esc(pname(id))}</div><div class="pu">${id===g.owner?'Creó el grupo':esc(puser(id))}</div></div>${g.owner===S.uid&&id!==S.uid?`<button type="button" class="btn sm ghost" data-rm="${esc(id)}">Quitar</button>`:''}</div>`).join('')}</div></div></form>`);
+    $('#gmF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('PUT','/groups/'+encodeURIComponent(g.id),{name:$('#gmN',m).value}); await loadState(); closeModal(); updateConvHeader(); toast('Grupo guardado'); }catch(err){ fail(err); } };
+    m.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{ try{ await api('PUT','/groups/'+encodeURIComponent(g.id),{remove:b.dataset.rm}); await loadState(); closeModal(); updateConvHeader(); toast('Quitado del grupo'); }catch(err){ fail(err); } });
+    $('#gmLeave',m).onclick=async()=>{ if(!await confirmBox(`¿Salir de «${g.name}»? Dejarás de ver sus mensajes.`,'Salir')) return; try{ await api('DELETE','/groups/'+encodeURIComponent(g.id)+'/me'); stopChat(); await loadState(); render(); toast('Has salido del grupo'); }catch(err){ fail(err); } };
+  },
   replyMsg:el=>{ const m=S.msgs.find(x=>x.id===el.dataset.id); if(m) setReply(m); },
   cancelReply:()=>setReply(null),
   gotoMsg:el=>{ const t=document.querySelector(`.msg[data-mid="${CSS.escape(el.dataset.id)}"]`); if(!t){ toast('Ese mensaje es muy antiguo y ya no está aquí'); return; } t.scrollIntoView({behavior:'smooth',block:'center'}); t.classList.remove('flash'); void t.offsetWidth; t.classList.add('flash'); },
