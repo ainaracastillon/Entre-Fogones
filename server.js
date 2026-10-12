@@ -2183,14 +2183,12 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// diagnóstico temporal de vídeos
-app.get('/api/_diag/vv-8h2m', async (req, res) => {
-  const out = {};
-  for (const u of [String(req.query.u || 'https://youtube.com/shorts/tn3E0RjLSb0')]) {
-    try { const v = await videoText(u); out[u] = { title: v.title, platform: v.platform, len: v.text.length, text: v.text.slice(0, 300) }; } catch (e) { out[u] = 'ERR ' + e.message; }
+// diagnóstico temporal de vídeos (se escribe en el registro al arrancar)
+setTimeout(async () => {
+  for (const u of ['https://youtube.com/shorts/tn3E0RjLSb0', 'https://www.youtube.com/watch?v=RTqqV6mVSLU', 'https://youtube.com/shorts/EQaJUs0HAQM', 'https://www.facebook.com/reel/986240545878161']) {
+    try { const v = await videoText(u); console.log('DIAGV', u, JSON.stringify({ title: v.title, platform: v.platform, len: v.text.length, text: v.text.slice(0, 160) })); } catch (e) { console.log('DIAGV', u, 'ERR', e.message); }
   }
-  res.json(out);
-});
+}, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
