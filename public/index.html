@@ -377,6 +377,11 @@ html{touch-action:manipulation;-webkit-text-size-adjust:100%;text-size-adjust:10
 .bars .bx{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:4px}
 .adm-tools{display:flex;gap:8px}
 .adm-rows{display:grid;gap:8px}
+.adm-row.clickable{cursor:pointer;transition:border-color .15s,background .15s}.adm-row.clickable:hover,.adm-row.clickable:focus-visible{border-color:var(--accent);outline:none}
+.rpop{display:grid;gap:4px}.rpop-img{margin:0 0 8px;border-radius:12px;overflow:hidden;background:var(--accent-soft);max-height:280px;display:flex;align-items:center;justify-content:center}.rpop-img img{width:100%;max-height:280px;object-fit:contain;display:block}
+.rpop-t{margin:0;font-family:var(--f-display,inherit);font-size:22px;line-height:1.2}.rpop-where{margin:0;font-size:13px}
+.rpop-meta{display:flex;flex-wrap:wrap;gap:6px 14px;color:var(--muted);font-size:14px;margin:4px 0}.rpop-meta span{display:inline-flex;align-items:center;gap:4px}.rpop-meta .ico{width:16px;height:16px}
+.rpop h4{margin:12px 0 4px;font-size:15px}.rpop ul,.rpop ol{margin:0;padding-left:22px;display:grid;gap:4px}.rpop-notes{margin:0;white-space:pre-wrap}.rpop-sep{border:0;border-top:1px solid var(--line);margin:18px 0}
 .adm-row{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;flex-wrap:wrap}
 .adm-row.blocked{opacity:.65}
 .adm-row.is-new{border-color:var(--accent)}
@@ -803,6 +808,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <div id="modal-root"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=43"></script>
+<script src="/app.js?v=44"></script>
 </body>
 </html>

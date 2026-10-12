@@ -2042,12 +2042,36 @@ async function admBulkHistory(){
   const kindLbl={url:'Enlace',photo:'Foto',video:'Vídeo',file:'Archivo',text:'Texto'};
   box.innerHTML=`<div class="adm-rows">${list.map(r=>{ const d=r.dest||{}; const where=d.type==='user'?`en ${(d.users||[]).map(u=>'@'+esc(u)).join(', ')}${d.folder?' › '+esc(d.folder):''}${d.public?' (públicas)':''}`:'en Recetas recomendadas';
     const isUrl=/^https?:/.test(r.origin||'');
-    return `<div class="adm-row">
+    return `<div class="adm-row clickable" data-act="admBulkOpen" data-id="${esc(r.id)}" role="button" tabindex="0" aria-label="Ver ${esc(r.title||'la receta')}">
       <span class="thumb sm">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy">`:spoon(24,'var(--accent)','var(--accent-soft)')}</span>
       <div class="ar-main"><div class="ar-t">${esc(r.title||'Sin título')} <span class="role">${esc(kindLbl[r.kind]||'Subida')}</span>${d.type==='sugg'&&!r.sugg_ok?' <span class="role r-blocked">Ya no está</span>':''}</div>
         <div class="ar-s">${fmtDate(r.created)} · por @${esc(r.by_user||'?')} · ${where}</div>
-        ${r.origin?`<div class="ar-s">${isUrl?`<a href="${esc(r.origin)}" target="_blank" rel="noopener">${esc(r.origin)}</a>`:esc(r.origin)}</div>`:''}</div>
-      <div class="ar-act">${d.type==='sugg'&&r.sugg_ok?`<button class="btn sm" data-act="openSugg" data-id="${esc(r.sugg_id)}">Ver</button>`:''}</div></div>`; }).join('')}</div>`;
+        ${r.origin?`<div class="ar-s">${isUrl?`<a href="${esc(r.origin)}" target="_blank" rel="noopener" data-stop>${esc(r.origin)}</a>`:esc(r.origin)}</div>`:''}</div>
+      <div class="ar-act"><span class="btn sm" aria-hidden="true">Ver</span></div></div>`; }).join('')}</div>`;
+}
+// Ventana con la receta (o recetas) de una subida del historial
+function recipePopHtml(r, extra=''){
+  const list=(a,tag)=>a.map(x=>`<li>${esc(x)}</li>`).join('');
+  const meta=[r.time&&`${ico('clock')}${esc(r.time)}`, r.servings&&`${esc(r.servings)} raciones`, r.difficulty&&esc(r.difficulty), r.category&&esc(r.category)].filter(Boolean).map(x=>`<span>${x}</span>`).join('');
+  return `<article class="rpop">
+    ${r.image?`<figure class="rpop-img"><img src="${esc(r.image)}" alt="" referrerpolicy="no-referrer" onerror="this.parentNode.remove()"></figure>`:''}
+    <h3 class="rpop-t">${esc(r.title||'Sin título')}</h3>${extra}
+    ${meta?`<div class="rpop-meta">${meta}</div>`:''}
+    <h4>Ingredientes</h4>${(r.ingredients||[]).length?`<ul class="ing">${list(r.ingredients)}</ul>`:'<p class="muted">Sin ingredientes apuntados.</p>'}
+    <h4>Preparación</h4>${(r.steps||[]).length?`<ol class="steps">${list(r.steps)}</ol>`:'<p class="muted">Sin pasos apuntados.</p>'}
+    ${r.notes?`<h4>Notas</h4><p class="rpop-notes">${esc(r.notes)}</p>`:''}
+  </article>`;
+}
+async function admBulkOpen(id){
+  const m=openModal(`${mHead('Receta subida')}<div id="bpop"><p class="muted">Abriendo…</p></div>`,{wide:true});
+  try{
+    const d=await api('GET','/admin/bulk/'+id); let recs=d.recipes||[];
+    if(!recs.length && d.sugg){ try{ const r=await api('GET','/suggestions/'+d.sugg); recs=[{...r, owner:null, sugg:true}]; }catch{} }
+    const box=$('#bpop',m); if(!box) return;
+    if(!recs.length){ box.innerHTML='<p class="muted">Esta receta ya no está: se borró después de subirla.</p>'; return; }
+    if(recs.length>1) m.querySelector('.modal-h h2').textContent=`${recs.length} copias de la receta`;
+    box.innerHTML=recs.map((r,i)=>recipePopHtml(r, `<p class="muted rpop-where">${r.sugg?'En Recetas recomendadas':'En la biblioteca de @'+esc(r.owner||'?')}</p>`)).join('<hr class="rpop-sep">');
+  }catch(err){ const box=$('#bpop',m); if(box) box.innerHTML=`<p class="err">${esc(err.error||'No se ha podido abrir')}</p>`; }
 }
 function admResumen(d){
   const kpi=(n,l,sub='')=>`<div class="kpi"><b>${n.toLocaleString('es-ES')}</b><span>${l}</span>${sub?`<small>${sub}</small>`:''}</div>`;
@@ -2773,6 +2797,7 @@ const ACT = {
   saveCommunity:el=>{ const r=[...(S.community||[]),...(S.communityAll||[])].find(x=>x.id===el.dataset.id); if(!r) return; folderPicker('Guardar en…', async fid=>{ try{ const {owner,id,folderId,public:_p,...rest}=r; await store.saveRecipe({...rest, id:gid(), folderId:fid, fromUid:owner.id, created:now()}); toast('Guardada en tu recetario'); }catch(e){ fail(e); } }); },
   openCommunity:el=>{ const r=[...(S.community||[]),...(S.communityAll||[])].find(x=>x.id===el.dataset.id); if(r) showVisiting({id:'c-'+r.id, name:r.title, color:'#6E4429', owner:r.owner.id, ownerName:r.owner.display||('@'+r.owner.username), visiting:true, recipes:[r]}, 2); },
   openSugg:el=>openSuggestion(el.dataset.id),
+  admBulkOpen:el=>admBulkOpen(el.dataset.id),
   logout:async()=>{ await api('POST','/logout').catch(()=>{}); stopChat(); S.view='library'; await loadState(); render(); toast('Sesión cerrada'); },
   hideBanner:()=>{ lsSet('ef_hide_banner',true); refresh(); },
   orderFolders:()=>orderFoldersModal(),
@@ -2838,7 +2863,8 @@ const ACT = {
     }catch(e){ fail(e); }
   }
 };
-document.addEventListener('click',e=>{ const el=e.target.closest('[data-act]'); if(!el) return; const f=ACT[el.dataset.act]||ADM_ACT[el.dataset.act]; if(f){ e.preventDefault(); f(el,e); } });
+document.addEventListener('keydown',e=>{ if(e.key==='Enter'&&e.target.matches?.('.adm-row.clickable')) e.target.click(); });
+document.addEventListener('click',e=>{ if(e.target.closest('a[data-stop]')) return; const el=e.target.closest('[data-act]'); if(!el) return; const f=ACT[el.dataset.act]||ADM_ACT[el.dataset.act]; if(f){ e.preventDefault(); f(el,e); } });
 
 boot();
 

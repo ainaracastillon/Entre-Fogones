@@ -2241,6 +2241,16 @@ adm.get('/bulk/history', async (req, res, next) => {
     res.json(rows.map(r => ({ ...r, created: Number(r.created), image: r.has_img ? `/img/s/${r.sugg_id}` : '' })));
   } catch (e) { next(e); }
 });
+// Una subida del historial: sus recetas para verlas en una ventana
+adm.get('/bulk/:id', async (req, res, next) => {
+  try {
+    const b = (await q('SELECT * FROM bulk_log WHERE id=$1', [req.params.id])).rows[0];
+    if (!b) return res.status(404).json({ error: 'No encuentro esa subida.' });
+    const ids = Array.isArray(b.recipe_ids) ? b.recipe_ids : [];
+    const rows = ids.length ? (await q('SELECT r.*, u.username FROM recipes r JOIN users u ON u.id=r.user_id WHERE r.id = ANY($1)', [ids])).rows : [];
+    res.json({ recipes: rows.map(r => ({ ...recipeOut(r), owner: r.username })), sugg: b.sugg_id || null });
+  } catch (e) { next(e); }
+});
 adm.get('/recipes', async (req, res, next) => {
   try {
     const term = String(req.query.q || '').trim().toLowerCase().slice(0, 80);
