@@ -1032,7 +1032,6 @@ async function videoText(url) {
     }
     out.text = [out.title && desc && !desc.includes(out.title) ? 'Título: ' + out.title : '', desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
     if (!desc && !transcript) out.platform = 'youtube';
-    if (process.env.DIAGV || true) console.log('DIAGY', id, JSON.stringify({ html: html.length, pr: !!pr, sd: (html.match(/"shortDescription":"/g) || []).length, ad: (html.match(/attributedDescription/g) || []).length, adm: !!html.match(/"attributedDescription(?:BodyText)?":\{"content":"((?:[^"\\]|\\.)*)"/), inv: inv ? { t: inv.title.slice(0, 30), d: inv.description.length, tr: (inv.transcript || '').length } : null, desc: (desc || '').length }));
   } else if (/tiktok/.test(host)) {
     let t = null;
     try { t = await tiktokData(url); } catch (e) { if (e.dead) throw e; console.error('tiktok', e.message); }
@@ -2190,12 +2189,6 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// diagnóstico temporal de vídeos (se escribe en el registro al arrancar)
-setTimeout(async () => {
-  for (const u of ['https://youtube.com/shorts/tn3E0RjLSb0', 'https://www.youtube.com/watch?v=RTqqV6mVSLU', 'https://youtube.com/shorts/EQaJUs0HAQM', 'https://www.facebook.com/reel/986240545878161']) {
-    try { const v = await videoText(u); console.log('DIAGV', u, JSON.stringify({ title: v.title, platform: v.platform, len: v.text.length, text: v.text.slice(0, 160) })); } catch (e) { console.log('DIAGV', u, 'ERR', e.message); }
-  }
-}, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
