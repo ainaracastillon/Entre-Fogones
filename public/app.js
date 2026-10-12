@@ -1579,7 +1579,7 @@ function viewAccount(){
 
     ${me.role==='superadmin'?'':`<section class="card danger-zone">
       <h2>Eliminar cuenta</h2>
-      <p class="muted">Se borrarán para siempre tu cuenta, tus recetarios, tus recetas, tus amistades y los mensajes que has enviado. No se puede deshacer.</p>
+      <p class="muted">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a las Recetas recomendadas, sin tu nombre. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla.</p>
       <button class="btn danger" id="accDel">${ico('trash')}Eliminar mi cuenta</button>
     </section>`}
 
@@ -1667,7 +1667,7 @@ function accountModal(){ go('account'); }
 function deleteAccountModal(){
   const m=openModal(`${mHead('Eliminar tu cuenta')}
     <form id="fd" style="display:grid;gap:14px">
-      <p style="margin:0">Se borrarán para siempre tu cuenta, tus recetarios, tus recetas, tus amistades y los mensajes que has enviado. Si quieres conservarlos, descárgalos antes desde «Tus datos».</p>
+      <p style="margin:0">Tu cuenta se eliminará: dejarás de poder entrar y nadie podrá verte ni escribirte. Tus recetas propias pasan a las Recetas recomendadas, sin tu nombre. Si cambias de idea, escríbenos desde Contacto y podremos recuperarla. Si quieres una copia de tus datos, descárgala antes desde «Tus datos».</p>
       <div class="field"><label for="dpass">Escribe tu contraseña para confirmarlo</label><input id="dpass" class="inp" type="password" required autocomplete="current-password"></div>
       <div id="dstatus"></div>
       <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri" id="dgo">${ico('trash')}Eliminar definitivamente</button></div>
@@ -1974,7 +1974,10 @@ async function adminLoad(){
   box.innerHTML='<div class="status"><span class="spin"></span>Cargando…</div>';
   try{
     if(tab==='resumen') box.innerHTML=admResumen(await api('GET','/admin/stats'));
-    else if(tab==='usuarios'){ box.innerHTML=`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"><button class="btn pri" data-act="admNewUser">${ico('plus')}Crear cuenta</button></div><div id="admList"></div>`; bindAdmSearch('usuarios'); await admUsers(); }
+    else if(tab==='usuarios'){ const del=S.admUsersDel;
+      box.innerHTML=`<div class="tabs adm-sub" role="tablist"><button role="tab" data-act="admUsersSub" data-d="0" aria-selected="${!del}">Activos</button><button role="tab" data-act="admUsersSub" data-d="1" aria-selected="${!!del}">${ico('trash')}Usuarios eliminados</button></div>`
+        +(del?`<div id="admList"></div>`:`<div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por nombre, usuario o correo" value="${esc(S.admQ||'')}" aria-label="Buscar usuarios"><button class="btn pri" data-act="admNewUser">${ico('plus')}Crear cuenta</button></div><div id="admList"></div>`);
+      if(del) await admDeletedUsers(); else { bindAdmSearch('usuarios'); await admUsers(); } }
     else if(tab==='recetas'){ box.innerHTML=`${admBulkHtml()}<h2 class="below-h">Recetas de las cuentas</h2><div class="adm-tools"><input id="admQ" class="inp" placeholder="Buscar por título o usuario" value="${esc(S.admQ||'')}" aria-label="Buscar recetas"></div><div id="admList"></div>`; bindAdmSearch('recetas'); bindAdmBulk(); await admRecipes(); }
     else if(tab==='mensajes') box.innerHTML=admContact(await api('GET','/admin/contact'));
     else if(tab==='avisos'){ box.innerHTML=admNotices(await api('GET','/admin/notices')); bindAdmNotices(); }
@@ -2019,9 +2022,21 @@ async function admUsers(){
         ${(target==='user' || isSuper() && target!=='superadmin' || me)?`<button class="btn sm" data-act="admPass" data-id="${esc(u.id)}" data-n="${esc(u.username)}" data-mail="${u.email?1:0}">${ico('lock')}Contraseña</button>`:''}
         ${isSuper() && target!=='superadmin' ? `<button class="btn sm" data-act="admRole" data-id="${esc(u.id)}" data-role="${target==='admin'?'user':'admin'}">${target==='admin'?'Quitar administrador':'Hacer administrador'}</button>`:''}
         ${canMod?`<button class="btn sm" data-act="admBlock" data-id="${esc(u.id)}" data-b="${u.blocked?0:1}">${u.blocked?'Quitar suspensión':'Suspender'}</button>
-          ${isSuper()?`<button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Borrar</button>`
+          ${isSuper()?`<button class="btn sm danger" data-act="admDelUser" data-id="${esc(u.id)}" data-n="${esc(u.username)}">Eliminar</button>`
             :`<button class="btn sm ${u.delete_suggested?'':'danger'}" data-act="admSuggestDel" data-id="${esc(u.id)}" data-on="${u.delete_suggested?0:1}">${u.delete_suggested?'Retirar sugerencia de borrar':'Sugerir borrar'}</button>`}`:''}
       </div></div>`; }).join('')}</div>`;
+}
+async function admDeletedUsers(){
+  const list=await api('GET','/admin/deleted-users'); S.admDelList=list; const box=$('#admList'); if(!box) return;
+  if(!list.length){ box.innerHTML='<p class="muted">No hay cuentas eliminadas.</p>'; return; }
+  box.innerHTML=`<p class="muted" style="margin:0 0 10px;font-size:14px">Cuentas eliminadas por sus dueños o desde el panel. ${isSuper()?'Puedes recuperarlas con todo su contenido.':'Solo el Superadministrador puede recuperarlas; tú puedes sugerirlo.'}</p>
+    <div class="adm-rows">${list.map(u=>{ S.profiles[u.id]=S.profiles[u.id]||{id:u.id,username:u.username,display:u.display,color:u.color,avatar:u.avatar};
+      const rs=u.restore_suggested, mine=rs&&rs.by===S.profile?.username;
+      return `<div class="adm-row">${avatar(u.id)}
+        <div class="ar-main"><div class="ar-t">${esc(u.display||'')} <span class="muted">@${esc(u.username)}</span> <span class="role r-blocked">Eliminada</span>${rs?`<button class="role r-admin role-btn" data-act="admRestoreView" data-id="${esc(u.id)}">Se sugiere recuperar ›</button>`:''}</div>
+          <div class="ar-s">${esc(u.email||'sin correo')} · ${u.recetas} recetas · eliminada el ${fmtDate(u.deleted_at)} ${u.deleted_by==='self'?'por la propia persona':'por @'+esc(u.deleted_by||'?')}</div></div>
+        <div class="ar-act">${isSuper()?`<button class="btn sm pri" data-act="admRestore" data-id="${esc(u.id)}" data-n="${esc(u.username)}">${ico('check')}Recuperar cuenta</button>`
+          :(rs?(mine?`<button class="btn sm" data-act="admSuggestRestore" data-id="${esc(u.id)}" data-on="0">Retirar sugerencia</button>`:''):`<button class="btn sm" data-act="admSuggestRestore" data-id="${esc(u.id)}" data-on="1">Sugerir recuperar</button>`)}</div></div>`; }).join('')}</div>`;
 }
 async function admRecipes(){
   const list=await api('GET','/admin/recipes?q='+encodeURIComponent(S.admQ||'')); const box=$('#admList'); if(!box) return;
@@ -2215,6 +2230,22 @@ const ADM_ACT = {
     $('#apF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('PUT',`/admin/users/${id}/password`,{password:$('#apP',m).value, logout:$('#apOut',m).checked}); closeModal(); toast('Contraseña cambiada'); }catch(err){ $('#apS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
     enhancePasswords?.(m);
   },
+  admUsersSub:el=>{ S.admUsersDel=el.dataset.d==='1'; adminLoad(); },
+  admRestore:async el=>{ if(await confirmBox(`Se recuperará la cuenta @${el.dataset.n} con todas sus recetas, recetarios, amistades y mensajes. Podrá volver a entrar.`,'Recuperar')) admDo(()=>api('POST',`/admin/users/${el.dataset.id}/restore`),'Cuenta recuperada'); },
+  admSuggestRestore:async el=>{
+    if(el.dataset.on!=='1') return admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-restore`,{on:false}),'Sugerencia retirada');
+    const reason=await promptBox('Sugerir recuperar la cuenta','¿Por qué se debería recuperar?',{ok:'Sugerir',hint:'El Superadministrador lo verá y decidirá.'});
+    if(reason) admDo(()=>api('PUT',`/admin/users/${el.dataset.id}/suggest-restore`,{on:true, reason}),'Sugerencia enviada al Superadministrador');
+  },
+  admRestoreView:el=>{
+    const u=(S.admDelList||[]).find(x=>x.id===el.dataset.id); if(!u||!u.restore_suggested) return; const rs=u.restore_suggested;
+    const m=openModal(`${mHead('Sugerencia de recuperar la cuenta')}
+      <div class="person">${avatar(u.id)}<div class="pb"><div class="pn">${esc(u.display||'')}</div><div class="pu">@${esc(u.username)}</div></div></div>
+      <div class="card" style="padding:14px 16px"><p style="margin:0"><b>@${esc(rs.by||'?')}</b> sugiere recuperar esta cuenta${rs.at?` (${esc(fmtDate(rs.at))})`:''}.</p><p style="margin:6px 0 0;white-space:pre-wrap">${rs.reason?esc(rs.reason):'<span class="muted">Sin motivo indicado.</span>'}</p></div>
+      ${isSuper()?`<div class="row" style="justify-content:flex-end"><button class="btn" id="rsNo">${ico('x')}Rechazar</button><button class="btn pri" id="rsYes">${ico('check')}Aprobar y recuperar</button></div>`:`<div class="row" style="justify-content:flex-end"><button class="btn pri" data-act="closeModal">Cerrar</button></div>`}`);
+    $('#rsYes',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('POST',`/admin/users/${u.id}/restore`),'Aprobada: cuenta recuperada'); });
+    $('#rsNo',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('PUT',`/admin/users/${u.id}/suggest-restore`,{on:false}),'Sugerencia rechazada'); });
+  },
   admSuggestView:el=>{
     const u=(S.admUsersList||[]).find(x=>x.id===el.dataset.id); if(!u||!u.delete_suggested) return;
     const ds=u.delete_suggested, mine=ds.by===S.profile?.username;
@@ -2222,8 +2253,8 @@ const ADM_ACT = {
       <div class="person">${avatar(u.id)}<div class="pb"><div class="pn">${esc(u.display||'')}</div><div class="pu">@${esc(u.username)}${u.email?' · '+esc(u.email):''}</div></div></div>
       <div class="card" style="padding:14px 16px"><p style="margin:0"><b>@${esc(ds.by||'?')}</b> sugiere borrar esta cuenta${ds.at?` (${esc(fmtDate(ds.at))})`:''}.</p>
         <p style="margin:6px 0 0;white-space:pre-wrap">${ds.reason?esc(ds.reason):'<span class="muted">Sin motivo indicado.</span>'}</p></div>
-      ${isSuper()?`<p class="muted" style="margin:0;font-size:14px">Si apruebas, la cuenta se borra al momento (sus recetas pasan a Recomendadas) y se avisa a @${esc(ds.by||'')}. Si la rechazas, también se le avisa.</p>
-        <div class="row" style="justify-content:flex-end"><button class="btn" id="sgNo">${ico('x')}Rechazar</button><button class="btn danger" id="sgYes">${ico('check')}Aprobar y borrar la cuenta</button></div>`
+      ${isSuper()?`<p class="muted" style="margin:0;font-size:14px">Si apruebas, la cuenta pasa a «Usuarios eliminados» al momento (podrás recuperarla desde ahí) y se avisa a @${esc(ds.by||'')}. Si la rechazas, también se le avisa.</p>
+        <div class="row" style="justify-content:flex-end"><button class="btn" id="sgNo">${ico('x')}Rechazar</button><button class="btn danger" id="sgYes">${ico('check')}Aprobar y eliminar la cuenta</button></div>`
       :`<p class="muted" style="margin:0;font-size:14px">Está pendiente de que decida el Superadministrador.</p>
         <div class="row" style="justify-content:flex-end">${mine?`<button class="btn" id="sgWd">Retirar mi sugerencia</button>`:''}<button class="btn pri" data-act="closeModal">Cerrar</button></div>`}`);
     $('#sgYes',m)?.addEventListener('click',()=>{ closeModal(); admDo(()=>api('DELETE','/admin/users/'+u.id),'Aprobada: cuenta borrada'); });
@@ -2251,7 +2282,7 @@ const ADM_ACT = {
     $('#nuU',m).oninput=e=>{e.target.value=e.target.value.toLowerCase().replace(/[^a-z0-9_]/g,'')};
     $('#nuF',m).onsubmit=async e=>{ e.preventDefault(); try{ await api('POST','/admin/users',{username:$('#nuU',m).value,display:$('#nuD',m).value,email:$('#nuE',m).value,password:$('#nuP',m).value}); closeModal(); toast('Cuenta creada'); adminLoad(); }catch(err){ $('#nuS',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; } };
   },
-  admDelUser:async el=>{ if(await confirmBox(`Se borrará la cuenta @${el.dataset.n} con todas sus recetas y mensajes. No se puede deshacer.`)) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
+  admDelUser:async el=>{ if(await confirmBox(`La cuenta @${el.dataset.n} pasará a «Usuarios eliminados»: no podrá entrar y nadie la verá. Desde ahí podrás recuperarla con todo su contenido.`,'Eliminar')) admDo(()=>api('DELETE','/admin/users/'+el.dataset.id),'Cuenta borrada'); },
   admDelRecipe:async el=>{ if(await confirmBox(`Se borrará la receta «${el.dataset.n}» de su recetario.`)) admDo(()=>api('DELETE','/admin/recipes/'+el.dataset.id),'Receta borrada'); },
   admMsg:el=>admDo(()=>api('PUT','/admin/contact/'+el.dataset.id,{status:el.dataset.s}),'Mensaje actualizado'),
   admDelMsg:async el=>{ if(await confirmBox('Se borrará este mensaje de contacto.')) admDo(()=>api('DELETE','/admin/contact/'+el.dataset.id),'Mensaje borrado'); },

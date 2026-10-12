@@ -74,6 +74,9 @@ async function migrate() {
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_reason TEXT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS blocked_at BIGINT;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS delete_suggested JSONB;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at BIGINT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+  ALTER TABLE users ADD COLUMN IF NOT EXISTS restore_suggested JSONB;
   ALTER TABLE users ADD COLUMN IF NOT EXISTS prefs JSONB NOT NULL DEFAULT '{}'::jsonb;
   CREATE TABLE IF NOT EXISTS user_notifs(id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, kind TEXT, title TEXT, body TEXT, url TEXT, created BIGINT NOT NULL, read_at BIGINT);
   CREATE INDEX IF NOT EXISTS user_notifs_user ON user_notifs(user_id, created);
@@ -145,7 +148,8 @@ async function auth(req, res, next) {
     if (token) {
       const r = await q('SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token=$1', [token]);
       const u = r.rows[0];
-      if (u && u.blocked && u.username) {
+      if (u && u.deleted_at) { await q('DELETE FROM sessions WHERE token=$1', [token]); }
+      else if (u && u.blocked && u.username) {
         await q('DELETE FROM sessions WHERE token=$1', [token]);
         res.append('Set-Cookie', `ef_susp=${encodeURIComponent(JSON.stringify({ r: String(u.blocked_reason || '').slice(0, 300), at: Number(u.blocked_at) || 0 }))}; Path=/; Max-Age=300; SameSite=Lax`);
       }
@@ -224,7 +228,10 @@ api.get('/state', async (req, res, next) => {
     chats.rows.forEach(c => { ids.add(c.a); ids.add(c.b); });
     recipes.rows.forEach(r => r.data.fromUid && ids.add(r.data.fromUid));
     ids.delete(me);
-    const people = ids.size ? (await q('SELECT id,username,display,color,avatar FROM users WHERE id = ANY($1)', [[...ids]])).rows : [];
+    const people = ids.size ? (await q('SELECT id,username,display,color,avatar FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [[...ids]])).rows : [];
+    const gone = new Set([...ids].filter(id => !people.some(p => p.id === id)));
+    reqs.rows = reqs.rows.filter(r => !gone.has(r.from_id) && !gone.has(r.to_id));
+    chats.rows = chats.rows.filter(c => !gone.has(c.a) && !gone.has(c.b));
     const profiles = {}; people.forEach(p => profiles[p.id] = pub(p));
     res.json({
       me: { ...pub(req.user), email: req.user.email || null, role: req.user.username ? req.user.role : 'user', allergens: req.user.allergens || [], prefs: req.user.prefs || {}, lastRead: req.user.last_read || {}, suspended: suspension(req.user) }, profiles,
@@ -322,6 +329,7 @@ api.post('/login', async (req, res, next) => {
     const r = await q('SELECT * FROM users WHERE username=$1 OR (email IS NOT NULL AND lower(email)=$1) LIMIT 1', [who]);
     const u = r.rows[0];
     if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
+    if (u.deleted_at) return res.status(403).json({ error: 'Esta cuenta se ha eliminado. Si quieres recuperarla, escríbenos desde Contacto.' });
     if (u.blocked) return res.status(403).json({ suspended: true, reason: u.blocked_reason || '', at: Number(u.blocked_at) || null, error: 'Tu cuenta está suspendida.' });
     await syncRole(u.id, u.email);
     await adoptAnon(req, u.id);
@@ -341,16 +349,18 @@ async function adoptAnon(req, userId) {
 api.post('/logout', async (req, res, next) => {
   try { await q('DELETE FROM sessions WHERE token=$1', [req.token]); res.setHeader('Set-Cookie', 'ef=; Path=/; Max-Age=0'); res.json({ ok: true }); } catch (e) { next(e); }
 });
+/* Las cuentas eliminadas no se borran: pasan a «Usuarios eliminados» y el Superadministrador puede recuperarlas con todo */
+async function softDeleteUser(id, by) {
+  await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [id])).rows);
+  await q('UPDATE users SET deleted_at=$1, deleted_by=$2, delete_suggested=NULL, restore_suggested=NULL WHERE id=$3', [now(), by, id]);
+  await q('DELETE FROM sessions WHERE user_id=$1', [id]);
+  await q('DELETE FROM push_subs WHERE user_id=$1', [id]).catch(() => {});
+}
 api.delete('/me', needProfile, async (req, res, next) => {
   try {
     if (req.user.role === 'superadmin') return res.status(400).json({ error: 'La cuenta del Superadministrador no se puede borrar.' });
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
-    const me = req.user.id;
-    await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [me])).rows);
-    await q('DELETE FROM messages WHERE from_id=$1', [me]);
-    await q('DELETE FROM attachments WHERE owner=$1', [me]);
-    await q('DELETE FROM chats WHERE a=$1 OR b=$1', [me]);
-    await q('DELETE FROM users WHERE id=$1', [me]);
+    await softDeleteUser(req.user.id, 'self');
     res.setHeader('Set-Cookie', 'ef=; Path=/; Max-Age=0');
     res.json({ ok: true });
   } catch (e) { next(e); }
@@ -391,7 +401,7 @@ api.post('/password/forgot', async (req, res, next) => {
     const email = String(req.body.email || '').trim().toLowerCase();
     if (!emailOk(email)) return res.status(400).json({ error: 'Escribe el correo de tu cuenta.' });
     if (!mailReady()) return res.status(503).json({ error: 'Ahora mismo no se pueden enviar correos. Inténtalo más tarde.' });
-    const u = (await q('SELECT id, display FROM users WHERE lower(email)=$1 AND username IS NOT NULL', [email])).rows[0];
+    const u = (await q('SELECT id, display FROM users WHERE lower(email)=$1 AND username IS NOT NULL AND deleted_at IS NULL', [email])).rows[0];
     if (u) {
       const recent = (await q('SELECT count(*)::int n FROM password_resets WHERE user_id=$1 AND created>$2', [u.id, now() - 3600e3])).rows[0].n;
       if (recent < 4) await sendResetMail(req, u, email);
@@ -448,7 +458,7 @@ api.get('/friends/:id/library', needProfile, async (req, res, next) => {
     const other = req.params.id;
     const fr = (await q("SELECT 1 FROM requests WHERE status='accepted' AND ((from_id=$1 AND to_id=$2) OR (from_id=$2 AND to_id=$1))", [req.user.id, other])).rows[0];
     if (!fr && !isAdmin(req.user)) return res.status(403).json({ error: 'Solo puedes ver la biblioteca de tus amigos.' });
-    const u = (await q('SELECT id,username,display,color,avatar,accepted_at FROM users WHERE id=$1 AND username IS NOT NULL', [other])).rows[0];
+    const u = (await q('SELECT id,username,display,color,avatar,accepted_at FROM users WHERE id=$1 AND username IS NOT NULL AND deleted_at IS NULL', [other])).rows[0];
     if (!u) return res.status(404).json({ error: 'Esa cuenta no existe.' });
     const [folders, recipes] = await Promise.all([
       q('SELECT id,name,color,created FROM folders WHERE user_id=$1 ORDER BY position NULLS LAST, created', [u.id]),
@@ -570,7 +580,7 @@ api.get('/community', async (req, res, next) => {
     const full = !!req.user.username;
     const term = full ? String(req.query.q || '').trim().toLowerCase().slice(0, 60) : '';
     const rows = (await q(`SELECT r.*, u.username, u.display, u.color FROM recipes r JOIN users u ON u.id=r.user_id
-      WHERE (r.data->>'public')='true' AND u.username IS NOT NULL AND NOT u.blocked AND ($1='' OR lower(r.data->>'title') LIKE '%'||$1||'%' OR lower(r.data::text) LIKE '%'||$1||'%')
+      WHERE (r.data->>'public')='true' AND u.username IS NOT NULL AND NOT u.blocked AND u.deleted_at IS NULL AND ($1='' OR lower(r.data->>'title') LIKE '%'||$1||'%' OR lower(r.data::text) LIKE '%'||$1||'%')
       ORDER BY r.created DESC LIMIT $2`, [term, full ? 200 : 6])).rows;
     res.json(rows.map(r => ({ ...recipeOut(r), owner: { id: r.user_id, username: r.username, display: r.display, color: r.color } })));
   } catch (e) { next(e); }
@@ -579,14 +589,14 @@ api.get('/community', async (req, res, next) => {
 /* Enlaces públicos */
 api.get('/public/recipe/:id', async (req, res, next) => {
   try {
-    const r = (await q('SELECT r.*, u.username, u.display, u.color FROM recipes r JOIN users u ON u.id=r.user_id WHERE r.id=$1', [req.params.id])).rows[0];
+    const r = (await q('SELECT r.*, u.username, u.display, u.color FROM recipes r JOIN users u ON u.id=r.user_id WHERE r.id=$1 AND u.deleted_at IS NULL', [req.params.id])).rows[0];
     if (!r) return res.status(404).json({ error: 'Esta receta ya no existe.' });
     res.json({ recipe: recipeOut(r), owner: { id: r.user_id, username: r.username, display: r.display, color: r.color } });
   } catch (e) { next(e); }
 });
 api.get('/public/folder/:id', async (req, res, next) => {
   try {
-    const f = (await q('SELECT f.*, u.username, u.display, u.color AS ucolor FROM folders f JOIN users u ON u.id=f.user_id WHERE f.id=$1', [req.params.id])).rows[0];
+    const f = (await q('SELECT f.*, u.username, u.display, u.color AS ucolor FROM folders f JOIN users u ON u.id=f.user_id WHERE f.id=$1 AND u.deleted_at IS NULL', [req.params.id])).rows[0];
     if (!f) return res.status(404).json({ error: 'Este recetario ya no existe.' });
     const rs = await q('SELECT * FROM recipes WHERE folder_id=$1 AND user_id=$2', [f.id, f.user_id]);
     res.json({ folder: { id: f.id, name: f.name, color: f.color }, recipes: rs.rows.map(recipeOut), owner: { id: f.user_id, username: f.username, display: f.display, color: f.ucolor } });
@@ -597,7 +607,7 @@ api.get('/public/folder/:id', async (req, res, next) => {
 api.get('/users', needProfile, async (req, res, next) => {
   try {
     const term = String(req.query.q || '').toLowerCase().replace(/^@/, '').slice(0, 40);
-    const r = await q(`SELECT id,username,display,color FROM users WHERE username IS NOT NULL AND id<>$1
+    const r = await q(`SELECT id,username,display,color FROM users WHERE username IS NOT NULL AND deleted_at IS NULL AND id<>$1
       AND ($2='' OR username LIKE '%'||$2||'%' OR lower(display) LIKE '%'||$2||'%') ORDER BY display LIMIT 40`, [req.user.id, term]);
     res.json(r.rows.map(pub));
   } catch (e) { next(e); }
@@ -649,7 +659,7 @@ async function sendPush(userIds, kind, payload) {
 async function notifyUser(userIds, kind, title, body, url) {
   const ids = [...new Set([].concat(userIds).filter(Boolean))]; if (!ids.length) return;
   try {
-    const rows = (await q('SELECT id, prefs FROM users WHERE id = ANY($1)', [ids])).rows.filter(u => kind === 'admin' || ({ ...NOTIFY_DEFAULT, ...((u.prefs || {}).notify || {}) })[kind] !== false);
+    const rows = (await q('SELECT id, prefs FROM users WHERE id = ANY($1) AND deleted_at IS NULL', [ids])).rows.filter(u => kind === 'admin' || ({ ...NOTIFY_DEFAULT, ...((u.prefs || {}).notify || {}) })[kind] !== false);
     for (const u of rows) await q('INSERT INTO user_notifs(id,user_id,kind,title,body,url,created) VALUES($1,$2,$3,$4,$5,$6,$7)', [gid(), u.id, kind, String(title).slice(0, 160), String(body || '').slice(0, 400), url || '/', now()]);
     sendPush(rows.map(u => u.id), kind === 'admin' ? 'admin' : kind, { title, body, url: url || '/' });
   } catch (e) { console.error('notif', e.message); }
@@ -710,7 +720,7 @@ function msgPreview(d) {
   if (d.type === 'file') return '📎 ' + (d.file?.name || 'Archivo') + (d.text ? ': ' + d.text : '');
   return (d.type === 'ask' ? 'Pide una receta: ' : '') + (d.text || '');
 }
-async function chatTarget(other) { const o = (await q('SELECT username FROM users WHERE id=$1', [other])).rows[0]; return o && o.username; }
+async function chatTarget(other) { const o = (await q('SELECT username FROM users WHERE id=$1 AND deleted_at IS NULL', [other])).rows[0]; return o && o.username; }
 api.post('/chats/:other/messages', needProfile, async (req, res, next) => {
   try {
     if (!(await chatTarget(req.params.other))) return res.status(404).json({ error: 'Esa persona no existe.' });
@@ -1759,7 +1769,7 @@ adm.get('/stats', async (req, res, next) => {
     const day = 86400e3, t = now();
     const one = async (sql, p = []) => (await q(sql, p)).rows[0];
     const [u, r, f, m, c, ai, contact] = await Promise.all([
-      one(`SELECT count(*) FILTER (WHERE username IS NOT NULL)::int cuentas, count(*) FILTER (WHERE username IS NULL)::int anonimos,
+      one(`SELECT count(*) FILTER (WHERE username IS NOT NULL AND deleted_at IS NULL)::int cuentas, count(*) FILTER (WHERE deleted_at IS NOT NULL)::int eliminadas, count(*) FILTER (WHERE username IS NULL)::int anonimos,
            count(*) FILTER (WHERE role IN ('admin','superadmin'))::int admins, count(*) FILTER (WHERE blocked)::int bloqueados,
            count(*) FILTER (WHERE username IS NOT NULL AND accepted_at>$1)::int nuevas7, count(*) FILTER (WHERE last_seen>$2)::int activos7 FROM users`, [t - 7 * day, t - 7 * day]),
       one('SELECT count(*)::int total, count(*) FILTER (WHERE created>$1)::int nuevas7 FROM recipes', [t - 7 * day]),
@@ -1781,7 +1791,7 @@ adm.get('/users', async (req, res, next) => {
     const term = String(req.query.q || '').trim().toLowerCase().replace(/^@/, '').slice(0, 60);
     const rows = (await q(`SELECT u.id,u.username,u.display,u.email,u.color,u.avatar,u.role,u.blocked,u.blocked_reason,u.delete_suggested,u.accepted_at,u.last_seen,
       (SELECT count(*)::int FROM recipes r WHERE r.user_id=u.id) recetas
-      FROM users u WHERE u.username IS NOT NULL AND ($1='' OR u.username LIKE '%'||$1||'%' OR lower(u.display) LIKE '%'||$1||'%' OR lower(u.email) LIKE '%'||$1||'%')
+      FROM users u WHERE u.username IS NOT NULL AND u.deleted_at IS NULL AND ($1='' OR u.username LIKE '%'||$1||'%' OR lower(u.display) LIKE '%'||$1||'%' OR lower(u.email) LIKE '%'||$1||'%')
       ORDER BY (u.role='superadmin') DESC, (u.role='admin') DESC, u.accepted_at DESC NULLS LAST LIMIT 200`, [term])).rows;
     res.json(rows.map(x => ({ ...x, accepted_at: Number(x.accepted_at) || null, last_seen: Number(x.last_seen) || null })));
   } catch (e) { next(e); }
@@ -1896,11 +1906,37 @@ adm.delete('/users/:id', needSuper, async (req, res, next) => {
     const sid = t && t.delete_suggested ? await suggesterId(t.delete_suggested) : null;
     if (sid && sid !== req.user.id)
       notifyUser(sid, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha borrado la cuenta @${t.username} que sugeriste borrar.`, '/?v=admin&t=usuarios');
-    await recipesToSuggestions((await q('SELECT id, data FROM recipes WHERE user_id=$1', [req.params.id])).rows);
-    await q('DELETE FROM attachments WHERE owner=$1', [req.params.id]);
-    await q('DELETE FROM messages WHERE from_id=$1', [req.params.id]);
-    await q('DELETE FROM chats WHERE a=$1 OR b=$1', [req.params.id]);
-    await q('DELETE FROM users WHERE id=$1', [req.params.id]);
+    await softDeleteUser(req.params.id, req.user.username);
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+// Usuarios eliminados: el Superadministrador los recupera; un administrador solo puede sugerirlo
+adm.get('/deleted-users', async (req, res, next) => {
+  try {
+    const rows = (await q(`SELECT u.id,u.username,u.display,u.email,u.color,u.avatar,u.role,u.deleted_at,u.deleted_by,u.restore_suggested,
+      (SELECT count(*)::int FROM recipes r WHERE r.user_id=u.id) recetas FROM users u WHERE u.deleted_at IS NOT NULL ORDER BY u.deleted_at DESC LIMIT 300`)).rows;
+    res.json(rows.map(x => ({ ...x, deleted_at: Number(x.deleted_at) })));
+  } catch (e) { next(e); }
+});
+adm.post('/users/:id/restore', needSuper, async (req, res, next) => {
+  try {
+    const t = (await q('SELECT username, restore_suggested FROM users WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: 'Esa cuenta no está eliminada.' });
+    await q('UPDATE users SET deleted_at=NULL, deleted_by=NULL, restore_suggested=NULL, blocked=false, blocked_reason=NULL WHERE id=$1', [req.params.id]);
+    const sid = t.restore_suggested && t.restore_suggested.byId;
+    if (sid && sid !== req.user.id) notifyUser(sid, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha recuperado la cuenta @${t.username} que sugeriste recuperar.`, '/?v=admin&t=usuarios');
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+});
+adm.put('/users/:id/suggest-restore', async (req, res, next) => {
+  try {
+    const t = (await q('SELECT username, restore_suggested FROM users WHERE id=$1 AND deleted_at IS NOT NULL', [req.params.id])).rows[0];
+    if (!t) return res.status(404).json({ error: 'Esa cuenta no está eliminada.' });
+    const on = req.body.on !== false, reason = String(req.body.reason || '').slice(0, 500);
+    await q('UPDATE users SET restore_suggested=$1 WHERE id=$2', [on ? { by: req.user.username, byId: req.user.id, reason, at: now() } : null, req.params.id]);
+    if (on) notifyUser((await q("SELECT id FROM users WHERE role='superadmin'")).rows.map(r => r.id), 'admin', `@${req.user.username} sugiere recuperar la cuenta @${t.username}`, (reason ? 'Motivo: ' + reason + '. ' : '') + 'Está pendiente de que decidas en Panel › Usuarios › Eliminados.', '/?v=admin&t=usuarios');
+    else if (t.restore_suggested && t.restore_suggested.byId && t.restore_suggested.byId !== req.user.id)
+      notifyUser(t.restore_suggested.byId, 'admin', `Decisión sobre @${t.username}`, `@${req.user.username} ha decidido no recuperar la cuenta @${t.username}.`, '/?v=admin&t=usuarios');
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
