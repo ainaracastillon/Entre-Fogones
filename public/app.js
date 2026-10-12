@@ -296,13 +296,17 @@ function renderTop(){
   $('#topbar').innerHTML = `
     <button class="brand" data-act="go" data-v="library" aria-label="Entre Fogones, ir a la biblioteca">${spoon(38)}<span class="w"><span class="w1">entre</span><span class="w2">fogones</span></span></button>
     <nav class="nav" aria-label="Secciones">
-      <button data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
-      <button data-act="go" data-v="menu" ${cur==='menu'?'aria-current="page"':''}>${ico('calendar')}<span class="nl">Menú</span></button>
-      <button data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
-      <button data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
+      <button class="sec" data-act="go" data-v="library" ${cur==='library'?'aria-current="page"':''}>${ico('book')}<span class="nl">Biblioteca</span></button>
+      <button class="sec" data-act="go" data-v="menu" ${cur==='menu'?'aria-current="page"':''}>${ico('calendar')}<span class="nl">Menú</span></button>
+      <button class="sec" data-act="go" data-v="chat" ${cur==='chat'?'aria-current="page"':''}>${ico('chat')}<span class="nl">Chat</span>${unread?`<span class="badge">${unread}</span>`:''}</button>
+      <button class="sec" data-act="go" data-v="friends" ${cur==='friends'?'aria-current="page"':''}>${ico('users')}<span class="nl">Amigos</span>${pend?`<span class="badge">${pend}</span>`:''}</button>
       <button class="bell reload-btn" data-act="reload" aria-label="Recargar" title="Recargar">${ico('reload')}</button>
       ${S.booted?bellHtml():''}${userBox}
     </nav>`;
+  // en el móvil, las secciones van en una barra abajo
+  let tb=document.getElementById('tabbar');
+  if(!tb){ tb=document.createElement('nav'); tb.id='tabbar'; tb.className='tabbar'; tb.setAttribute('aria-label','Secciones'); document.body.appendChild(tb); }
+  tb.innerHTML=[...document.querySelectorAll('#topbar .nav .sec')].map(b=>b.outerHTML.replace('class="sec"','class="tab"')).join('');
   const btn=$('#userBtn'), menu=$('#userMenu');
   if(btn) btn.onclick=e=>{ e.stopPropagation(); const open=menu.hidden; menu.hidden=!open; btn.setAttribute('aria-expanded',String(open)); const bp=$('#bellPanel'); if(bp) bp.hidden=true; };
   bindBell();

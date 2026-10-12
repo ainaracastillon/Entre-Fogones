@@ -762,13 +762,24 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
   .nav{gap:0}
   .nav button{padding:4px 2px;font-size:10px}
   .nav .ico{width:19px;height:19px}
-  .nav .bell{width:27px;height:34px;padding:0}
+  .nav .bell{width:34px;height:36px;padding:0}
   .nav .bell .ico,.nav .bell svg{width:19px;height:19px}
   .nav .userbox .user-btn{padding:4px 2px}
-  .top .brand svg{width:22px;height:auto}
-  .top .brand .w1{font-size:9px}
-  .top .brand .w2{font-size:15px}
-  .top .brand{gap:3px}
+}
+/* barra de secciones abajo en el móvil */
+.tabbar{display:none}
+@media (max-width:640px){
+  .nav .sec{display:none}
+  .tabbar{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--bg);border-top:1px solid var(--line);padding:6px 8px calc(6px + env(safe-area-inset-bottom,0px));justify-content:space-around;box-shadow:0 -4px 16px rgba(0,0,0,.05)}
+  .tabbar .tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;background:none;border:0;border-radius:12px;padding:5px 2px;font:inherit;font-size:11.5px;font-weight:500;color:var(--muted);position:relative}
+  .tabbar .tab .ico{width:22px;height:22px}
+  .tabbar .tab[aria-current="page"]{color:var(--accent)}
+  .tabbar .tab[aria-current="page"]::before{content:"";position:absolute;top:-7px;left:30%;right:30%;height:3px;border-radius:0 0 3px 3px;background:var(--accent)}
+  .tabbar .badge{position:absolute;top:0;left:calc(50% + 6px);margin:0;min-width:16px;height:16px;font-size:10px}
+  body{padding-bottom:calc(64px + env(safe-area-inset-bottom,0px))}
+  .toast{bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+  .in-chat .chat{height:calc(100dvh - var(--toph,64px) - 24px - 64px - env(safe-area-inset-bottom,0px))}
+  .top .brand .w{display:block}
 }
 </style>
 </head>
@@ -780,6 +791,6 @@ p,li,td{-webkit-hyphens:auto;hyphens:auto}
 <footer class="legal-foot"><a href="/#ayuda">Ayuda</a><a href="/#equivalencias">Equivalencias</a><span class="sep" aria-hidden="true"></span><a href="/legal/aviso-legal">Términos de uso</a><a href="/legal/privacidad">Privacidad</a><a href="/legal/cookies">Cookies</a><a href="/legal/contacto">Contacto</a></footer>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script src="/app.js?v=39"></script>
+<script src="/app.js?v=40"></script>
 </body>
 </html>
