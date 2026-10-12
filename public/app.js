@@ -1594,6 +1594,24 @@ function resetModal(token){
     catch(err){ $('#ngo',m).disabled=false; $('#nstatus',m).innerHTML=`<p class="err">${esc(err.error)}</p>`; }
   };
 }
+/* Recetas subidas por mí: las que ha creado la persona (no las copiadas de recomendadas ni de amigos) */
+const myUploads = () => S.recipes.filter(r=>!r.fromSugg && !r.fromUid).sort((a,b)=>(b.created||0)-(a.created||0));
+function myUploadsRows(q=''){
+  const k=q.trim().toLowerCase(), list=myUploads().filter(r=>!k||(r.title||'').toLowerCase().includes(k)||(r.ingredients||[]).join(' ').toLowerCase().includes(k));
+  if(!list.length) return `<p class="muted" style="margin:0">${k?'Ninguna con ese nombre.':'Todavía no has subido ninguna receta. Pulsa «Nueva receta» en la biblioteca.'}</p>`;
+  return list.map(r=>{ const fs=(r.folderIds&&r.folderIds.length?r.folderIds:[r.folderId]).map(id=>S.folders.find(f=>f.id===id)?.name).filter(Boolean);
+    return `<button class="rcard up-row" data-act="openRecipe" data-id="${esc(r.id)}"><span class="thumb">${r.image?`<img src="${esc(r.image)}" alt="" loading="lazy" referrerpolicy="no-referrer">`:spoon(30,'var(--accent)','var(--accent-soft)')}</span>
+      <span style="min-width:0;flex:1"><span class="tt">${esc(r.title||'Sin título')}</span><span class="mm">${r.created>1e12?esc(fmtDate(r.created))+" · ":""}${esc(fs.join(', ')||'Sin recetario')}${r.public?' · Pública':''}</span></span></button>`; }).join('');
+}
+function myUploadsCard(){
+  const n=myUploads().length;
+  return `<section class="card" id="myUp">
+    <h2>Recetas subidas por mí <span class="muted" style="font-weight:400;font-size:15px">(${n})</span></h2>
+    <p class="muted">Todas las recetas que has subido tú. No salen las que has guardado de las recomendadas ni las que te han mandado tus amigos.</p>
+    ${n>5?`<input id="myUpQ" class="inp" type="search" placeholder="Buscar en tus recetas subidas" aria-label="Buscar en tus recetas subidas">`:''}
+    <div class="up-list" id="myUpList">${myUploadsRows()}</div>
+  </section>`;
+}
 /* ===== Mi cuenta (igual que en Kairos, adaptada a Entre Fogones) ===== */
 const ALLERGENS = ['Gluten','Lactosa','Huevo','Frutos secos','Marisco','Pescado','Cacahuete','Soja'];
 function viewAccount(){
@@ -1606,6 +1624,8 @@ function viewAccount(){
       <div class="head-info"><h2>${esc(p.display||'')}</h2><p class="muted" style="margin:2px 0 8px">@${esc(p.username)}${me.email?' · '+esc(me.email):''}</p>
         <div class="row"><label class="btn sm" for="avFile">${p.avatar?'Cambiar foto':'Añadir foto'}</label>${p.avatar?'<button class="btn sm ghost" id="avDel">Quitar</button>':''}</div></div>
     </section>
+
+    ${myUploadsCard()}
 
     <section class="card">
       <h2>Perfil</h2>
@@ -1704,6 +1724,7 @@ function viewAccount(){
   </div>`;
 }
 function bindAccount(root){
+  const upQ=$('#myUpQ',root); if(upQ) upQ.oninput=()=>{ $('#myUpList',root).innerHTML=myUploadsRows(upQ.value); };
   let color=S.profile.color||AVCOLORS[0];
   initColorField(root,'pcolor',c=>{color=c});
   const ok = async (fn, msg) => { try{ await fn(); await loadState(); toast(msg); return true; }catch(err){ toast(err.error||'No se ha podido guardar'); return false; } };
