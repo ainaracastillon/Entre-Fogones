@@ -64,6 +64,8 @@ const ICONS = {
   reply:'<path d="M10 8L5 12l5 4"/><path d="M5 12h9a5 5 0 0 1 5 5v1"/>',
   image:'<rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M21 16l-5-5-8 8"/>',
   clock:'<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/>',
+  crop:'<path d="M6 2v14a2 2 0 0 0 2 2h14"/><path d="M18 22V8a2 2 0 0 0-2-2H2"/>',
   chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
   download:'<path d="M12 4v12M7 11l5 5 5-5M4 20h16"/>',
   lock:'<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>',
@@ -1032,6 +1034,7 @@ function newRecipeModal(folderId){
           <div class="field"><label for="vurl">Enlace del vídeo</label><input id="vurl" class="inp" type="url" required placeholder="Enlace de TikTok, Instagram, Facebook o YouTube"></div>
           <div class="field"><label for="vnote">¿Qué receta es? (opcional)</label><textarea id="vnote" class="inp" rows="2" maxlength="2000" placeholder="Por ejemplo: tarta de queso al horno, para 8; las cantidades se dicen al final"></textarea></div>
           <p class="muted" style="margin:0;font-size:14px">Se lee la descripción, los subtítulos y, si hace falta, se escucha el vídeo.</p>
+          <p class="note-warn">${ico('info')}<span><b>Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha.</span></p>
           <div id="vpasteWrap" hidden class="field"><label for="vpaste">Texto del vídeo</label><p class="muted" style="margin:0;font-size:14px" id="vpasteMsg"></p><textarea id="vpaste" class="inp" rows="6"></textarea></div>
           <div id="vstatus"></div>
           <div class="row" style="justify-content:flex-end"><button class="btn pri" id="vgo">${ico('play')}Sacar la receta</button></div>
@@ -1263,6 +1266,74 @@ async function toDataUrl(file,max,q,limit){
   return out;
 }
 const compressImage = file => toDataUrl(file,1000,.78,180000);
+/* Editar foto: recortar (libre o con proporción fija) y girar. Devuelve la foto nueva o null si se cancela */
+async function loadForEdit(src){
+  const tryLoad=u=>new Promise((res,rej)=>{ const i=new Image(); if(/^https?:/.test(u)&&!u.startsWith(location.origin)) i.crossOrigin='anonymous'; i.onload=()=>res(i); i.onerror=rej; i.src=u; });
+  if(/^(data:|blob:|\/)/.test(src)) return tryLoad(src);
+  // las fotos de otras webs se piden a través del servidor para poder recortarlas
+  try{ return await tryLoad('/api/imgproxy?u='+encodeURIComponent(src)); }catch{ return tryLoad(src); }
+}
+function cropImage(src){
+  return new Promise(async resolve=>{
+    let img; try{ img=await loadForEdit(src); }catch{ toast('No se puede editar esa foto'); return resolve(null); }
+    let rot=0, ratio=0; // ratio 0 = libre
+    const ov=document.createElement('div'); ov.className='crop-ov'; ov.setAttribute('role','dialog'); ov.setAttribute('aria-modal','true'); ov.setAttribute('aria-label','Editar foto');
+    ov.innerHTML=`<div class="crop-box"><div class="crop-h"><b>Editar foto</b><span class="muted">Arrastra el recuadro o sus esquinas para recortar</span></div>
+      <div class="crop-stage"><div class="crop-wrap"><canvas class="crop-cv"></canvas><div class="crop-sel"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div></div>
+      <div class="crop-tools"><div class="chips">${[['0','Libre'],['1','Cuadrada'],['1.3333','4:3'],['0.75','3:4'],['1.7778','16:9']].map(([v,l])=>`<button type="button" class="chip" data-r="${v}" aria-pressed="${v==='0'}">${l}</button>`).join('')}</div>
+        <button type="button" class="btn sm" data-rot>${ico('reload')}Girar</button></div>
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" data-no>Cancelar</button><button type="button" class="btn pri" data-ok>${ico('check')}Aplicar</button></div></div>`;
+    document.body.append(ov); document.documentElement.classList.add('modal-open');
+    const cv=ov.querySelector('.crop-cv'), sel=ov.querySelector('.crop-sel'), stage=ov.querySelector('.crop-stage');
+    let W=0,H=0, box={x:0,y:0,w:0,h:0};
+    // dibuja la foto (girada) a la medida de la pantalla
+    const draw=()=>{
+      const iw=rot%180?img.naturalHeight:img.naturalWidth, ih=rot%180?img.naturalWidth:img.naturalHeight;
+      const maxW=Math.min(stage.clientWidth||600, 900), maxH=Math.min(innerHeight*0.55, 640);
+      const sc=Math.min(maxW/iw, maxH/ih, 1); W=Math.round(iw*sc); H=Math.round(ih*sc);
+      cv.width=W; cv.height=H; const g=cv.getContext('2d'); g.save(); g.translate(W/2,H/2); g.rotate(rot*Math.PI/180);
+      const dw=rot%180?H:W, dh=rot%180?W:H; g.drawImage(img,-dw/2,-dh/2,dw,dh); g.restore();
+      box={x:0,y:0,w:W,h:H}; applyRatio(); place();
+    };
+    const applyRatio=()=>{ if(!ratio) return; let w=box.w, h=w/ratio; if(h>box.h){ h=box.h; w=h*ratio; } if(h>H){ h=H; w=h*ratio; } if(w>W){ w=W; h=w/ratio; } box={x:Math.max(0,Math.min(W-w,box.x+(box.w-w)/2)), y:Math.max(0,Math.min(H-h,box.y+(box.h-h)/2)), w, h}; };
+    const place=()=>{ sel.style.left=box.x+'px'; sel.style.top=box.y+'px'; sel.style.width=box.w+'px'; sel.style.height=box.h+'px'; stage.style.setProperty('--cw',W+'px'); stage.style.setProperty('--ch',H+'px'); };
+    // arrastrar el recuadro o una esquina (ratón y dedo)
+    let drag=null;
+    const pt=e=>{ const r=cv.getBoundingClientRect(); const t=e.touches?e.touches[0]:e; return {x:t.clientX-r.left, y:t.clientY-r.top}; };
+    const down=e=>{ const h=e.target.dataset?.h||'move'; drag={h, p:pt(e), b:{...box}}; e.preventDefault(); };
+    const move=e=>{ if(!drag) return; e.preventDefault(); const p=pt(e), dx=p.x-drag.p.x, dy=p.y-drag.p.y, b=drag.b, MIN=30; let {x,y,w,h}=b;
+      if(drag.h==='move'){ x=Math.max(0,Math.min(W-w,b.x+dx)); y=Math.max(0,Math.min(H-h,b.y+dy)); }
+      else{
+        const L=drag.h.includes('w'), T=drag.h.includes('n');
+        let nx=L?Math.min(b.x+b.w-MIN,Math.max(0,b.x+dx)):b.x, ny=T?Math.min(b.y+b.h-MIN,Math.max(0,b.y+dy)):b.y;
+        let nw=L?b.x+b.w-nx:Math.max(MIN,Math.min(W-b.x,b.w+dx)), nh=T?b.y+b.h-ny:Math.max(MIN,Math.min(H-b.y,b.h+dy));
+        if(ratio){ nh=nw/ratio; if(T) ny=b.y+b.h-nh; if(ny<0||ny+nh>H){ nh=T?b.y+b.h:H-b.y; nw=nh*ratio; if(L) nx=b.x+b.w-nw; ny=T?b.y+b.h-nh:b.y; } if(nx<0){ nx=0; } }
+        x=nx; y=ny; w=Math.min(nw,W-nx); h=Math.min(nh,H-ny);
+      }
+      box={x,y,w,h}; place(); };
+    const up=()=>{ drag=null; };
+    sel.addEventListener('mousedown',down); sel.addEventListener('touchstart',down,{passive:false});
+    addEventListener('mousemove',move); addEventListener('touchmove',move,{passive:false}); addEventListener('mouseup',up); addEventListener('touchend',up);
+    const close=v=>{ removeEventListener('mousemove',move); removeEventListener('touchmove',move); removeEventListener('mouseup',up); removeEventListener('touchend',up); ov.remove(); if(!$('#modal-root').children.length) document.documentElement.classList.remove('modal-open'); resolve(v); };
+    ov.querySelectorAll('[data-r]').forEach(b=>b.onclick=()=>{ ratio=Number(b.dataset.r); ov.querySelectorAll('[data-r]').forEach(x=>x.setAttribute('aria-pressed',x===b)); box={x:0,y:0,w:W,h:H}; applyRatio(); place(); });
+    ov.querySelector('[data-rot]').onclick=()=>{ rot=(rot+90)%360; draw(); };
+    ov.querySelector('[data-no]').onclick=()=>close(null);
+    ov.addEventListener('keydown',e=>{ if(e.key==='Escape'){ e.stopPropagation(); close(null); } });
+    ov.querySelector('[data-ok]').onclick=()=>{
+      // recorte a tamaño real (máximo 1200 px de lado)
+      const iw=rot%180?img.naturalHeight:img.naturalWidth, k=iw/W;
+      const full=document.createElement('canvas'); full.width=Math.round(W*k); full.height=Math.round(H*k);
+      const g=full.getContext('2d'); g.translate(full.width/2,full.height/2); g.rotate(rot*Math.PI/180);
+      const dw=rot%180?full.height:full.width, dh=rot%180?full.width:full.height; g.drawImage(img,-dw/2,-dh/2,dw,dh);
+      const sx=box.x*k, sy=box.y*k, sw=box.w*k, sh=box.h*k, sc=Math.min(1,1200/Math.max(sw,sh));
+      const out=document.createElement('canvas'); out.width=Math.round(sw*sc); out.height=Math.round(sh*sc);
+      out.getContext('2d').drawImage(full,sx,sy,sw,sh,0,0,out.width,out.height);
+      let q=.85, url=''; try{ for(let i=0;i<6;i++){ url=out.toDataURL('image/jpeg',q); if(url.length<350000) break; q-=.08; } }catch{ toast('No se puede editar esa foto'); return close(null); }
+      close(url);
+    };
+    requestAnimationFrame(draw);
+  });
+}
 
 /* ===== Editor ===== */
 const servOptions = cur => { const n=parseInt(cur)||0; const max=Math.max(24,n); return `<option value="" ${n?'':'selected'}>—</option>`+Array.from({length:max},(_,i)=>i+1).map(i=>`<option value="${i}" ${i===n?'selected':''}>${i} ${i===1?'ración':'raciones'}</option>`).join(''); };
@@ -1276,6 +1347,7 @@ function editorModal(d){
     <div class="field"><label for="etitle">Título</label><input id="etitle" class="inp" required maxlength="120" value="${esc(r.title)}"></div>
     <div class="field"><label>Foto del plato</label><div class="imgbox"><span id="eimgPrev">${image?`<img src="${esc(image)}" alt="" referrerpolicy="no-referrer">`:''}</span>
       <label class="btn sm" for="eimg">${ico('camera')}${image?'Cambiar foto':'Añadir foto'}</label><input id="eimg" type="file" accept="image/*" hidden>
+      <button type="button" class="btn sm" id="eimgEdit" ${image?'':'hidden'}>${ico('crop')}Editar</button>
       <button type="button" class="btn sm ghost" id="eimgDel" ${image?'':'hidden'}>Quitar</button></div>
       <span class="muted" style="font-size:13px">Si no pones ninguna, la IA crea una foto del plato al guardar.</span></div>
     <div class="grid2">
@@ -1297,8 +1369,9 @@ function editorModal(d){
   </form>`,{wide:true});
   ['eing','esteps','enotes'].forEach(id=>enableRichPaste($('#'+id,m)));
   $('#eimg',m).onchange=async e=>{const f=e.target.files[0];if(!f)return;$('#eimgPrev',m).innerHTML='<span class="spin"></span>';
-    try{ image=await compressImage(f); $('#eimgPrev',m).innerHTML=`<img src="${image}" alt="">`; $('#eimgDel',m).hidden=false; }catch{ $('#eimgPrev',m).innerHTML=''; toast('No se pudo leer esa imagen'); }};
-  $('#eimgDel',m).onclick=()=>{image='';$('#eimgPrev',m).innerHTML='';$('#eimgDel',m).hidden=true};
+    try{ image=await compressImage(f); $('#eimgPrev',m).innerHTML=`<img src="${image}" alt="">`; $('#eimgDel',m).hidden=false; $('#eimgEdit',m).hidden=false; }catch{ $('#eimgPrev',m).innerHTML=''; toast('No se pudo leer esa imagen'); }};
+  $('#eimgEdit',m).onclick=async()=>{ const out=await cropImage(image); if(out){ image=out; $('#eimgPrev',m).innerHTML=`<img src="${image}" alt="">`; } };
+  $('#eimgDel',m).onclick=()=>{image='';$('#eimgPrev',m).innerHTML='';$('#eimgDel',m).hidden=true;$('#eimgEdit',m).hidden=true};
   bindFolderSelect($('#efold',m));
   const collect=()=>{
     const lines=v=>v.split('\n').map(s=>s.replace(/^\s*[-•*]\s*/,'').trim()).filter(Boolean);
@@ -2272,7 +2345,7 @@ function admBulkHtml(){
   return `<details class="card bulk" ${S.bulkOpen?'open':''}><summary><h2 style="display:inline">${ico('upload')}Subida masiva</h2></summary>
     <form id="bkF" style="display:grid;gap:14px;margin-top:12px">
       <div id="bkFields" style="display:grid;gap:14px">
-      <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea></div>
+      <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea><p class="note-warn">${ico('info')}<span><b>Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha.</span></p></div>
       <div class="field"><label>Archivos de cualquier tipo: PDF, Word, TXT, JSON, HTML, fotos, vídeos o audios</label><div class="row"><label class="btn" for="bkFiles">${ico('upload')}Elegir archivos</label><input id="bkFiles" type="file" multiple hidden><span class="muted" id="bkFn" style="font-size:13px"></span></div>
         <span class="muted" style="font-size:13px">Si un archivo tiene varias recetas (un recetario en PDF o Word, por ejemplo), se sacan todas.</span></div>
       <div class="field"><label for="bkText">Recetas en texto (pega una o varias; se separan solas)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>

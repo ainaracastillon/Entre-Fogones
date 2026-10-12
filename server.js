@@ -487,6 +487,16 @@ api.delete('/folders/:id', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+/* Foto de otra web, pasada por el servidor para poder recortarla en el navegador */
+api.get('/imgproxy', async (req, res) => {
+  try {
+    const u = String(req.query.u || ''); if (!/^https?:\/\//.test(u)) return res.status(400).end();
+    const r = await safeFetch(u, { headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' } });
+    const type = r.headers.get('content-type') || ''; if (!r.ok || !/^image\//.test(type)) return res.status(404).end();
+    const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 10e6) return res.status(413).end();
+    res.set('content-type', type).set('cache-control', 'private, max-age=600').send(buf);
+  } catch { res.status(404).end(); }
+});
 /* Recetas */
 api.put('/recipes/:id', async (req, res, next) => {
   try {
@@ -1187,11 +1197,11 @@ function restFor(e) {
   return 0;
 }
 // Cuándo vuelve a estar libre la IA (lo antes que se pueda usar algún modelo)
-function aiFreeAt({ bg = false, hear = false } = {}) {
+function aiFreeAt({ bg = false, hear = false, exclude = [] } = {}) {
   const t = Date.now(), cands = [];
   if (hear) { if (GROQ_KEY) cands.push(aiRest.whisper || 0); if (HAS_CF) cands.push(aiRest.cfwhisper || 0); }
   else for (const p of (bg ? PROVIDERS.filter(p => p !== 'cloudflare') : PROVIDERS)) {
-    if (p === 'groq') { const ms = (bg ? GROQ_BG : GROQ_TEXT).map(m => modelRest[m] || 0).filter(x => x - t < 300 * 864e5); cands.push(Math.max(aiRest.groq || 0, ms.length ? Math.min(...ms) : t + 864e5)); }
+    if (p === 'groq') { const ms = (bg ? GROQ_BG : GROQ_TEXT).filter(m => !exclude.includes(m)).map(m => modelRest[m] || 0).filter(x => x - t < 300 * 864e5); cands.push(Math.max(aiRest.groq || 0, ms.length ? Math.min(...ms) : t + 864e5)); }
     else cands.push(aiRest[p] || 0);
   }
   const at = cands.length ? Math.min(...cands) : t; return Math.max(at, t + 60e3);
@@ -1208,7 +1218,7 @@ function aiBusyMsg(e, extra = '') {
   return (long ? 'La IA gratuita ha llegado a su límite de uso por hoy. ' : 'La IA gratuita está al límite ahora mismo. ') + `Volverá a estar libre ${hhmm(at)} aproximadamente.` + (extra ? ' ' + extra : '');
 }
 async function llm(opts) {
-  let last;
+  let last, limited = false; const exclude = [];
   const provs = opts.bg ? PROVIDERS.filter(p => p !== 'cloudflare') : PROVIDERS;
   const live = provs.filter(p => !(aiRest[p] > Date.now()));
   for (const p of live.length ? live : provs) {
@@ -1218,11 +1228,13 @@ async function llm(opts) {
       last = new Error(p + ' sin respuesta');
     } catch (e) {
       console.error('IA', p, String(e.message).slice(0, 200));
+      if (e.exclude) exclude.push(...e.exclude);
+      if (e.status === 429) limited = true;
       if (e.status === 429) aiRest[p] = p === 'cloudflare' && /daily/i.test(e.message) ? nextUtcMidnight() : Date.now() + (p === 'groq' ? 60e3 : e.wait || 90e3);
       last = e;
     }
   }
-  if (last && last.status === 429) last.retryAt = aiFreeAt({ bg: opts.bg });
+  if (last && limited) { last.status = 429; last.retryAt = aiFreeAt({ bg: opts.bg, exclude }); }
   throw last || new Error('IA no disponible');
 }
 async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }) {
@@ -1235,18 +1247,20 @@ async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }
     const url = 'https://api.groq.com/openai/v1/chat/completions';
     const hasImage = messages.some(m => m.image);
     const list = hasImage ? GROQ_VISION : bg ? GROQ_BG : GROQ_TEXT;
-    let last, rateLimited = false;
+    let last, rateLimited = false; const tooBig = [];
     for (const model of list) {
       if (modelRest[model] > Date.now()) { rateLimited = true; continue; }
       try { return await openaiCompat({ url, key: GROQ_KEY, model, system, messages, maxTokens: /8b-instant/.test(model) ? Math.min(maxTokens, 7000) : maxTokens }); }
       catch (e) {
-        const r = restFor(e); if (r) modelRest[model] = Date.now() + r;
+        // 413: este texto es demasiado largo para ese modelo (no es que esté sin cupo): se prueba el siguiente
+        if (e.status === 413) tooBig.push(model);
+        else { const r = restFor(e); if (r) modelRest[model] = Date.now() + r; }
         if (e.status === 429) rateLimited = true;
         console.error('groq', model, e.status || '', String(e.message).slice(0, 120));
         last = e;
       }
     }
-    const e = last || new Error('groq: todos los modelos descansando'); if (rateLimited) e.status = 429; throw e;
+    const e = last || new Error('groq: todos los modelos descansando'); if (rateLimited) e.status = 429; e.exclude = tooBig; throw e;
   }
   if (provider === 'openai') {
     const msgs = system ? [{ role: 'system', content: system }] : [];
@@ -2143,12 +2157,12 @@ async function extractMany(text, hint = '') {
   const clean = String(text || '').replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
   if (clean.length < 30) return [];
   const chunks = []; let cur = '';
-  for (const para of clean.split(/\n(?=\s*\S)/)) { if ((cur + '\n' + para).length > 14000 && cur) { chunks.push(cur); cur = para; } else cur += (cur ? '\n' : '') + para; }
+  for (const para of clean.split(/\n(?=\s*\S)/)) { if ((cur + '\n' + para).length > 9000 && cur) { chunks.push(cur); cur = para; } else cur += (cur ? '\n' : '') + para; }
   if (cur) chunks.push(cur);
   const all = [];
   for (const ch of chunks.slice(0, 25)) {
     countAi();
-    const out = parseJson(await llm({ maxTokens: 7000, messages: [{ role: 'user', text: `En el texto que va entre las marcas puede haber una o varias recetas. Extrae TODAS, completas, sin inventar nada, en español (traduce si hace falta). Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si una receta queda cortada al principio o al final del texto, inclúyela con lo que haya.${hint ? '\n' + hint : ''}
+    const out = parseJson(await llm({ maxTokens: 5000, messages: [{ role: 'user', text: `En el texto que va entre las marcas puede haber una o varias recetas. Extrae TODAS, completas, sin inventar nada, en español (traduce si hace falta). Un ingrediente por elemento con su cantidad, un paso por elemento sin numerar. Si una receta queda cortada al principio o al final del texto, inclúyela con lo que haya.${hint ? '\n' + hint : ''}
 Devuelve SOLO un objeto JSON: {"recipes": [${SCHEMA}, ...]}. Si no hay ninguna receta, {"recipes": []}.
 <<<TEXTO
 ${ch}
@@ -2324,6 +2338,14 @@ adm.delete('/bulk/queue', async (req, res, next) => {
   try { await q("DELETE FROM bulk_queue WHERE status<>'done'"); res.json({ ok: true }); } catch (e) { next(e); }
 });
 let bulkQueueBusy = false, bulkQueueTimer = null;
+// Render apaga el servidor gratuito tras 15 minutos sin visitas; mientras haya recetas en cola se visita a sí mismo para seguir subiéndolas
+async function keepAwake() {
+  try {
+    const base = process.env.RENDER_EXTERNAL_URL; if (!base) return;
+    const n = (await q("SELECT count(*)::int n FROM bulk_queue WHERE status='pending'")).rows[0].n; if (!n) return;
+    await fetch(base.replace(/\/$/, '') + '/healthz', { signal: AbortSignal.timeout(20000) }).catch(() => {});
+  } catch { }
+}
 async function runBulkQueue() {
   if (bulkQueueBusy) return; bulkQueueBusy = true;
   try {
@@ -2527,5 +2549,5 @@ app.get('/legal/:page', (req, res, next) => {
 app.get('*', (req, res) => { res.setHeader('Cache-Control', 'no-cache'); res.sendFile(path.join(__dirname, 'public', 'index.html')); });
 app.use((err, req, res, next) => { console.error(err); res.status(500).json({ error: 'Algo ha fallado en el servidor. Vuelve a intentarlo.' }); });
 
-migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setTimeout(() => suggNutrition().catch(() => {}), 40000); setInterval(backfillRecipes, 3 * 3600e3); setTimeout(() => runBulkQueue().catch(() => {}), 60000); setInterval(() => runBulkQueue().catch(() => {}), 15 * 60e3); })
+migrate().then(seedSuggestions).then(() => { app.listen(PORT, () => console.log('Entre Fogones en el puerto ' + PORT)); setTimeout(() => processSuggestions().catch(e => console.error(e)), 5000); setInterval(() => processSuggestions().catch(e => console.error(e)), 30 * 60e3); setTimeout(backfillRecipes, 20000); setTimeout(() => suggNutrition().catch(() => {}), 40000); setInterval(backfillRecipes, 3 * 3600e3); setTimeout(() => runBulkQueue().catch(() => {}), 60000); setInterval(() => runBulkQueue().catch(() => {}), 5 * 60e3); setInterval(keepAwake, 10 * 60e3); })
   .catch(e => { console.error('No se pudo preparar la base de datos', e); process.exit(1); });
