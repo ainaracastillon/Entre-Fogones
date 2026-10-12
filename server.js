@@ -1032,6 +1032,7 @@ async function videoText(url) {
     }
     out.text = [out.title && desc && !desc.includes(out.title) ? 'Título: ' + out.title : '', desc, transcript && 'Lo que se dice en el vídeo: ' + transcript].filter(Boolean).join('\n\n');
     if (!desc && !transcript) out.platform = 'youtube';
+    if (process.env.DIAGV || true) console.log('DIAGY', id, JSON.stringify({ html: html.length, pr: !!pr, sd: (html.match(/"shortDescription":"/g) || []).length, ad: (html.match(/attributedDescription/g) || []).length, adm: !!html.match(/"attributedDescription(?:BodyText)?":\{"content":"((?:[^"\\]|\\.)*)"/), inv: inv ? { t: inv.title.slice(0, 30), d: inv.description.length, tr: (inv.transcript || '').length } : null, desc: (desc || '').length }));
   } else if (/tiktok/.test(host)) {
     let t = null;
     try { t = await tiktokData(url); } catch (e) { if (e.dead) throw e; console.error('tiktok', e.message); }
@@ -1054,6 +1055,12 @@ async function videoText(url) {
   } else {
     let html = ''; try { html = await getText(url, { 'User-Agent': BOT_UA }); } catch { }
     out.title = metaTag(html, 'og:title'); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.image = metaTag(html, 'og:image');
+    if (/facebook|fb\.watch/.test(host) && out.title) {
+      // en Facebook el título es "314 mil reproducciones · 46 mil reacciones | <texto completo> | <autor>"
+      const t = out.title.replace(/^[^|]*(reproducciones|views|reacciones|reactions)[^|]*\|\s*/i, '').replace(/\s*\|\s*[^|]{1,60}$/, '').trim();
+      if (t.length > (out.text || '').length) out.text = t;
+      out.title = t.split('\n')[0].slice(0, 120);
+    }
     // Facebook enseña textos genéricos de su portada cuando no deja ver el vídeo: esos no sirven
     if (/facebook|fb\.watch/.test(host)) { if (/espacio para disfrutar de v[ií]deos|Log in or sign up|Inicia sesi[oó]n o reg[ií]strate|^Facebook$/i.test(out.text + ' ' + out.title) || !out.text) { out.text = ''; out.platform = 'facebook'; } }
   }
