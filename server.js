@@ -2105,13 +2105,12 @@ async function videoRecipes(title, text) {
 }
 // diagnóstico temporal de TikTok
 app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
-  const url = String(req.query.u || ''); const out = [];
-  const code = (url.match(/vm\.tiktok\.com\/(\w+)/) || [])[1];
-  const uas = { desk: BROWSER_UA, iphone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1', bot: 'facebookexternalhit/1.1', curl: 'curl/8.4.0', none: '' };
-  const urls = [url, code && 'https://www.tiktok.com/t/' + code + '/', code && 'https://vt.tiktok.com/' + code + '/'].filter(Boolean);
-  for (const u of urls) for (const [k, ua] of Object.entries(uas)) {
-    try { const r = await fetch(u, { redirect: 'manual', signal: AbortSignal.timeout(10000), headers: ua ? { 'User-Agent': ua } : {} });
-      out.push([u, k, r.status, (r.headers.get('location') || '').slice(0, 200)]); } catch (e) { out.push([u, k, 'err ' + e.message]); }
+  const url = String(req.query.u || ''); const out = {};
+  try { const r = await fetch('https://www.tikwm.com/api/?hd=0&url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': BROWSER_UA } });
+    const j = await r.json(); out.tikwm = { status: r.status, code: j.code, msg: j.msg, id: j.data?.id, title: (j.data?.title || '').slice(0, 200), play: !!j.data?.play, dur: j.data?.duration, author: j.data?.author?.unique_id }; } catch (e) { out.tikwmErr = e.message; }
+  if (out.tikwm?.id && out.tikwm.author) {
+    const full = `https://www.tiktok.com/@${out.tikwm.author}/video/${out.tikwm.id}`; out.full = full;
+    try { const t = await tiktokData(full); out.direct = { how: t.how, desc: (t.desc || '').slice(0, 120), speech: (t.speech || '').slice(0, 80) }; } catch (e) { out.directErr = e.message; }
   }
   res.json(out);
 });
