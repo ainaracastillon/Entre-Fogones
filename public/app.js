@@ -2271,6 +2271,7 @@ function admUserBook(id){
 function admBulkHtml(){
   return `<details class="card bulk" ${S.bulkOpen?'open':''}><summary><h2 style="display:inline">${ico('upload')}Subida masiva</h2></summary>
     <form id="bkF" style="display:grid;gap:14px;margin-top:12px">
+      <div id="bkFields" style="display:grid;gap:14px">
       <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea></div>
       <div class="field"><label>Archivos de cualquier tipo: PDF, Word, TXT, JSON, HTML, fotos, vídeos o audios</label><div class="row"><label class="btn" for="bkFiles">${ico('upload')}Elegir archivos</label><input id="bkFiles" type="file" multiple hidden><span class="muted" id="bkFn" style="font-size:13px"></span></div>
         <span class="muted" style="font-size:13px">Si un archivo tiene varias recetas (un recetario en PDF o Word, por ejemplo), se sacan todas.</span></div>
@@ -2281,7 +2282,9 @@ function admBulkHtml(){
         <div class="grid2" id="bkUser" hidden><div class="field to-wrap"><label for="bkU">Usuarios (varios separados por comas)</label><input id="bkU" class="inp" placeholder="Escribe un nombre o @usuario" autocomplete="off" role="combobox" aria-controls="bkSug" aria-expanded="false"><div id="bkSug" class="to-sug" role="listbox" hidden></div></div><div class="field"><label for="bkFo">Recetario (se crea si no existe)</label><input id="bkFo" class="inp" placeholder="Por ejemplo: Postres"></div>
           <label class="opt-line"><input type="checkbox" id="bkPub"> Hacerlas públicas (Recetas preferidas por los usuarios)</label></div></fieldset>
       <div class="field"><label for="bkCredit">Atribuir a (autor o fuente que se muestra, opcional)</label><input id="bkCredit" class="inp" maxlength="120" placeholder="Por ejemplo: la abuela Carmen"></div>
-      <div class="row"><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button><button type="button" class="btn danger" id="bkStop" hidden>${ico('x')}Cancelar</button><span class="muted" id="bkProg" style="font-size:13px"></span></div>
+      <div class="row"><button class="btn pri" id="bkGo">${ico('upload')}Subir recetas</button></div>
+      </div>
+      <div class="row" id="bkRun" hidden><span class="spin"></span><b id="bkProg" style="font-size:15px"></b><button type="button" class="btn danger sm" id="bkStop">${ico('x')}Cancelar</button></div>
       <ol class="bk-log" id="bkLog"></ol>
       <div id="bkSum" hidden></div>
     </form></details>`;
@@ -2302,11 +2305,13 @@ function bindAdmBulk(){
     const dest=f.querySelector('input[name=bkDest]:checked').value==='user'?{type:'user', username:$('#bkU').value.trim(), folder:$('#bkFo').value.trim(), public:$('#bkPub').checked}:{type:'sugg'};
     if(dest.type==='user' && !dest.username.replace(/[,\s@]/g,'')){ toast('Escribe al menos un usuario'); return; }
     const credit=$('#bkCredit').value.trim(), log=$('#bkLog'), b=$('#bkGo'); b.disabled=true; log.innerHTML=''; $('#bkSum').hidden=true;
+    // mientras se sube, el formulario se cierra y solo se ve el progreso
+    $('#bkFields').hidden=true; $('#bkRun').hidden=false; f.closest('details').scrollIntoView?.({block:'start', behavior:'smooth'});
     // recuento para el resumen final
     const cnt={items:0, recs:0, invalid:0, failed:0, queued:0, cancelled:0}; const busyUrls=[]; let retryAt=0, when='';
     // se puede cancelar en cualquier momento: corta lo que se esté leyendo y no sigue
     let ctl=new AbortController(), stopped=false;
-    const stop=$('#bkStop'), prog=$('#bkProg'); stop.hidden=false;
+    const stop=$('#bkStop'), prog=$('#bkProg');
     stop.onclick=()=>{ stopped=true; ctl.abort(); stop.disabled=true; prog.textContent='Cancelando…'; };
     const call=async(path,opts)=>{ const r=await fetch(path,{credentials:'same-origin',signal:ctl.signal,...opts}); const jj=await r.json().catch(()=>({})); if(!r.ok) throw {error:jj.error, status:r.status, retryAt:jj.retryAt}; return jj; };
     const raw=(path,blob)=>call(path,{method:'POST',headers:{'content-type':'application/octet-stream'},body:blob});
@@ -2341,7 +2346,7 @@ function bindAdmBulk(){
     }
     if(stopped){ jobs.slice(done).forEach(j=>{ const li=document.createElement('li'); li.className='bad'; li.innerHTML=`${ico('x')} ${esc(j.l)} — cancelado`; log.append(li); cnt.cancelled++; }); }
     if(busyUrls.length){ try{ const qr=await api('POST','/admin/bulk/queue',{urls:busyUrls, dest, credit, retryAt}); when=qr.when||''; }catch{ cnt.failed+=cnt.queued; cnt.queued=0; } }
-    stop.hidden=true; stop.disabled=false; prog.textContent='';
+    $('#bkRun').hidden=true; stop.disabled=false; prog.textContent='';
     b.disabled=false; S.sugg=null; admBulkHistory().catch(()=>{});
     // resumen al final, con el botón de finalizar
     const pl=(n,a,b)=>`${n} ${n===1?a:b}`;
@@ -2353,8 +2358,11 @@ function bindAdmBulk(){
         <li class="bad">${ico('x')}<b>${pl(cnt.failed+cnt.queued,'no se ha podido subir','no se han podido subir')}</b>${cnt.queued?` <span class="muted">— la IA gratuita ha llegado a su límite. ${pl(cnt.queued,'queda','quedan')} en cola y se ${cnt.queued===1?'subirá':'subirán'} sola${cnt.queued===1?'':'s'} ${when?'a partir de '+esc(when):'cuando vuelva a estar libre'}, al mismo destino.</span>`:''}</li>
         ${cnt.cancelled?`<li class="bad">${ico('x')}<b>${pl(cnt.cancelled,'cancelado','cancelados')}</b></li>`:''}
       </ul>
-      <div class="row" style="justify-content:flex-end"><button type="button" class="btn pri" id="bkEnd">${ico('check')}Finalizar</button></div></div>`;
-    $('#bkEnd').onclick=()=>{ log.innerHTML=''; sum.hidden=true; sum.innerHTML=''; $('#bkUrls').value=''; $('#bkText').value=''; $('#bkFiles').value=''; $('#bkFn').textContent=''; f.closest('details').open=false; S.bulkOpen=false; f.closest('details').scrollIntoView?.({block:'start'}); };
+      <div class="row" style="justify-content:flex-end"><button type="button" class="btn" id="bkMore">${ico('plus')}Añadir más recetas</button><button type="button" class="btn pri" id="bkEnd">${ico('check')}Finalizar</button></div></div>`;
+    // limpiar para la siguiente subida (se mantiene el destino elegido)
+    const reset=()=>{ log.innerHTML=''; sum.hidden=true; sum.innerHTML=''; $('#bkUrls').value=''; $('#bkText').value=''; $('#bkFiles').value=''; $('#bkFn').textContent=''; $('#bkFields').hidden=false; };
+    $('#bkEnd').onclick=()=>{ reset(); f.closest('details').open=false; S.bulkOpen=false; f.closest('details').scrollIntoView?.({block:'start'}); };
+    $('#bkMore').onclick=()=>{ reset(); f.closest('details').scrollIntoView?.({block:'start', behavior:'smooth'}); setTimeout(()=>$('#bkUrls').focus(),300); };
     sum.scrollIntoView?.({block:'nearest', behavior:'smooth'});
   };
 }
