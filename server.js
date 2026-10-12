@@ -2147,6 +2147,32 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
+// diagnóstico temporal de vídeos
+app.get('/api/_diag/vv-8h2m', async (req, res) => {
+  const out = {}; const tryIt = async (k, fn) => { try { out[k] = await fn(); } catch (e) { out[k] = 'ERR ' + String(e.message).slice(0, 200); } };
+  const yid = String(req.query.y || 'tn3E0RjLSb0'), fb = String(req.query.f || 'https://www.facebook.com/reel/173724362174791');
+  await tryIt('yt_watch', async () => { const r = await fetch(`https://www.youtube.com/watch?v=${yid}&hl=es`, { headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'es-ES', cookie: 'CONSENT=YES+1; SOCS=CAI' } }); const h = await r.text();
+    const m = h.match(/ytInitialPlayerResponse\s*=\s*(\{[\s\S]+?\})\s*;\s*(?:var\s|<\/script>)/); let pr = null; try { pr = m && JSON.parse(m[1]); } catch { }
+    return { st: r.status, len: h.length, hasPR: !!pr, play: pr?.playabilityStatus?.status, reason: pr?.playabilityStatus?.reason, desc: (pr?.videoDetails?.shortDescription || '').slice(0, 120), ogd: metaTag(h, 'og:description').slice(0, 120), caps: (pr?.captions?.playerCaptionsTracklistRenderer?.captionTracks || []).map(t => t.languageCode), fmts: (pr?.streamingData?.adaptiveFormats || []).length, urlFmt: !!(pr?.streamingData?.adaptiveFormats || []).find(f => f.url) }; });
+  for (const [k, ctx, ua] of [['yt_ios', { clientName: 'IOS', clientVersion: '20.10.4', deviceMake: 'Apple', deviceModel: 'iPhone16,2', osName: 'iPhone', osVersion: '18.3.2.22D82' }, 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)'],
+    ['yt_android_vr', { clientName: 'ANDROID_VR', clientVersion: '1.62.27', deviceMake: 'Oculus', deviceModel: 'Quest 3', androidSdkVersion: 32, osName: 'Android', osVersion: '12L' }, 'com.google.android.apps.youtube.vr.oculus/1.62.27 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip'],
+    ['yt_tv', { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0' }, BROWSER_UA],
+    ['yt_web_embed', { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.20250310.01.00' }, BROWSER_UA]]) {
+    await tryIt(k, async () => { const r = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', { method: 'POST', headers: { 'content-type': 'application/json', 'User-Agent': ua }, body: JSON.stringify({ context: { client: { ...ctx, hl: 'es', gl: 'ES' }, thirdParty: { embedUrl: 'https://www.google.com/' } }, videoId: yid, contentCheckOk: true, racyCheckOk: true }) });
+      const pr = await r.json(); const fm = [...(pr.streamingData?.adaptiveFormats || []), ...(pr.streamingData?.formats || [])];
+      const a = fm.filter(f => /audio/.test(f.mimeType) && f.url).sort((x, y) => (x.bitrate || 0) - (y.bitrate || 0))[0];
+      let dl = null; if (a) { try { const rr = await fetch(a.url, { headers: { 'User-Agent': ua, Range: 'bytes=0-200000' } }); dl = rr.status + ' ' + (await rr.arrayBuffer()).byteLength; } catch (e) { dl = 'err ' + e.message; } }
+      return { st: r.status, play: pr.playabilityStatus?.status, reason: pr.playabilityStatus?.reason, desc: (pr.videoDetails?.shortDescription || '').slice(0, 100), caps: (pr.captions?.playerCaptionsTracklistRenderer?.captionTracks || []).length, fmts: fm.length, audioUrl: !!a, dl }; });
+  }
+  await tryIt('yt_oembed', async () => { const r = await fetch(`https://www.youtube.com/oembed?format=json&url=https://www.youtube.com/watch?v=${yid}`); return r.status + ' ' + (await r.text()).slice(0, 150); });
+  for (const [k, ua] of [['fb_bot', BOT_UA], ['fb_browser', BROWSER_UA], ['fb_iphone', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'], ['fb_curl', 'curl/8.4.0']]) {
+    await tryIt(k, async () => { const jar = {}; const r = await jarFetch(fb, jar, { 'User-Agent': ua, Accept: 'text/html', 'sec-fetch-mode': 'navigate' }); const h = await r.text();
+      const vids = [...new Set((h.match(/(?:browser_native_(?:sd|hd)_url|playable_url(?:_quality_hd)?|"sd_src(?:_no_ratelimit)?|"hd_src)\\?"\s*:\s*\\?"(https[^"]+?)\\?"/g) || []).map(x => x.slice(0, 40)))];
+      return { st: r.status, final: String(r.finalUrl).slice(0, 120), len: h.length, title: metaTag(h, 'og:title').slice(0, 100), ogd: metaTag(h, 'og:description').slice(0, 150), ogv: !!metaTag(h, 'og:video') || !!metaTag(h, 'og:video:url'), vids, login: /login_form|Inicia sesión|Log in/i.test(h) }; });
+  }
+  await tryIt('fb_mbasic', async () => { const r = await jarFetch(fb.replace('www.facebook.com', 'm.facebook.com'), {}, { 'User-Agent': 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Mobile Safari/537.36' }); const h = await r.text(); return { st: r.status, final: String(r.finalUrl).slice(0, 120), len: h.length, ogd: metaTag(h, 'og:description').slice(0, 150), vid: /video_redirect|\.mp4/.test(h) }; });
+  res.json(out);
+});
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
