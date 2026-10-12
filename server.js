@@ -2106,11 +2106,16 @@ async function videoRecipes(title, text) {
 // diagnóstico temporal de TikTok
 app.get('/api/_diag/tt-7f3k9q', async (req, res) => {
   const url = String(req.query.u || ''); const out = {};
-  try { const r = await fetch('https://www.tikwm.com/api/?hd=0&url=' + encodeURIComponent(url), { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': BROWSER_UA } });
-    const j = await r.json(); out.tikwm = { status: r.status, code: j.code, msg: j.msg, id: j.data?.id, title: (j.data?.title || '').slice(0, 200), play: !!j.data?.play, dur: j.data?.duration, author: j.data?.author?.unique_id }; } catch (e) { out.tikwmErr = e.message; }
-  if (out.tikwm?.id && out.tikwm.author) {
-    const full = `https://www.tiktok.com/@${out.tikwm.author}/video/${out.tikwm.id}`; out.full = full;
-    try { const t = await tiktokData(full); out.direct = { how: t.how, desc: (t.desc || '').slice(0, 120), speech: (t.speech || '').slice(0, 80) }; } catch (e) { out.directErr = e.message; }
+  const tries = [
+    ['tikwm-post', 'https://www.tikwm.com/api/', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA }, body: 'hd=0&url=' + encodeURIComponent(url) }],
+    ['tikwm-get', 'https://tikwm.com/api/?url=' + encodeURIComponent(url), { headers: { 'User-Agent': BROWSER_UA } }],
+    ['lovetik', 'https://lovetik.com/api/ajax/search', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA }, body: 'query=' + encodeURIComponent(url) }],
+    ['unshorten', 'https://unshorten.me/json/' + encodeURIComponent(url), {}],
+    ['tt-mobile', url, { redirect: 'manual', headers: { 'User-Agent': 'com.zhiliaoapp.musically/2023600040 (Linux; U; Android 13; es_ES; Pixel 7; Build/TQ3A.230805.001; Cronet/TTNetVersion:5f9640e3 2023-08-24 QuicVersion:47555d5a 2023-07-06)' } }],
+  ];
+  for (const [k, u, o] of tries) {
+    try { const r = await fetch(u, { signal: AbortSignal.timeout(20000), ...o }); const t = await r.text();
+      out[k] = { status: r.status, loc: r.headers.get('location'), body: t.slice(0, 400) }; } catch (e) { out[k] = 'err ' + e.message; }
   }
   res.json(out);
 });
