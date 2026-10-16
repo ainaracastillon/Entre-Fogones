@@ -394,11 +394,16 @@ api.post('/contact', async (req, res, next) => {
 
 /* Recuperar la contraseña por correo */
 const MAIL_FROM = process.env.MAIL_FROM || '';
-const mailReady = () => !!((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM);
+// El correo sale por el Brevo de Kairos (MAIL_RELAY_URL + MAIL_RELAY_TOKEN) o con clave propia de Brevo o Resend
+const RELAY_URL = process.env.MAIL_RELAY_URL || '', RELAY_TOKEN = process.env.MAIL_RELAY_TOKEN || '';
+const mailReady = () => !!((RELAY_URL && RELAY_TOKEN) || ((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM));
 async function sendMail(to, subject, html, text) {
   const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : MAIL_FROM;
   let r;
-  if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
+  if (RELAY_URL && RELAY_TOKEN) r = await fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN },
+    body: JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info.kairospace+entrefogones@gmail.com>', to, subject, html, text }) });
+  else if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
     body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
   else r = await fetch('https://api.resend.com/emails', { method: 'POST', signal: AbortSignal.timeout(20000),
