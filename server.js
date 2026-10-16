@@ -402,7 +402,7 @@ async function sendMail(to, subject, html, text) {
   let r;
   if (RELAY_URL && RELAY_TOKEN) r = await fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN },
-    body: JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info.kairospace+entrefogones@gmail.com>', to, subject, html, text }) });
+    body: JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info@entrefogones.aleeas.com>', to, subject, html, text }) });
   else if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
     body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
