@@ -1448,6 +1448,17 @@ api.put('/me/prefs', needProfile, async (req, res, next) => {
     if ('fontScale' in b) p.fontScale = Math.max(0.8, Math.min(1.6, Number(b.fontScale) || 1));
     if ('diabetes' in b) p.diabetes = ['', 'tipo1', 'tipo2', 'gestacional', 'prediabetes'].includes(b.diabetes) ? b.diabetes : '';
     if ('diet' in b) p.diet = String(b.diet || '').slice(0, 300);
+    // objetivos del menú semanal: calorías al día y reparto en % de proteínas, grasas e hidratos
+    if ('menuGoals' in b) {
+      const g = b.menuGoals, n = (v, lo, hi) => Math.round(Math.max(lo, Math.min(hi, Number(v) || 0)));
+      if (!g) delete p.menuGoals;
+      else {
+        const goal = { kcal: n(g.kcal, 800, 6000), protein: n(g.protein, 5, 80), fat: n(g.fat, 5, 80), carbs: n(g.carbs, 5, 85) };
+        const sum = goal.protein + goal.fat + goal.carbs;
+        if (sum < 98 || sum > 102) return res.status(400).json({ error: `Los porcentajes deben sumar 100 % (ahora suman ${sum} %).` });
+        p.menuGoals = goal;
+      }
+    }
     if (b.notify && typeof b.notify === 'object') p.notify = Object.fromEntries(['messages', 'friends', 'shares', 'friendRecipes'].map(k => [k, b.notify[k] !== false]));
     await q('UPDATE users SET prefs=$1 WHERE id=$2', [p, req.user.id]);
     res.json({ ok: true, prefs: p });
@@ -1869,21 +1880,26 @@ async function makeMenu(u, week) {
   const prev = (await q('SELECT data FROM menus WHERE user_id=$1 AND week<>$2 ORDER BY week DESC LIMIT 1', [u.id, week])).rows[0];
   const before = prev ? prev.data.days.flatMap(d => ['comida', 'cena'].map(k => d[k] && d[k].name)).filter(Boolean) : [];
   const h = healthCtx(u);
+  const goals = (u.prefs || {}).menuGoals || null;
+  const g = goals ? (() => { const day = goals.kcal, mc = Math.round(day * 0.7); return `OBJETIVO NUTRICIONAL DIARIO: ${day} kcal, con ${goals.protein} % de proteínas (${Math.round(day * goals.protein / 100 / 4)} g), ${goals.fat} % de grasas (${Math.round(day * goals.fat / 100 / 9)} g) y ${goals.carbs} % de hidratos de carbono (${Math.round(day * goals.carbs / 100 / 4)} g). La comida y la cena juntas deben aportar unas ${mc} kcal (el 70 % del día; el resto es desayuno y meriendas), con ese mismo reparto de proteínas, grasas e hidratos. Ajusta platos y raciones para cumplirlo y calcula para cada plato, por ración, las kcal y los gramos de proteínas (p), grasas (g) e hidratos (h).\n`; })() : '';
   countAi();
-  const out = parseJson(await llm({ maxTokens: 3000, messages: [{ role: 'user', text: `Prepara un menú semanal casero, variado y equilibrado (dieta mediterránea, cocina de España) de lunes a domingo, con comida y cena cada día.
-${h ? 'MUY IMPORTANTE: ' + h + '\n' : ''}Usa sobre todo platos de estas listas cuando encajen, indicando su referencia; si no hay uno adecuado, propón un plato sencillo tú (sin referencia). No repitas platos en la semana${before.length ? ' y evita los de la semana pasada: ' + before.slice(0, 14).join(', ') : ''}. Comidas completas y cenas más suaves.
+  const out = parseJson(await llm({ maxTokens: 3500, messages: [{ role: 'user', text: `Prepara un menú semanal casero, variado y equilibrado (dieta mediterránea, cocina de España) de lunes a domingo, con comida y cena cada día.
+${h ? 'MUY IMPORTANTE: ' + h + '\n' : ''}${g}Usa sobre todo platos de estas listas cuando encajen, indicando su referencia; si no hay uno adecuado, propón un plato sencillo tú (sin referencia). No repitas platos en la semana${before.length ? ' y evita los de la semana pasada: ' + before.slice(0, 14).join(', ') : ''}. Comidas completas y cenas más suaves.
 Recetas de la persona (ref r:id): ${mine.map(r => `r:${r.id}=${r.t}`).join('; ') || 'ninguna'}
 Recetas recomendadas (ref s:id): ${sugg.map(r => `s:${r.id}=${r.t}`).join('; ')}
-Devuelve SOLO un objeto JSON: {"days":[{"comida":{"name":string,"ref":string o null},"cena":{"name":string,"ref":string o null}}, ... 7 días]}` }] }));
+Devuelve SOLO un objeto JSON: {"days":[{"comida":{"name":string,"ref":string o null${goals ? ',"kcal":número,"p":número,"g":número,"h":número' : ''}},"cena":{"name":string,"ref":string o null${goals ? ',"kcal":número,"p":número,"g":número,"h":número' : ''}}}, ... 7 días]}` }] }));
   const ok = new Set([...mine.map(r => 'r:' + r.id), ...sugg.map(r => 's:' + r.id)]);
   const names = Object.fromEntries([...mine.map(r => ['r:' + r.id, r.t]), ...sugg.map(r => ['s:' + r.id, r.t])]);
   const days = (out && Array.isArray(out.days) ? out.days : []).slice(0, 7).map((d, i) => {
     const o = { day: DAYS[i] };
-    for (const k of ['comida', 'cena']) { const m = d && d[k] || {}; const ref = ok.has(m.ref) ? m.ref : null; o[k] = { name: String((ref && names[ref]) || m.name || '').slice(0, 120), ref }; }
+    for (const k of ['comida', 'cena']) {
+      const m = d && d[k] || {}; const ref = ok.has(m.ref) ? m.ref : null; o[k] = { name: String((ref && names[ref]) || m.name || '').slice(0, 120), ref };
+      if (goals) for (const f of ['kcal', 'p', 'g', 'h']) { const v = Math.round(Number(m[f])); if (Number.isFinite(v) && v >= 0 && v < 5000) o[k][f] = v; }
+    }
     return o;
   });
   if (days.length < 7) throw new Error('menú incompleto');
-  const data = { week, days, created: now() };
+  const data = { week, days, created: now(), goals };
   await q('INSERT INTO menus(user_id,week,data,created) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,week) DO UPDATE SET data=$3, created=$4', [u.id, week, data, now()]);
   return data;
 }

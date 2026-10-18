@@ -2812,22 +2812,49 @@ function viewMenu(){
   return `<div class="menu-page">
     <div class="menu-head"><div><p class="eyebrow">Semana del ${f(mon)} al ${f(sun)}</p><h1>Menú semanal</h1>
       <p class="muted">Un menú distinto cada semana${(S.me.allergens||[]).length||S.me.prefs?.diabetes?', pensado para tus alérgenos y necesidades':''}. Toca un plato para ver la receta.</p></div>
-      <button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div>
+      <div class="row" style="gap:8px"><button class="btn" data-act="menuGoals">${ico('scale')}Calorías y nutrientes</button><button class="btn" data-act="menuNew">${ico('sparkle')}Proponer otro</button></div></div>
+    ${goalsBar()}
     <div id="menuBox" class="menu-box"><div class="status"><span class="spin"></span>Preparando tu menú…</div></div></div>`;
 }
 const MEALS=[['comida','Comida','🍲'],['cena','Cena','🌙']];
+/* Objetivos del menú: calorías al día y % de proteínas, grasas e hidratos */
+const macroG=(kcal,pct,per)=>Math.round(kcal*pct/100/per);
+function goalsBar(){
+  const g=S.me?.prefs?.menuGoals; if(!g) return '';
+  return `<div class="goals-bar"><b>${g.kcal.toLocaleString('es-ES')} kcal al día</b><span>Proteínas ${g.protein} % · ${macroG(g.kcal,g.protein,4)} g</span><span>Grasas ${g.fat} % · ${macroG(g.kcal,g.fat,9)} g</span><span>Hidratos ${g.carbs} % · ${macroG(g.kcal,g.carbs,4)} g</span><small class="muted">Comida y cena suman ≈ ${Math.round(g.kcal*0.7).toLocaleString('es-ES')} kcal; el resto, desayuno y meriendas.</small></div>`;
+}
+function menuGoalsModal(){
+  const g=S.me?.prefs?.menuGoals||{kcal:2000,protein:20,fat:30,carbs:50};
+  const m=openModal(`${mHead('Calorías y nutrientes')}<p class="muted" style="margin:0">El menú semanal se preparará para acercarse a estas cantidades. Los porcentajes deben sumar 100 %.</p>
+    <form id="mgF" style="display:grid;gap:14px">
+      <div class="field"><label for="mgK">Calorías al día (kcal)</label><input id="mgK" class="inp" type="number" inputmode="numeric" min="800" max="6000" step="50" value="${g.kcal}" required></div>
+      <div class="grid3">${[['P','protein','Proteínas',4],['G','fat','Grasas',9],['H','carbs','Hidratos de carbono',4]].map(([id,k,l])=>`<div class="field"><label for="mg${id}">${l} (%)</label><input id="mg${id}" class="inp" type="number" inputmode="numeric" min="5" max="85" value="${g[k]}" required><small class="muted" id="mg${id}g"></small></div>`).join('')}</div>
+      <div class="chips" id="mgPre">${[['Equilibrado',20,30,50],['Más proteína',30,30,40],['Bajo en hidratos',30,40,30],['Deportista',25,25,50]].map(([l,a,b,c])=>`<button type="button" class="chip" data-p="${a},${b},${c}">${l}</button>`).join('')}</div>
+      <p id="mgSum" class="muted" style="margin:0"></p><div id="mgS"></div>
+      <div class="row" style="justify-content:space-between">${S.me?.prefs?.menuGoals?`<button type="button" class="btn ghost" id="mgOff">Quitar objetivos</button>`:'<span></span>'}<div class="row"><button type="button" class="btn" data-act="closeModal">Cancelar</button><button class="btn pri">${ico('sparkle')}Guardar y preparar menú</button></div></div>
+    </form>`);
+  const val=id=>Number($('#mg'+id,m).value)||0;
+  const upd=()=>{ const k=val('K'), sum=val('P')+val('G')+val('H');
+    [['P',4],['G',9],['H',4]].forEach(([id,per])=>$('#mg'+id+'g',m).textContent=k?`≈ ${macroG(k,val(id),per)} g al día`:'');
+    const e=$('#mgSum',m); e.textContent=`Suman ${sum} %${sum===100?' ✓':' — tienen que sumar 100 %'}`; e.className=sum===100?'muted':'err'; };
+  m.querySelectorAll('input').forEach(i=>i.oninput=upd); upd();
+  m.querySelectorAll('#mgPre [data-p]').forEach(b=>b.onclick=()=>{ const [a,c,d]=b.dataset.p.split(','); $('#mgP',m).value=a; $('#mgG',m).value=c; $('#mgH',m).value=d; upd(); });
+  const save=async goals=>{ try{ await api('PUT','/me/prefs',{menuGoals:goals}); await loadState(); closeModal(); go('menu'); afterMenu(true); }catch(err){ $('#mgS',m).innerHTML=`<p class="err">${esc(err.error||'No se ha podido guardar')}</p>`; } };
+  $('#mgF',m).onsubmit=e=>{ e.preventDefault(); if(val('P')+val('G')+val('H')!==100){ upd(); return; } save({kcal:val('K'),protein:val('P'),fat:val('G'),carbs:val('H')}); };
+  const off=$('#mgOff',m); if(off) off.onclick=()=>save(null);
+}
 function menuHtml(m){
   const today=(new Date().getDay()+6)%7;
   const mon=new Date(); mon.setDate(mon.getDate()-today);
   const cell=(x,k,l)=>{ const lab=`<span class="pl-lab">${l}</span>`; if(!x||!x.name) return `<div class="pl-cell">${lab}<span class="muted">—</span></div>`;
     const [t,id]=String(x.ref||'').split(':');
-    const inner=`${lab}<span class="pl-dish">${esc(x.name)}</span><span class="pl-tag">${x.ref?ico('book')+'Receta':ico('sparkle')+'Pedir a la IA'}</span>`;
+    const inner=`${lab}<span class="pl-dish">${esc(x.name)}</span>${x.kcal?`<span class="pl-kcal">≈ ${x.kcal} kcal${x.p!=null?` · P ${x.p} g · G ${x.g} g · H ${x.h} g`:''}</span>`:''}<span class="pl-tag">${x.ref?ico('book')+'Receta':ico('sparkle')+'Pedir a la IA'}</span>`;
     return x.ref?`<button class="pl-cell pl-${k}" data-act="menuOpen" data-t="${esc(t)}" data-id="${esc(id)}">${inner}</button>`
       :`<button class="pl-cell pl-${k} free" data-act="menuAsk" data-n="${esc(x.name)}">${inner}</button>`; };
   return `<div class="plan">
     <div class="pl-head"><span></span>${MEALS.map(([k,l,e])=>`<span class="pl-h pl-${k}"><span aria-hidden="true">${e}</span>${l}</span>`).join('')}</div>
     ${m.days.map((d,i)=>{ const dt=new Date(mon); dt.setDate(mon.getDate()+i);
-      return `<div class="pl-row ${i===today?'today':''}"><div class="pl-day"><span class="pl-dn">${esc(d.day)}${i===today?' <span class="pl-today">Hoy</span>':''}</span><span class="pl-dd">${dt.getDate()} ${dt.toLocaleDateString('es-ES',{month:'short'}).replace('.','')}</span></div>
+      return `<div class="pl-row ${i===today?'today':''}"><div class="pl-day"><span class="pl-dn">${esc(d.day)}${i===today?' <span class="pl-today">Hoy</span>':''}</span><span class="pl-dd">${dt.getDate()} ${dt.toLocaleDateString('es-ES',{month:'short'}).replace('.','')}${d.comida?.kcal||d.cena?.kcal?`<span style="text-transform:none"> · ≈ ${(d.comida?.kcal||0)+(d.cena?.kcal||0)} kcal</span>`:''}</span></div>
         ${MEALS.map(([k,l])=>cell(d[k],k,l)).join('')}</div>`; }).join('')}
   </div>`;
 }
@@ -2958,7 +2985,7 @@ function bindEquiv(){
 const fail = err => toast(err?.error||'No se pudo completar');
 const ACT = {
   addSugg:el=>addSuggestion(el.dataset.id),
-  menuNew:()=>afterMenu(true), menuRetry:()=>afterMenu(),
+  menuNew:()=>afterMenu(true), menuRetry:()=>afterMenu(), menuGoals:()=>menuGoalsModal(),
   pdfRecipe:el=>{ const id=el.dataset.id; downloadPdf(id.startsWith('sg:')?'/api/pdf/sugg/'+id.slice(3):'/api/pdf/recipe/'+id); },
   pdfFolder:el=>downloadPdf('/api/pdf/folder/'+el.dataset.id),
   menuOpen:el=>{ if(el.dataset.t==='r') ACT.openRecipe(el); else openSuggestion(el.dataset.id); },
