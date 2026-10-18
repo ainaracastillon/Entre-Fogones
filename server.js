@@ -161,7 +161,7 @@ async function auth(req, res, next) {
         res.append('Set-Cookie', `ef_susp=${encodeURIComponent(JSON.stringify({ r: String(u.blocked_reason || '').slice(0, 300), at: Number(u.blocked_at) || 0 }))}; Path=/; Max-Age=300; SameSite=Lax`);
       }
       else if (u) {
-        if (u.username && u.email && u.email.toLowerCase() === SUPERADMIN_EMAIL && u.role !== 'superadmin') { await q("UPDATE users SET role='superadmin' WHERE id=$1", [u.id]); u.role = 'superadmin'; }
+        if (u.username === SUPERADMIN_USER && u.role !== 'superadmin') { await q("UPDATE users SET role='superadmin' WHERE id=$1", [u.id]); u.role = 'superadmin'; }
         req.user = u; req.token = token;
         if (u.username && (!u.last_seen || now() - Number(u.last_seen) > 600e3)) q('UPDATE users SET last_seen=$1 WHERE id=$2', [now(), u.id]).catch(() => {});
         return next();
@@ -262,7 +262,7 @@ async function finishSignup(req, d) {
   if (d.email && (await q('SELECT 1 FROM users WHERE lower(email)=$1', [d.email])).rows[0]) { const e = new Error('Ya hay una cuenta con ese correo. Inicia sesión o recupera la contraseña.'); e.status = 409; throw e; }
   await q('UPDATE users SET username=$1, display=$2, color=$3, pass_hash=$4, email=$5, accepted_at=$6 WHERE id=$7',
     [d.username, d.display, d.color, d.pass_hash, d.email || null, now(), req.user.id]);
-  await syncRole(req.user.id, d.email);
+  await syncRole(req.user.id);
 }
 async function sendSignupCode(email, display, code) {
   await sendMail(email, `${code} es tu código de Entre Fogones`,
@@ -328,7 +328,6 @@ api.put('/me', needProfile, async (req, res, next) => {
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
     if (email && !emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
     if (!email && req.user.email) return res.status(400).json({ error: 'Escribe tu correo.' });
-    if (req.user.role === 'superadmin' && email !== String(req.user.email || '').toLowerCase()) return res.status(400).json({ error: 'El correo del Superadministrador solo se puede cambiar desde el código.' });
     if (email && (await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
     await q('UPDATE users SET display=$1, color=$2, email=$3 WHERE id=$4', [display, String(req.body.color || '#B5562B').slice(0, 9), email || null, req.user.id]);
     res.json({ ok: true });
@@ -342,7 +341,7 @@ api.post('/login', async (req, res, next) => {
     if (!u || !checkPass(String(req.body.password || ''), u.pass_hash)) return res.status(401).json({ error: 'Usuario, correo o contraseña incorrectos.' });
     if (u.deleted_at) return res.status(403).json({ error: 'Esta cuenta se ha eliminado. Si quieres recuperarla, escríbenos desde Contacto.' });
     if (u.blocked) return res.status(403).json({ suspended: true, reason: u.blocked_reason || '', at: Number(u.blocked_at) || null, error: 'Tu cuenta está suspendida.' });
-    await syncRole(u.id, u.email);
+    await syncRole(u.id);
     await adoptAnon(req, u.id);
     await newSession(res, u.id);
     res.json({ ok: true });
@@ -393,6 +392,7 @@ api.post('/contact', async (req, res, next) => {
 });
 
 /* Recuperar la contraseña por correo */
+const SUPERADMIN_USER = (process.env.SUPERADMIN_USERNAME || 'ainaracastillon').toLowerCase();
 const MAIL_FROM = process.env.MAIL_FROM || '';
 // El correo sale por el Brevo de Kairos (MAIL_RELAY_URL + MAIL_RELAY_TOKEN) o con clave propia de Brevo o Resend
 const RELAY_URL = process.env.MAIL_RELAY_URL || '', RELAY_TOKEN = process.env.MAIL_RELAY_TOKEN || '';
@@ -670,7 +670,7 @@ async function pushReady() {
   let row = (await q("SELECT value FROM app_settings WHERE key='vapid'")).rows[0];
   if (!row) { const k = webpush.generateVAPIDKeys(); await q("INSERT INTO app_settings(key,value) VALUES('vapid',$1) ON CONFLICT(key) DO NOTHING", [k]); row = (await q("SELECT value FROM app_settings WHERE key='vapid'")).rows[0]; }
   vapid = row.value;
-  webpush.setVapidDetails('mailto:' + (process.env.LEGAL_EMAIL || SUPERADMIN_EMAIL), vapid.publicKey, vapid.privateKey);
+  webpush.setVapidDetails('mailto:' + (process.env.LEGAL_EMAIL || 'info@entrefogones.aleeas.com'), vapid.publicKey, vapid.privateKey);
   return true;
 }
 const NOTIFY_DEFAULT = { messages: true, friends: true, notices: true, shares: true, friendRecipes: true };
@@ -1403,6 +1403,7 @@ api.put('/me/profile', needProfile, async (req, res, next) => {
     const color = String(req.body.color || req.user.color || '#B5562B').slice(0, 9);
     if (!display) return res.status(400).json({ error: 'Escribe tu nombre.' });
     if (!/^[a-z0-9_]{3,20}$/.test(username)) return res.status(400).json({ error: 'El nombre de usuario debe tener de 3 a 20 letras minúsculas, números o _.' });
+    if (req.user.username === SUPERADMIN_USER && username !== SUPERADMIN_USER) return res.status(400).json({ error: `El usuario de la Superadministradora es siempre @${SUPERADMIN_USER}.` });
     if ((await q('SELECT 1 FROM users WHERE username=$1 AND id<>$2', [username, req.user.id])).rows[0]) return res.status(409).json({ error: `@${username} ya está cogido. Prueba con otro.` });
     await q('UPDATE users SET display=$1, username=$2, color=$3 WHERE id=$4', [display, username, color, req.user.id]);
     res.json({ ok: true });
@@ -1412,11 +1413,10 @@ api.put('/me/email', needProfile, async (req, res, next) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase().slice(0, 254);
     if (!emailOk(email)) return res.status(400).json({ error: 'Escribe un correo válido.' });
-    if (req.user.role === 'superadmin') return res.status(400).json({ error: 'El correo del Superadministrador solo se puede cambiar desde el código.' });
     if (!checkPass(String(req.body.password || ''), req.user.pass_hash)) return res.status(401).json({ error: 'La contraseña no es correcta.' });
     if ((await q('SELECT 1 FROM users WHERE lower(email)=$1 AND id<>$2', [email, req.user.id])).rows[0]) return res.status(409).json({ error: 'Ese correo ya lo usa otra cuenta.' });
     await q('UPDATE users SET email=$1 WHERE id=$2', [email, req.user.id]);
-    await syncRole(req.user.id, email);
+    await syncRole(req.user.id);
     res.json({ ok: true });
   } catch (e) { next(e); }
 });
@@ -2042,9 +2042,10 @@ api.get('/pdf/sugg/:id', async (req, res, next) => {
 });
 
 /* ---------- Panel de administración ---------- */
-const SUPERADMIN_EMAIL = (process.env.SUPERADMIN_EMAIL || 'ainara14cs@hotmail.com').toLowerCase();
-async function syncRole(userId, email) {
-  const isSuper = String(email || '').toLowerCase() === SUPERADMIN_EMAIL;
+// La Superadministradora es siempre la cuenta @ainaracastillon, tenga el correo que tenga
+async function syncRole(userId) {
+  const u = (await q('SELECT username FROM users WHERE id=$1', [userId])).rows[0];
+  const isSuper = !!u && u.username === SUPERADMIN_USER;
   if (isSuper) await q("UPDATE users SET role='superadmin' WHERE id=$1", [userId]);
   else await q("UPDATE users SET role='user' WHERE id=$1 AND role='superadmin'", [userId]);
 }
