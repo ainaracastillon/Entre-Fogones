@@ -2870,14 +2870,55 @@ function viewHelp(){
   const sec=(t,ic,body)=>`<section class="card help-sec"><h2>${ico(ic)}${t}</h2>${body}</section>`;
   return `<div class="lib-head"><div><p class="eyebrow">Ayuda</p><h1>Manual de uso</h1></div></div>
   <div class="help">
-    ${sec('La biblioteca','book',`<p>Cada recetario es un libro de tu estantería. Ábrelo para ver el índice y pasa las páginas como en un libro de verdad. Debajo del libro tienes la lista de recetas y, cuando abres una, los ingredientes y la preparación en grande.</p><ul><li>Usa el buscador de arriba para encontrar cualquier receta tuya.</li><li>«Todas» reúne todas tus recetas; «Sin recetario», las que aún no has guardado en ninguno.</li><li>Las <b>Recetas recomendadas</b> cambian cada día; las que ya has guardado no vuelven a salir.</li><li>En <b>Recetas preferidas por los usuarios</b> están las que otras personas han hecho públicas.</li></ul>`)}
-    ${sec('Añadir recetas','plus',`<p>Pulsa <b>Nueva receta</b> y elige cómo:</p><ul><li><b>Desde un enlace</b>: pega el enlace de una web de cocina.</li><li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo. Puedes escribir qué receta es o algún detalle para ayudar a la IA.</li><li><b>Desde una foto</b>: hazle una foto a una receta de un libro, una revista o un papel; la IA la copia y redacta bien los pasos.</li><li><b>Con IA</b>: pide la receta que quieras y pide cambios hasta que te guste; luego apruébala.</li><li><b>A mano</b>: escríbela tú.</li></ul><p>Todas las recetas tienen foto: si no le pones una, la IA crea una. También se calcula sola su tabla nutricional.</p>`)}
+    ${sec('La biblioteca','book',`<p>Cada recetario es un libro de tu estantería. Ábrelo para ver el índice y pasa las páginas como en un libro de verdad. Debajo del libro tienes la lista de recetas y, cuando abres una, los ingredientes y la preparación en grande.</p><ul>
+      <li>El <b>buscador</b> encuentra cualquier receta tuya por su nombre o por un ingrediente, y el <b>desplegable</b> filtra por tipo (carne, pescado, postres…).</li>
+      <li><b>TODAS</b> reúne todas tus recetas; <b>Sin recetario</b>, las que aún no has guardado en ninguno.</li>
+      <li><b>Nuevo recetario</b>: elige el nombre y el color de la tela y, si quieres, añade de golpe recetas que ya tienes o recomendadas.</li>
+      <li><b>Ordenar recetarios</b>: arrastra cada libro a su sitio (también con el dedo en el móvil).</li>
+      <li>Dentro de un recetario puedes cambiarle el nombre o el color, compartirlo, descargarlo en PDF o borrarlo.</li></ul>`)}
+    ${sec('Recetas recomendadas y de los usuarios','sparkle',`<ul>
+      <li>Las <b>Recetas recomendadas</b> cambian cada día. Ábrelas y pulsa <b>+</b> para guardarlas en el recetario que quieras; las que ya tienes no vuelven a salir.</li>
+      <li>En <b>Recetas preferidas por los usuarios</b> están las que otras personas han hecho públicas. Sin cuenta solo se ven las 6 últimas.</li></ul>`)}
+    ${sec('Añadir recetas','plus',`<p>Pulsa <b>Nueva receta</b> y elige cómo:</p><ul>
+      <li><b>Desde un enlace</b>: pega el enlace de una web de cocina.</li>
+      <li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo desde el móvil. Puedes escribir qué receta es o algún detalle para ayudar a la IA. Se lee la descripción, los subtítulos y, si hace falta, se escucha el vídeo.</li>
+      <li><b>Desde una foto</b>: hazle una foto a una receta de un libro, una revista o un papel; la IA la copia y redacta bien los pasos.</li>
+      <li><b>Con IA</b>: pide la receta que quieras y pide cambios hasta que te guste; luego apruébala.</li>
+      <li><b>A mano</b>: escríbela tú.</li></ul>
+      <p>Todas las recetas tienen foto: si no le pones una, la IA crea una. También se calcula sola su tabla nutricional.</p>
+      <p class="muted">Facebook y YouTube no siempre dejan leer sus vídeos desde fuera. Si la receta no viene escrita en el texto del vídeo, descárgalo y súbelo como archivo: así sí se escucha.</p>`)}
     ${sec('Dictar en vez de escribir','mic',`<p>Puedes dictar las recetas: toca cualquier casilla de texto, pulsa el <b>micrófono del teclado</b> del móvil y habla. Por ejemplo: «doscientos gramos de harina, tres huevos…». Sirve para escribir la receta a mano, para el chat de la IA, para pedir cambios y para el chat con tus amigos.</p>`)}
-    ${sec('Editar, pedir cambios y compartir','edit',`<ul><li>Dentro de una receta, pulsa <b>Editar</b> para cambiar lo que quieras o <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, otra foto…).</li><li>Puedes poner enlaces en el texto: selecciona las palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li><li>Marca la receta como <b>pública</b> para que salga en Recetas preferidas por los usuarios, o déjala privada.</li><li><b>Compartir</b>: envíala por el chat a una o varias personas (separadas por comas; al escribir te sugiere a tus amigos) o copia el enlace.</li><li><b>PDF</b>: descarga una receta o un recetario entero en PDF.</li></ul>`)}
-    ${sec('Raciones, letra y alérgenos','user',`<ul><li>Cambia las raciones con el desplegable y las cantidades se recalculan.</li><li>En <b>Mi cuenta</b> eliges el tamaño de la letra de las recetas.</li><li>Apunta tus <b>alérgenos</b> y si tienes <b>diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li></ul>`)}
-    ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con comida y cena, hecho con tus recetas y las recomendadas. Toca un plato para abrir la receta, o pulsa «Proponer otro» si quieres cambiarlo.</p>`)}
-    ${sec('Amigos y chat','chat',`<ul><li>Busca a tus amigos por su @usuario y mándales una solicitud.</li><li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), pedir y sugerir recetas.</li><li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li><li>En <b>Mi cuenta › Notificaciones en el móvil</b> puedes activar que te lleguen avisos de mensajes, recetas que te mandan, solicitudes de amistad y avisos de la app. En iPhone, primero añade la app a la pantalla de inicio.</li></ul>`)}
-    ${sec('Moverte por la app','next',`<p>Desliza desde el borde izquierdo de la pantalla hacia el centro para volver a la página anterior, y desde el borde derecho para ir a la siguiente. El botón de atrás del móvil también funciona.</p>`)}
+    ${sec('Dentro de una receta','edit',`<ul>
+      <li><b>Raciones</b>: cámbialas con el desplegable y las cantidades se recalculan solas.</li>
+      <li><b>Tabla nutricional</b>: valores por 100 g y por ración, con el % de la ingesta de referencia.</li>
+      <li><b>Editar</b>: cambia lo que quieras, o pulsa <b>Pedir cambios</b> para que la IA la adapte (más raciones, sin gluten, más fácil, otra foto…).</li>
+      <li><b>Foto</b>: al editar, <b>Cambiar foto</b> pone otra y <b>Editar</b> te deja recortarla (libre, cuadrada, 4:3, 3:4 o 16:9) y girarla.</li>
+      <li><b>Recetarios</b>: una receta puede estar en varios recetarios a la vez; marca en cuáles la quieres. Es la misma receta: si la cambias, se cambia en todos.</li>
+      <li><b>Enlaces</b>: selecciona palabras y pulsa el botón de enlace. Si nombras otra receta tuya, se enlaza sola.</li>
+      <li><b>Pública o privada</b>: las públicas salen en Recetas preferidas por los usuarios.</li>
+      <li><b>Compartir</b>: mándala por el chat a una o varias personas o a un grupo, o copia el enlace.</li>
+      <li><b>PDF</b>: descarga la receta o el recetario entero, con aspecto de pergamino.</li></ul>`)}
+    ${sec('Menú semanal','calendar',`<p>Cada semana tienes un menú distinto con comida y cena, hecho con tus recetas y las recomendadas, y pensado para tus alérgenos y necesidades. Toca un plato para abrir la receta, o pulsa <b>Proponer otro</b> si quieres cambiarlo.</p><ul>
+      <li><b>Calorías y nutrientes</b>: elige las calorías al día y el % de proteínas, grasas e hidratos (hay atajos como «Equilibrado» o «Más proteína»). El menú se prepara para acercarse a esas cantidades y cada plato muestra sus calorías y gramos aproximados.</li>
+      <li>La comida y la cena suman unas 70 % de las calorías del día; el resto queda para el desayuno y las meriendas.</li></ul>`)}
+    ${sec('Equivalencias y calculadora','scale',`<p>En <b>Mi cuenta › Ayuda › Tabla de equivalencias</b> tienes cuánto pesa una cucharada, una taza o un vaso de cada ingrediente, y una calculadora para pasar de medidas caseras a gramos o mililitros.</p>`)}
+    ${sec('Amigos y chat','chat',`<ul>
+      <li>Busca a tus amigos por su @usuario y mándales una solicitud. Desde Amigos puedes ver la biblioteca de tus amigos y guardarte sus recetas.</li>
+      <li>En el chat puedes mandar recetas, recetarios, fotos, emojis y archivos (se pueden descargar), y pedir o sugerir recetas.</li>
+      <li><b>Grupos</b>: crea un grupo con varios amigos para hablar y compartir recetas con todos a la vez.</li>
+      <li>Para responder a un mensaje concreto, deslízalo hacia la derecha o tócalo y pulsa responder.</li></ul>`)}
+    ${sec('Mi cuenta','user',`<ul>
+      <li><b>Recetas subidas por mí</b>: ves cuántas has subido tú y, con <b>Ver y editar</b>, la lista completa para editarlas.</li>
+      <li><b>Perfil</b>: tu nombre, tu @usuario, tu color y tu foto. También puedes cambiar tu correo y tu contraseña.</li>
+      <li><b>Alérgenos y diabetes</b>: la IA te avisará y te propondrá sustitutos al añadir recetas, en el chat de recetas y en el menú semanal.</li>
+      <li><b>Tamaño de la letra</b> de las recetas.</li>
+      <li><b>Notificaciones en el móvil</b>: elige si te avisamos de mensajes, recetas que te mandan, recetas nuevas de tus amigos y solicitudes de amistad. En iPhone, primero añade la app a la pantalla de inicio.</li>
+      <li><b>Descargar mis datos</b>: en Excel, PDF, CSV, TXT o JSON.</li>
+      <li>Si olvidas la contraseña, pulsa «He olvidado la contraseña» al entrar y te llegará un enlace al correo.</li></ul>`)}
+    ${sec('Moverte por la app','next',`<ul>
+      <li>En el móvil, la barra de abajo te lleva a Biblioteca, Menú, Chat y Amigos.</li>
+      <li>Desliza desde el borde izquierdo de la pantalla hacia el centro para volver a la página anterior, y desde el borde derecho para ir a la siguiente. El botón de atrás del móvil también funciona.</li>
+      <li>El botón de recargar (la flecha circular de arriba) actualiza la app, y si recargas sigues en la misma página.</li></ul>`)}
     ${sec('¿Más dudas?','mail',`<p>Escríbenos desde <a href="/legal/contacto">Contacto</a>.</p>`)}
   </div>`;
 }
