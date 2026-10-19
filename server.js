@@ -400,9 +400,19 @@ const mailReady = () => !!((RELAY_URL && RELAY_TOKEN) || ((process.env.BREVO_API
 async function sendMail(to, subject, html, text) {
   const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : MAIL_FROM;
   let r;
-  if (RELAY_URL && RELAY_TOKEN) r = await fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000),
-    headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN },
-    body: JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info@entrefogones.aleeas.com>', to, subject, html, text }) });
+  if (RELAY_URL && RELAY_TOKEN) {
+    // Kairos (gratis en Render) se duerme si nadie lo usa: si no contesta, se le despierta y se reintenta
+    const body = JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info@entrefogones.aleeas.com>', to, subject, html, text });
+    const post = () => fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000), headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN }, body });
+    for (let i = 0; i < 4; i++) {
+      try { r = await post(); } catch (e) { r = null; console.error('correo: Kairos no contesta', e.message); }
+      if (r && (r.ok || r.status < 500)) break;
+      console.error('correo: intento', i + 1, 'falló', r ? r.status : 'sin respuesta', '→ despertando Kairos');
+      const base = new URL(RELAY_URL).origin, until = Date.now() + 90e3;
+      while (Date.now() < until) { try { const w = await fetch(base + '/', { signal: AbortSignal.timeout(30000) }); if (w.ok) break; } catch { } await new Promise(res => setTimeout(res, 4000)); }
+    }
+    if (!r) throw new Error('mail: Kairos no responde');
+  }
   else if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
     body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
