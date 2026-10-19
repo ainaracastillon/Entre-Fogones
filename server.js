@@ -398,29 +398,48 @@ const MAIL_FROM = process.env.MAIL_FROM || '';
 const RELAY_URL = process.env.MAIL_RELAY_URL || '', RELAY_TOKEN = process.env.MAIL_RELAY_TOKEN || '';
 const mailReady = () => !!((RELAY_URL && RELAY_TOKEN) || ((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM));
 async function sendMail(to, subject, html, text) {
-  const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : MAIL_FROM;
-  let r;
+  const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : (MAIL_FROM || 'info@entrefogones.aleeas.com');
+  // 1) Brevo directo con la clave propia de Entre Fogones
+  if (process.env.BREVO_API_KEY) {
+    try {
+      const r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
+        headers: { 'content-type': 'application/json', accept: 'application/json', 'api-key': process.env.BREVO_API_KEY },
+        body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
+      if (r.ok) return;
+      console.error('correo Brevo', r.status, (await r.text()).slice(0, 300));
+    } catch (e) { console.error('correo Brevo', e.message); }
+    if (!(RELAY_URL && RELAY_TOKEN)) throw new Error('mail: Brevo no ha aceptado el correo');
+  }
+  // 2) De respaldo, a través de Kairos (si está dormido, se le despierta y se reintenta)
   if (RELAY_URL && RELAY_TOKEN) {
-    // Kairos (gratis en Render) se duerme si nadie lo usa: si no contesta, se le despierta y se reintenta
+    let r;
     const body = JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info@entrefogones.aleeas.com>', to, subject, html, text });
     const post = () => fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000), headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN }, body });
     for (let i = 0; i < 4; i++) {
       try { r = await post(); } catch (e) { r = null; console.error('correo: Kairos no contesta', e.message); }
       if (r && (r.ok || r.status < 500)) break;
-      console.error('correo: intento', i + 1, 'falló', r ? r.status : 'sin respuesta', '→ despertando Kairos');
       const base = new URL(RELAY_URL).origin, until = Date.now() + 90e3;
       while (Date.now() < until) { try { const w = await fetch(base + '/', { signal: AbortSignal.timeout(30000) }); if (w.ok) break; } catch { } await new Promise(res => setTimeout(res, 4000)); }
     }
-    if (!r) throw new Error('mail: Kairos no responde');
+    if (!r || !r.ok) throw new Error('mail relay ' + (r ? r.status + ' ' + (await r.text()).slice(0, 200) : 'sin respuesta'));
+    return;
   }
-  else if (process.env.BREVO_API_KEY) r = await fetch('https://api.brevo.com/v3/smtp/email', { method: 'POST', signal: AbortSignal.timeout(20000),
-    headers: { 'content-type': 'application/json', 'api-key': process.env.BREVO_API_KEY },
-    body: JSON.stringify({ sender: { name: fromName, email: fromEmail }, to: [{ email: to }], subject, htmlContent: html, textContent: text }) });
-  else r = await fetch('https://api.resend.com/emails', { method: 'POST', signal: AbortSignal.timeout(20000),
+  const r = await fetch('https://api.resend.com/emails', { method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.RESEND_API_KEY}` },
     body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, html, text }) });
   if (!r.ok) throw new Error('mail ' + r.status + ' ' + (await r.text()).slice(0, 200));
 }
+// Al arrancar se comprueba que la clave de Brevo funciona y que el remitente está verificado (solo una línea en el registro)
+setTimeout(async () => {
+  if (!process.env.BREVO_API_KEY) return;
+  try {
+    const r = await fetch('https://api.brevo.com/v3/senders', { headers: { 'api-key': process.env.BREVO_API_KEY, accept: 'application/json' } });
+    if (!r.ok) return console.log('[correo] La clave de Brevo no funciona:', r.status);
+    const from = (MAIL_FROM.match(/<([^>]+)>/) || [, MAIL_FROM])[1].toLowerCase();
+    const s = ((await r.json()).senders || []).find(x => String(x.email).toLowerCase() === from);
+    console.log(`[correo] Brevo directo listo. Remitente ${from}: ${s ? (s.active ? 'verificado' : 'SIN VERIFICAR') : 'no está en Brevo'}`);
+  } catch (e) { console.log('[correo] Brevo:', e.message); }
+}, 4000);
 const sha = t => crypto.createHash('sha256').update(t).digest('hex');
 api.post('/password/forgot', async (req, res, next) => {
   try {
