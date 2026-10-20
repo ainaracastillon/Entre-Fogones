@@ -394,9 +394,8 @@ api.post('/contact', async (req, res, next) => {
 /* Recuperar la contraseña por correo */
 const SUPERADMIN_USER = (process.env.SUPERADMIN_USERNAME || 'ainaracastillon').toLowerCase();
 const MAIL_FROM = process.env.MAIL_FROM || '';
-// El correo sale por el Brevo de Kairos (MAIL_RELAY_URL + MAIL_RELAY_TOKEN) o con clave propia de Brevo o Resend
-const RELAY_URL = process.env.MAIL_RELAY_URL || '', RELAY_TOKEN = process.env.MAIL_RELAY_TOKEN || '';
-const mailReady = () => !!((RELAY_URL && RELAY_TOKEN) || ((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM));
+// El correo sale directamente por Brevo con la clave propia de Entre Fogones (o por Resend si se configura)
+const mailReady = () => !!((process.env.BREVO_API_KEY || process.env.RESEND_API_KEY) && MAIL_FROM);
 async function sendMail(to, subject, html, text) {
   const m = MAIL_FROM.match(/^\s*(.*?)\s*<([^>]+)>\s*$/); const fromName = m ? m[1] : 'Entre Fogones', fromEmail = m ? m[2] : (MAIL_FROM || 'info@entrefogones.aleeas.com');
   // 1) Brevo directo con la clave propia de Entre Fogones
@@ -408,21 +407,7 @@ async function sendMail(to, subject, html, text) {
       if (r.ok) return;
       console.error('correo Brevo', r.status, (await r.text()).slice(0, 300));
     } catch (e) { console.error('correo Brevo', e.message); }
-    if (!(RELAY_URL && RELAY_TOKEN)) throw new Error('mail: Brevo no ha aceptado el correo');
-  }
-  // 2) De respaldo, a través de Kairos (si está dormido, se le despierta y se reintenta)
-  if (RELAY_URL && RELAY_TOKEN) {
-    let r;
-    const body = JSON.stringify({ from: MAIL_FROM || 'Entre Fogones <info@entrefogones.aleeas.com>', to, subject, html, text });
-    const post = () => fetch(RELAY_URL, { method: 'POST', signal: AbortSignal.timeout(90000), headers: { 'content-type': 'application/json', 'x-relay-token': RELAY_TOKEN }, body });
-    for (let i = 0; i < 4; i++) {
-      try { r = await post(); } catch (e) { r = null; console.error('correo: Kairos no contesta', e.message); }
-      if (r && (r.ok || r.status < 500)) break;
-      const base = new URL(RELAY_URL).origin, until = Date.now() + 90e3;
-      while (Date.now() < until) { try { const w = await fetch(base + '/', { signal: AbortSignal.timeout(30000) }); if (w.ok) break; } catch { } await new Promise(res => setTimeout(res, 4000)); }
-    }
-    if (!r || !r.ok) throw new Error('mail relay ' + (r ? r.status + ' ' + (await r.text()).slice(0, 200) : 'sin respuesta'));
-    return;
+    throw new Error('mail: Brevo no ha aceptado el correo');
   }
   const r = await fetch('https://api.resend.com/emails', { method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${process.env.RESEND_API_KEY}` },
