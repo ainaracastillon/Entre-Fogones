@@ -1034,14 +1034,14 @@ function newRecipeModal(folderId){
         <form id="fv" style="display:grid;gap:12px">
           <div class="field"><label for="vurl">Enlace del vídeo</label><input id="vurl" class="inp" type="url" required placeholder="Enlace de TikTok, Instagram, Facebook o YouTube"></div>
           <div class="field"><label for="vnote">¿Qué receta es? (opcional)</label><textarea id="vnote" class="inp" rows="2" maxlength="2000" placeholder="Por ejemplo: tarta de queso al horno, para 8; las cantidades se dicen al final"></textarea></div>
-          <p class="muted" style="margin:0;font-size:14px">Se lee la descripción, los subtítulos y, si hace falta, se escucha el vídeo.</p>
-          <p class="note-warn">${ico('info')}<span><b>Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha.</span></p>
+          <p class="muted" style="margin:0;font-size:14px">Se lee la descripción y los subtítulos, se escucha el vídeo y la IA lo mira para reconocer los ingredientes que se echan aunque no se digan ni se escriban.</p>
+          <p class="note-warn">${ico('info')}<span><b>Instagram, Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha y se ve.</span></p>
           <div id="vpasteWrap" hidden class="field"><label for="vpaste">Texto del vídeo</label><p class="muted" style="margin:0;font-size:14px" id="vpasteMsg"></p><textarea id="vpaste" class="inp" rows="6"></textarea></div>
           <div id="vstatus"></div>
           <div class="row" style="justify-content:flex-end"><button class="btn pri" id="vgo">${ico('play')}Sacar la receta</button></div>
         </form>
         <div style="border-top:1px solid var(--line);padding-top:14px;display:grid;gap:10px">
-          <p style="margin:0"><strong>¿Lo tienes guardado en el móvil?</strong> Súbelo y se escucha lo que dicen para sacar la receta (máximo 25 MB). Lo que escribas arriba en «¿Qué receta es?» también se usa.</p>
+          <p style="margin:0"><strong>¿Lo tienes guardado en el móvil?</strong> Súbelo y se escucha lo que dicen y se mira lo que se echa para sacar la receta (máximo 25 MB). Lo que escribas arriba en «¿Qué receta es?» también se usa.</p>
           <div class="row"><label class="btn" for="vfile">${ico('upload')}Subir vídeo</label><input id="vfile" type="file" accept="video/*,audio/*" hidden></div>
           <div id="vfstatus"></div>
         </div>
@@ -2372,7 +2372,7 @@ function admBulkHtml(){
   return `<details class="card bulk" ${S.bulkOpen?'open':''}><summary><h2 style="display:inline">${ico('upload')}Subida masiva</h2></summary>
     <form id="bkF" style="display:grid;gap:14px;margin-top:12px">
       <div id="bkFields" style="display:grid;gap:14px">
-      <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea><p class="note-warn">${ico('info')}<span><b>Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha.</span></p></div>
+      <div class="field"><label for="bkUrls">Enlaces, uno por línea (webs de recetas, TikTok, Instagram, Facebook, YouTube…)</label><textarea id="bkUrls" class="inp" rows="4" placeholder="https://…"></textarea><p class="note-warn">${ico('info')}<span><b>Instagram, Facebook y YouTube</b> no siempre dejan leer sus vídeos desde fuera: a veces no dejan ver el vídeo sin iniciar sesión o no dejan escucharlo. Si la receta no viene escrita en el texto del vídeo, puede fallar por su sistema. En ese caso, descarga el vídeo y súbelo como archivo: así sí se escucha y se ve.</span></p></div>
       <div class="field"><label>Archivos de cualquier tipo: PDF, Word, TXT, JSON, HTML, fotos, vídeos o audios</label><div class="row"><label class="btn" for="bkFiles">${ico('upload')}Elegir archivos</label><input id="bkFiles" type="file" multiple hidden><span class="muted" id="bkFn" style="font-size:13px"></span></div>
         <span class="muted" style="font-size:13px">Si un archivo tiene varias recetas (un recetario en PDF o Word, por ejemplo), se sacan todas.</span></div>
       <div class="field"><label for="bkText">Recetas en texto (pega una o varias; se separan solas)</label><textarea id="bkText" class="inp" rows="4"></textarea></div>
@@ -2881,12 +2881,12 @@ function viewHelp(){
       <li>En <b>Recetas preferidas por los usuarios</b> están las que otras personas han hecho públicas. Sin cuenta solo se ven las 6 últimas.</li></ul>`)}
     ${sec('Añadir recetas','plus',`<p>Pulsa <b>Nueva receta</b> y elige cómo:</p><ul>
       <li><b>Desde un enlace</b>: pega el enlace de una web de cocina.</li>
-      <li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo desde el móvil. Puedes escribir qué receta es o algún detalle para ayudar a la IA. Se lee la descripción, los subtítulos y, si hace falta, se escucha el vídeo.</li>
+      <li><b>Desde un vídeo</b>: pega el enlace de TikTok, Instagram, Facebook o YouTube, o sube el vídeo desde el móvil. Puedes escribir qué receta es o algún detalle para ayudar a la IA. Se lee la descripción y los subtítulos, se escucha el vídeo y la IA lo mira para reconocer los ingredientes que se echan aunque no se digan ni se escriban.</li>
       <li><b>Desde una foto</b>: hazle una foto a una receta de un libro, una revista o un papel; la IA la copia y redacta bien los pasos.</li>
       <li><b>Con IA</b>: pide la receta que quieras y pide cambios hasta que te guste; luego apruébala.</li>
       <li><b>A mano</b>: escríbela tú.</li></ul>
       <p>Todas las recetas tienen foto: si no le pones una, la IA crea una. También se calcula sola su tabla nutricional.</p>
-      <p class="muted">Facebook y YouTube no siempre dejan leer sus vídeos desde fuera. Si la receta no viene escrita en el texto del vídeo, descárgalo y súbelo como archivo: así sí se escucha.</p>`)}
+      <p class="muted">Instagram, Facebook y YouTube no siempre dejan leer sus vídeos desde fuera. Si la receta no viene escrita en el texto del vídeo, descárgalo y súbelo como archivo: así sí se escucha y se ve.</p>`)}
     ${sec('Dictar en vez de escribir','mic',`<p>Puedes dictar las recetas: toca cualquier casilla de texto, pulsa el <b>micrófono del teclado</b> del móvil y habla. Por ejemplo: «doscientos gramos de harina, tres huevos…». Sirve para escribir la receta a mano, para el chat de la IA, para pedir cambios y para el chat con tus amigos.</p>`)}
     ${sec('Dentro de una receta','edit',`<ul>
       <li><b>Raciones</b>: cámbialas con el desplegable y las cantidades se recalculan solas.</li>

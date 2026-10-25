@@ -998,14 +998,12 @@ async function tiktokData(url) {
   if (pick) { try { const s3 = await jarFetch(pick.Url, jar, hdr); if (s3.ok) { out.speech = vttToText(await s3.text()); if (out.speech) out.how.push('subtitulos'); } } catch (e) { console.error('tiktok subs', e.message); } }
   // se descarga el vídeo para verlo (ingredientes que no se nombran) y, si no hay subtítulos, para escucharlo
   const cands = [v.playAddr, v.downloadAddr, ...((v.bitrateInfo || []).flatMap(b => b.PlayAddr?.UrlList || []))].filter(Boolean);
-  console.log('DIAGF tiktok candidatos', cands.length);
   for (const addr of cands.slice(0, 4)) {
     try {
       const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
       if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
       const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
-      const buf = Buffer.from(await vr.arrayBuffer()); const ct = vr.headers.get('content-type') || '';
-      console.log('DIAGF tiktok vídeo', vr.status, buf.length, ct, buf.slice(4, 12).toString('latin1').replace(/[^\x20-\x7e]/g, '.'));
+      const buf = Buffer.from(await vr.arrayBuffer()); 
       // tiene que ser un vídeo de verdad (cabecera mp4 «ftyp»), si no se prueba el siguiente enlace
       if (buf.length < 20000 || buf.length > 24e6 || buf.slice(4, 8).toString('latin1') !== 'ftyp') continue;
       await hearAndSee(out, buf, 'video/mp4');
@@ -1147,7 +1145,6 @@ async function videoFrames(buf, n = 5) {
 async function seeVideo(buf, context = '') {
   try {
     const frames = await videoFrames(buf);
-    console.log('DIAGF fotogramas', frames.length, 'de', buf.length, 'bytes');
     if (!frames.length) return '';
     const o = parseJson(await llm({ maxTokens: 1200, messages: [{ role: 'user', images: frames, text: `Son ${frames.length} fotogramas, en orden, de un vídeo de cocina.${context ? ' Contexto: ' + String(context).slice(0, 600) : ''}
 Mira con atención y di QUÉ INGREDIENTES SE VEN (también los que se echan sin nombrarlos ni escribirlos: lo que se vierte, se corta o se añade, envases y etiquetas), con la cantidad aproximada si se puede ver (cucharadas, vasos, unidades, peso en una báscula), los pasos que se ven en orden y el texto escrito en pantalla. No inventes lo que no se ve. En español.
@@ -2412,19 +2409,6 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// prueba temporal: otras maneras de bajar un vídeo de TikTok (se escribe en el registro al arrancar)
-setTimeout(async () => {
-  const id = '7660343261785050382';
-  for (const host of ['api16-normal-c-useast1a.tiktokv.com', 'api22-normal-c-alisg.tiktokv.com', 'api16-normal-useast5.tiktokv.us']) {
-    try {
-      const r = await fetch(`https://${host}/aweme/v1/feed/?aweme_id=${id}&iid=7318518857994389254&device_id=7318517321748022790&channel=googleplay&app_name=musical_ly&version_code=300904&device_platform=android&device_type=ASUS_Z01QD&os_version=9`, { headers: { 'User-Agent': 'com.zhiliaoapp.musically/300904 (Linux; U; Android 9; es_ES; ASUS_Z01QD; Build/PI; Cronet/58.0.2991.0)' }, signal: AbortSignal.timeout(15000) });
-      const t = await r.text(); let u = '';
-      try { const j = JSON.parse(t); const a = (j.aweme_list || [])[0]; if (a && a.aweme_id === id) u = a.video?.play_addr?.url_list?.[0] || ''; } catch { }
-      let dl = ''; if (u) { const v = await fetch(u, { headers: { 'User-Agent': 'okhttp' }, signal: AbortSignal.timeout(30000) }); const b = Buffer.from(await v.arrayBuffer()); dl = v.status + ' ' + b.length + ' ' + b.slice(4, 8).toString('latin1'); }
-      console.log('DIAGT', host, r.status, t.length, u ? 'URL ' + dl : t.slice(0, 100));
-    } catch (e) { console.log('DIAGT', host, 'ERR', e.message); }
-  }
-}, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
