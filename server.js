@@ -1004,9 +1004,12 @@ async function tiktokData(url) {
       const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
       if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
       const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
-      const buf = Buffer.from(await vr.arrayBuffer()); console.log('DIAGF tiktok vídeo', vr.status, buf.length); if (buf.length < 20000 || buf.length > 24e6) continue;
+      const buf = Buffer.from(await vr.arrayBuffer()); const ct = vr.headers.get('content-type') || '';
+      console.log('DIAGF tiktok vídeo', vr.status, buf.length, ct, buf.slice(4, 12).toString('latin1').replace(/[^\x20-\x7e]/g, '.'));
+      // tiene que ser un vídeo de verdad (cabecera mp4 «ftyp»), si no se prueba el siguiente enlace
+      if (buf.length < 20000 || buf.length > 24e6 || buf.slice(4, 8).toString('latin1') !== 'ftyp') continue;
       await hearAndSee(out, buf, 'video/mp4');
-      break;
+      if (out.seen || out.speech) break;
     } catch (e) { if (e.status === 429) out.busy = true; console.error('tiktok video', e.message); }
   }
   return out;
