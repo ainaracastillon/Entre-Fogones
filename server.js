@@ -2394,8 +2394,20 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// prueba temporal: ver un reel de Instagram (se escribe en el registro al arrancar)
-setTimeout(async () => { try { const v = await videoText('https://www.instagram.com/reel/DezgBi0o3zm/'); console.log('DIAGIG', JSON.stringify({ ff: !!FFMPEG, how: v.how, len: v.text.length, text: v.text.slice(0, 1500) })); } catch (e) { console.log('DIAGIG ERR', e.message); } }, 20000);
+// prueba temporal: maneras de sacar el vídeo de un reel de Instagram (se escribe en el registro al arrancar)
+setTimeout(async () => {
+  const sc = 'DezgBi0o3zm';
+  for (const [k, doc] of [['gql1', '8845758582119845'], ['gql2', '10015901848480474'], ['gql3', '25531498899829322']]) {
+    try {
+      const r = await fetch('https://www.instagram.com/graphql/query', { method: 'POST', signal: AbortSignal.timeout(20000), headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, 'X-IG-App-ID': '936619743392459', 'X-FB-LSD': 'AVqbxe3J_YA', 'X-ASBD-ID': '129477', 'Sec-Fetch-Site': 'same-origin', Referer: `https://www.instagram.com/reel/${sc}/` },
+        body: new URLSearchParams({ variables: JSON.stringify({ shortcode: sc, fetch_tagged_user_count: null, hoisted_comment_id: null, hoisted_reply_id: null }), doc_id: doc, lsd: 'AVqbxe3J_YA' }) });
+      const t = await r.text(); const vu = t.match(/"video_url":"([^"]+)"/);
+      console.log('DIAGIG2', k, r.status, t.length, vu ? 'VIDEO ' + vu[1].slice(0, 60) : t.slice(0, 160));
+    } catch (e) { console.log('DIAGIG2', k, 'ERR', e.message); }
+  }
+  try { const r = await fetch(`https://www.instagram.com/p/${sc}/?__a=1&__d=dis`, { headers: { 'User-Agent': BROWSER_UA, 'X-IG-App-ID': '936619743392459' }, signal: AbortSignal.timeout(20000) }); const t = await r.text(); const vu = t.match(/"video_url":"([^"]+)"/); console.log('DIAGIG2 a1', r.status, t.length, vu ? 'VIDEO' : t.slice(0, 120)); } catch (e) { console.log('DIAGIG2 a1 ERR', e.message); }
+  try { const r = await fetch(`https://www.instagram.com/reel/${sc}/embed/`, { headers: { 'User-Agent': BROWSER_UA }, signal: AbortSignal.timeout(20000) }); const t = await r.text(); console.log('DIAGIG2 embed', r.status, t.length, /video_url/.test(t), /\.mp4/.test(t), (t.match(/https?:\\?\/\\?\/[^"']+\.mp4[^"']*/) || [''])[0].slice(0, 80)); } catch (e) { console.log('DIAGIG2 embed ERR', e.message); }
+}, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
