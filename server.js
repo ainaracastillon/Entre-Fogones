@@ -1115,6 +1115,7 @@ async function videoText(url) {
     // Facebook enseña textos genéricos de su portada cuando no deja ver el vídeo: esos no sirven
     if (/facebook|fb\.watch/.test(host)) { if (/espacio para disfrutar de v[ií]deos|Log in or sign up|Inicia sesi[oó]n o reg[ií]strate|^Facebook$/i.test(out.text + ' ' + out.title) || !out.text) { out.text = ''; out.platform = 'facebook'; } }
   }
+  if (!/Lo que se ve en el vídeo/.test(out.text || '') && out.image) { const c = await seeCover(out.image, out.title); if (c) { out.text = [out.text, 'Lo que se ve en la portada del vídeo:\n' + c].filter(Boolean).join('\n\n'); (out.how = out.how || []).push('portada'); } }
   out.text = String(out.text || '').trim();
   return out;
 }
@@ -1149,6 +1150,18 @@ Devuelve SOLO un objeto JSON: {"ingredientes":[string],"pasos":[string],"texto":
     if (!o) return '';
     return [o.ingredientes && o.ingredientes.length && 'Ingredientes que se ven: ' + o.ingredientes.join('; '), o.pasos && o.pasos.length && 'Pasos que se ven: ' + o.pasos.join(' / '), o.texto && 'Texto en pantalla: ' + o.texto].filter(Boolean).join('\n');
   } catch (e) { console.error('ver vídeo', String(e.message).slice(0, 160)); return ''; }
+}
+// Si no se puede bajar el vídeo (Instagram, YouTube, Facebook), al menos se mira la portada
+async function seeCover(imgUrl, context = '') {
+  try {
+    if (!imgUrl || !/^https?:/.test(imgUrl)) return '';
+    const r = await safeFetch(imgUrl, { headers: { 'User-Agent': BROWSER_UA, Accept: 'image/*' } });
+    const type = (r.headers.get('content-type') || '').split(';')[0]; if (!r.ok || !/^image\/(jpeg|png|webp)/.test(type)) return '';
+    const b = Buffer.from(await r.arrayBuffer()); if (b.length < 2000 || b.length > 6e6) return '';
+    const o = parseJson(await llm({ maxTokens: 600, messages: [{ role: 'user', images: [{ media: type, data: b.toString('base64') }], text: `Es la portada de un vídeo de cocina.${context ? ' Contexto: ' + String(context).slice(0, 400) : ''} Di qué plato es, qué ingredientes se ven y el texto escrito en la imagen. No inventes. En español. Devuelve SOLO un objeto JSON: {"plato":string,"ingredientes":[string],"texto":string}` }] }));
+    if (!o) return '';
+    return [o.plato && 'Plato: ' + o.plato, o.ingredientes && o.ingredientes.length && 'Ingredientes que se ven en la portada: ' + o.ingredientes.join('; '), o.texto && 'Texto en la portada: ' + o.texto].filter(Boolean).join('\n');
+  } catch (e) { console.error('ver portada', String(e.message).slice(0, 120)); return ''; }
 }
 async function aiFromVideo(title, text) {
   return cleanAi(parseJson(await llm({ messages: [{ role: 'user', text: `Este es el texto de un vídeo de cocina de redes sociales: su título, su descripción y, a veces, lo que se dice en el vídeo. Saca la receta y devuelve SOLO un objeto JSON con esta forma:
@@ -2394,20 +2407,8 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// prueba temporal: maneras de sacar el vídeo de un reel de Instagram (se escribe en el registro al arrancar)
-setTimeout(async () => {
-  const sc = 'DezgBi0o3zm';
-  for (const [k, doc] of [['gql1', '8845758582119845'], ['gql2', '10015901848480474'], ['gql3', '25531498899829322']]) {
-    try {
-      const r = await fetch('https://www.instagram.com/graphql/query', { method: 'POST', signal: AbortSignal.timeout(20000), headers: { 'content-type': 'application/x-www-form-urlencoded', 'User-Agent': BROWSER_UA, 'X-IG-App-ID': '936619743392459', 'X-FB-LSD': 'AVqbxe3J_YA', 'X-ASBD-ID': '129477', 'Sec-Fetch-Site': 'same-origin', Referer: `https://www.instagram.com/reel/${sc}/` },
-        body: new URLSearchParams({ variables: JSON.stringify({ shortcode: sc, fetch_tagged_user_count: null, hoisted_comment_id: null, hoisted_reply_id: null }), doc_id: doc, lsd: 'AVqbxe3J_YA' }) });
-      const t = await r.text(); const vu = t.match(/"video_url":"([^"]+)"/);
-      console.log('DIAGIG2', k, r.status, t.length, vu ? 'VIDEO ' + vu[1].slice(0, 60) : t.slice(0, 160));
-    } catch (e) { console.log('DIAGIG2', k, 'ERR', e.message); }
-  }
-  try { const r = await fetch(`https://www.instagram.com/p/${sc}/?__a=1&__d=dis`, { headers: { 'User-Agent': BROWSER_UA, 'X-IG-App-ID': '936619743392459' }, signal: AbortSignal.timeout(20000) }); const t = await r.text(); const vu = t.match(/"video_url":"([^"]+)"/); console.log('DIAGIG2 a1', r.status, t.length, vu ? 'VIDEO' : t.slice(0, 120)); } catch (e) { console.log('DIAGIG2 a1 ERR', e.message); }
-  try { const r = await fetch(`https://www.instagram.com/reel/${sc}/embed/`, { headers: { 'User-Agent': BROWSER_UA }, signal: AbortSignal.timeout(20000) }); const t = await r.text(); console.log('DIAGIG2 embed', r.status, t.length, /video_url/.test(t), /\.mp4/.test(t), (t.match(/https?:\\?\/\\?\/[^"']+\.mp4[^"']*/) || [''])[0].slice(0, 80)); } catch (e) { console.log('DIAGIG2 embed ERR', e.message); }
-}, 15000);
+// prueba temporal: TikTok e Instagram con lo que se ve (se escribe en el registro al arrancar)
+setTimeout(async () => { for (const u of ['https://www.tiktok.com/@recetashermosas1/video/7660343261785050382', 'https://www.instagram.com/reel/DezgBi0o3zm/']) { try { const v = await videoText(u); console.log('DIAGV2', u.slice(0, 40), JSON.stringify({ how: v.how, seen: (v.text.split('Lo que se ve')[1] || '').slice(0, 700) })); } catch (e) { console.log('DIAGV2 ERR', e.message); } } }, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
