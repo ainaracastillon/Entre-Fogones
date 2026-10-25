@@ -2412,8 +2412,19 @@ async function videoRecipes(title, text) {
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
-// prueba temporal: TikTok e Instagram con lo que se ve (se escribe en el registro al arrancar)
-setTimeout(async () => { for (const u of ['https://www.tiktok.com/@recetashermosas1/video/7660343261785050382', 'https://www.instagram.com/reel/DezgBi0o3zm/']) { try { const v = await videoText(u); console.log('DIAGV2', u.slice(0, 40), JSON.stringify({ how: v.how, seen: (v.text.split('Lo que se ve')[1] || '').slice(0, 700) })); } catch (e) { console.log('DIAGV2 ERR', e.message); } } }, 15000);
+// prueba temporal: otras maneras de bajar un vídeo de TikTok (se escribe en el registro al arrancar)
+setTimeout(async () => {
+  const id = '7660343261785050382';
+  for (const host of ['api16-normal-c-useast1a.tiktokv.com', 'api22-normal-c-alisg.tiktokv.com', 'api16-normal-useast5.tiktokv.us']) {
+    try {
+      const r = await fetch(`https://${host}/aweme/v1/feed/?aweme_id=${id}&iid=7318518857994389254&device_id=7318517321748022790&channel=googleplay&app_name=musical_ly&version_code=300904&device_platform=android&device_type=ASUS_Z01QD&os_version=9`, { headers: { 'User-Agent': 'com.zhiliaoapp.musically/300904 (Linux; U; Android 9; es_ES; ASUS_Z01QD; Build/PI; Cronet/58.0.2991.0)' }, signal: AbortSignal.timeout(15000) });
+      const t = await r.text(); let u = '';
+      try { const j = JSON.parse(t); const a = (j.aweme_list || [])[0]; if (a && a.aweme_id === id) u = a.video?.play_addr?.url_list?.[0] || ''; } catch { }
+      let dl = ''; if (u) { const v = await fetch(u, { headers: { 'User-Agent': 'okhttp' }, signal: AbortSignal.timeout(30000) }); const b = Buffer.from(await v.arrayBuffer()); dl = v.status + ' ' + b.length + ' ' + b.slice(4, 8).toString('latin1'); }
+      console.log('DIAGT', host, r.status, t.length, u ? 'URL ' + dl : t.slice(0, 100));
+    } catch (e) { console.log('DIAGT', host, 'ERR', e.message); }
+  }
+}, 15000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
