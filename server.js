@@ -998,12 +998,13 @@ async function tiktokData(url) {
   if (pick) { try { const s3 = await jarFetch(pick.Url, jar, hdr); if (s3.ok) { out.speech = vttToText(await s3.text()); if (out.speech) out.how.push('subtitulos'); } } catch (e) { console.error('tiktok subs', e.message); } }
   // se descarga el vídeo para verlo (ingredientes que no se nombran) y, si no hay subtítulos, para escucharlo
   const cands = [v.playAddr, v.downloadAddr, ...((v.bitrateInfo || []).flatMap(b => b.PlayAddr?.UrlList || []))].filter(Boolean);
+  console.log('DIAGF tiktok candidatos', cands.length);
   for (const addr of cands.slice(0, 4)) {
     try {
       const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
       if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
       const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
-      const buf = Buffer.from(await vr.arrayBuffer()); if (buf.length < 20000 || buf.length > 24e6) continue;
+      const buf = Buffer.from(await vr.arrayBuffer()); console.log('DIAGF tiktok vídeo', vr.status, buf.length); if (buf.length < 20000 || buf.length > 24e6) continue;
       await hearAndSee(out, buf, 'video/mp4');
       break;
     } catch (e) { if (e.status === 429) out.busy = true; console.error('tiktok video', e.message); }
@@ -1143,6 +1144,7 @@ async function videoFrames(buf, n = 5) {
 async function seeVideo(buf, context = '') {
   try {
     const frames = await videoFrames(buf);
+    console.log('DIAGF fotogramas', frames.length, 'de', buf.length, 'bytes');
     if (!frames.length) return '';
     const o = parseJson(await llm({ maxTokens: 1200, messages: [{ role: 'user', images: frames, text: `Son ${frames.length} fotogramas, en orden, de un vídeo de cocina.${context ? ' Contexto: ' + String(context).slice(0, 600) : ''}
 Mira con atención y di QUÉ INGREDIENTES SE VEN (también los que se echan sin nombrarlos ni escribirlos: lo que se vierte, se corta o se añade, envases y etiquetas), con la cantidad aproximada si se puede ver (cucharadas, vasos, unidades, peso en una báscula), los pasos que se ven en orden y el texto escrito en pantalla. No inventes lo que no se ve. En español.
