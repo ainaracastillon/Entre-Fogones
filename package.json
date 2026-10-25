@@ -17,6 +17,7 @@
     "pdf-parse": "1.1.1",
     "mammoth": "1.8.0",
     "web-push": "3.6.7",
-    "exceljs": "4.4.0"
+    "exceljs": "4.4.0",
+    "ffmpeg-static": "5.2.0"
   }
 }

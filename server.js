@@ -5,6 +5,9 @@ const crypto = require('crypto');
 const path = require('path');
 const dns = require('dns').promises;
 const net = require('net');
+const os = require('os');
+const fs = require('fs');
+const { execFile } = require('child_process');
 const { legalHtml } = require('./legal');
 
 const PORT = process.env.PORT || 3000;
@@ -993,20 +996,25 @@ async function tiktokData(url) {
   const pick = subs.find(x => /^spa|^es/i.test(x.LanguageCodeName || x.LanguageID || '') && x.Source !== 'MT') || subs.find(x => /^spa|^es/i.test(x.LanguageCodeName || ''))
     || subs.find(x => /^eng|^en/i.test(x.LanguageCodeName || '')) || subs[0];
   if (pick) { try { const s3 = await jarFetch(pick.Url, jar, hdr); if (s3.ok) { out.speech = vttToText(await s3.text()); if (out.speech) out.how.push('subtitulos'); } } catch (e) { console.error('tiktok subs', e.message); } }
-  // sin subtítulos: se descarga el vídeo y se escucha
-  if (!out.speech && CAN_HEAR) {
-    const cands = [v.playAddr, v.downloadAddr, ...((v.bitrateInfo || []).flatMap(b => b.PlayAddr?.UrlList || []))].filter(Boolean);
-    for (const addr of cands.slice(0, 4)) {
-      try {
-        const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
-        if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
-        const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
-        const buf = Buffer.from(await vr.arrayBuffer()); if (buf.length < 20000 || buf.length > 24e6) continue;
-        out.speech = await transcribe(buf, 'video/mp4'); if (out.speech) { out.how.push('audio'); break; }
-      } catch (e) { if (e.status === 429) out.busy = true; console.error('tiktok video', e.message); }
-    }
+  // se descarga el vídeo para verlo (ingredientes que no se nombran) y, si no hay subtítulos, para escucharlo
+  const cands = [v.playAddr, v.downloadAddr, ...((v.bitrateInfo || []).flatMap(b => b.PlayAddr?.UrlList || []))].filter(Boolean);
+  for (const addr of cands.slice(0, 4)) {
+    try {
+      const vr = await jarFetch(addr, jar, { ...hdr, Range: 'bytes=0-' }, 60000);
+      if (!vr.ok) { console.error('tiktok video', vr.status); continue; }
+      const len = Number(vr.headers.get('content-length') || 0); if (len > 24e6) continue;
+      const buf = Buffer.from(await vr.arrayBuffer()); if (buf.length < 20000 || buf.length > 24e6) continue;
+      await hearAndSee(out, buf, 'video/mp4');
+      break;
+    } catch (e) { if (e.status === 429) out.busy = true; console.error('tiktok video', e.message); }
   }
   return out;
+}
+// Con el vídeo descargado: se escucha (si aún no hay texto de lo que se dice) y se mira
+async function hearAndSee(out, buf, type) {
+  const jobs = [seeVideo(buf, [out.title, out.desc].filter(Boolean).join(' · ')).then(t => { if (t) { out.seen = t; out.how.push('imagen'); } })];
+  if (!out.speech && CAN_HEAR) jobs.push(transcribe(buf, type).then(t => { if (t) { out.speech = t; out.how.push('audio'); } }).catch(e => { if (e.status === 429) out.busy = true; console.error('escuchar', String(e.message).slice(0, 120)); }));
+  await Promise.all(jobs);
 }
 // Espejos de YouTube (Invidious): dan la descripción y, a veces, los subtítulos cuando YouTube no deja leerlos
 let invList = { at: 0, hosts: ['https://invidious.f5.si'] };
@@ -1069,17 +1077,32 @@ async function videoText(url) {
         t = t || { how: [] }; t.desc = t.desc || j.title || ''; t.title = t.title || (j.title || '').slice(0, 120); t.image = t.image || j.thumbnail_url || ''; t.how.push('oembed'); } catch { }
     }
     if (t) { out.title = t.title || ''; out.image = t.image || ''; out.how = t.how; out.busy = !!t.busy;
-      out.text = [t.desc && 'Descripción del vídeo: ' + t.desc, t.speech && 'Lo que se dice en el vídeo: ' + t.speech].filter(Boolean).join('\n\n'); }
+      out.text = [t.desc && 'Descripción del vídeo: ' + t.desc, t.speech && 'Lo que se dice en el vídeo: ' + t.speech, t.seen && 'Lo que se ve en el vídeo:\n' + t.seen].filter(Boolean).join('\n\n'); }
   } else if (/instagram/.test(host)) {
     const m = new URL(url).pathname.match(/\/(p|reel|reels|tv)\/([\w-]+)/);
+    const t = { title: '', desc: '', speech: '', seen: '', how: [] }; let videoUrl = '';
+    const unesc = x => { try { return JSON.parse('"' + x + '"'); } catch { return x.replace(/\\\//g, '/').replace(/\\u0026/g, '&'); } };
     if (m) {
-      try { const html = await getText(`https://www.instagram.com/p/${m[2]}/embed/captioned/`);
+      try { const html = await getText(`https://www.instagram.com/p/${m[2]}/embed/captioned/`, { 'User-Agent': BROWSER_UA });
         const c = html.match(/class="Caption"[^>]*>([\s\S]*?)<div class="CaptionComments/i);
-        if (c) out.text = htmlToText(c[1].replace(/<a[^>]*class="CaptionUsername"[\s\S]*?<\/a>/i, ''));
+        if (c) t.desc = htmlToText(c[1].replace(/<a[^>]*class="CaptionUsername"[\s\S]*?<\/a>/i, ''));
         const im = html.match(/class="EmbeddedMediaImage"[^>]*src="([^"]+)"/i); if (im) out.image = decodeEnt(im[1]);
-      } catch { }
+        const vu = html.match(/\\?"video_url\\?"\s*:\s*\\?"(https?:[^"\\]*(?:\\.[^"\\]*)*)\\?"/) || html.match(/<video[^>]+src="([^"]+)"/i);
+        if (vu) videoUrl = unesc(vu[1]).replace(/\\/g, '');
+      } catch (e) { console.error('instagram embed', e.message); }
     }
-    if (!out.text) { const html = await getText(url, { 'User-Agent': BOT_UA }); out.text = metaTag(html, 'og:description'); out.title = metaTag(html, 'og:title'); out.image = out.image || metaTag(html, 'og:image'); }
+    let page = '';
+    if (!t.desc || !videoUrl) { try { page = await getText(url, { 'User-Agent': BOT_UA }); } catch { } }
+    if (page) { t.desc = t.desc || metaTag(page, 'og:description'); t.title = metaTag(page, 'og:title'); out.image = out.image || metaTag(page, 'og:image'); videoUrl = videoUrl || decodeEnt(metaTag(page, 'og:video:secure_url') || metaTag(page, 'og:video') || ''); }
+    // con el vídeo: se escucha y se mira
+    if (videoUrl) {
+      try { const r = await safeFetch(videoUrl, { headers: { 'User-Agent': BROWSER_UA, Referer: 'https://www.instagram.com/' } });
+        if (r.ok) { const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 20000 && buf.length < 24e6) await hearAndSee(t, buf, 'video/mp4'); }
+        else console.error('instagram vídeo', r.status);
+      } catch (e) { console.error('instagram vídeo', e.message); }
+    }
+    out.title = t.title || (t.desc || '').split('\n')[0].slice(0, 120); out.how = t.how; out.busy = !!t.busy;
+    out.text = [t.desc && 'Descripción del vídeo: ' + t.desc, t.speech && 'Lo que se dice en el vídeo: ' + t.speech, t.seen && 'Lo que se ve en el vídeo:\n' + t.seen].filter(Boolean).join('\n\n');
   } else {
     let html = ''; try { html = await getText(url, { 'User-Agent': BOT_UA }); } catch { }
     out.title = metaTag(html, 'og:title'); out.text = metaTag(html, 'og:description') || metaTag(html, 'description'); out.image = metaTag(html, 'og:image');
@@ -1095,10 +1118,42 @@ async function videoText(url) {
   out.text = String(out.text || '').trim();
   return out;
 }
+/* Ver el vídeo: se sacan unos fotogramas con ffmpeg y la IA con visión dice qué ingredientes y pasos se ven,
+   aunque no se nombren ni se escriban (lo que se echa a la olla, el envase, la báscula…) */
+let FFMPEG = null; try { FFMPEG = require('ffmpeg-static'); } catch { }
+const run = (args, timeout = 30000) => new Promise(res => execFile(FFMPEG, args, { timeout, maxBuffer: 4e6 }, (err, so, se) => res(String(se || ''))));
+async function videoFrames(buf, n = 5) {
+  if (!FFMPEG || !buf || buf.length < 20000) return [];
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ef-'));
+  try {
+    const inp = path.join(dir, 'v.bin'); await fs.promises.writeFile(inp, buf);
+    const info = await run(['-hide_banner', '-i', inp]);
+    const d = info.match(/Duration:\s*(\d+):(\d+):([\d.]+)/); const dur = d ? (+d[1]) * 3600 + (+d[2]) * 60 + (+d[3]) : 0;
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const t = dur ? dur * (i + 0.5) / n : i * 4, f = path.join(dir, `f${i}.jpg`);
+      await run(['-hide_banner', '-loglevel', 'error', '-ss', t.toFixed(2), '-i', inp, '-frames:v', '1', '-vf', 'scale=640:-2', '-q:v', '6', '-y', f]);
+      try { const b = await fs.promises.readFile(f); if (b.length > 2000) out.push({ media: 'image/jpeg', data: b.toString('base64') }); } catch { }
+    }
+    return out;
+  } catch (e) { console.error('fotogramas', e.message); return []; }
+  finally { fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {}); }
+}
+async function seeVideo(buf, context = '') {
+  try {
+    const frames = await videoFrames(buf);
+    if (!frames.length) return '';
+    const o = parseJson(await llm({ maxTokens: 1200, messages: [{ role: 'user', images: frames, text: `Son ${frames.length} fotogramas, en orden, de un vídeo de cocina.${context ? ' Contexto: ' + String(context).slice(0, 600) : ''}
+Mira con atención y di QUÉ INGREDIENTES SE VEN (también los que se echan sin nombrarlos ni escribirlos: lo que se vierte, se corta o se añade, envases y etiquetas), con la cantidad aproximada si se puede ver (cucharadas, vasos, unidades, peso en una báscula), los pasos que se ven en orden y el texto escrito en pantalla. No inventes lo que no se ve. En español.
+Devuelve SOLO un objeto JSON: {"ingredientes":[string],"pasos":[string],"texto":string}` }] }));
+    if (!o) return '';
+    return [o.ingredientes && o.ingredientes.length && 'Ingredientes que se ven: ' + o.ingredientes.join('; '), o.pasos && o.pasos.length && 'Pasos que se ven: ' + o.pasos.join(' / '), o.texto && 'Texto en pantalla: ' + o.texto].filter(Boolean).join('\n');
+  } catch (e) { console.error('ver vídeo', String(e.message).slice(0, 160)); return ''; }
+}
 async function aiFromVideo(title, text) {
   return cleanAi(parseJson(await llm({ messages: [{ role: 'user', text: `Este es el texto de un vídeo de cocina de redes sociales: su título, su descripción y, a veces, lo que se dice en el vídeo. Saca la receta y devuelve SOLO un objeto JSON con esta forma:
 ${SCHEMA}
-Reglas: usa solo lo que aparece en el texto, sin inventar. Si no se dice una cantidad, pon el ingrediente sin cantidad. Escribe en español (traduce si hace falta), con un ingrediente por elemento y un paso por elemento sin numerar. Ignora hashtags, menciones, promociones y frases tipo "sígueme". Si no hay receta, devuelve {"error":"no_recipe"}.
+Reglas: usa solo lo que aparece en el texto, sin inventar. Si hay una parte «Lo que se ve en el vídeo», úsala para completar los ingredientes y pasos que no se nombran (incluye esos ingredientes aunque no se digan). Si no se dice ni se ve una cantidad, pon el ingrediente sin cantidad. Escribe en español (traduce si hace falta), con un ingrediente por elemento y un paso por elemento sin numerar. Ignora hashtags, menciones, promociones y frases tipo "sígueme". Si no hay receta, devuelve {"error":"no_recipe"}.
 <<<VIDEO
 Título: ${String(title).slice(0, 300)}
 ${String(text).slice(0, 40000)}
@@ -1124,12 +1179,11 @@ api.post('/import/video-file', needProfile, express.raw({ type: () => true, limi
   try {
     const type = String(req.headers['content-type'] || 'video/mp4').split(';')[0];
     let text = '', quota = false;
-    try { text = await transcribe(req.body, type); }
-    catch (e) { quota = e.status === 429; }
-    if (!text && quota) return res.status(502).json({ error: 'Se ha llegado al límite gratis de la IA por ahora. Prueba dentro de un rato.' });
-    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir, o no he podido escucharlo. Prueba con otro formato o un vídeo más corto.' });
     const note = String(req.query.note || '').slice(0, 2000);
-    const rec = await aiFromVideo(String(req.query.title || ''), (note ? 'Lo que cuenta quien sube el vídeo: ' + note + '\n\n' : '') + 'Lo que se dice en el vídeo: ' + text);
+    const [, seen] = await Promise.all([transcribe(req.body, type).then(t => { text = t; }).catch(e => { quota = e.status === 429; }), seeVideo(req.body, note)]);
+    if (!text && !seen && quota) return res.status(502).json({ error: aiBusyMsg({ status: 429, hear: true }) });
+    if (!text && !seen) return res.status(422).json({ error: 'No he podido escuchar ni ver el vídeo. Prueba con otro formato o un vídeo más corto.' });
+    const rec = await aiFromVideo(String(req.query.title || ''), [note && 'Lo que cuenta quien sube el vídeo: ' + note, text && 'Lo que se dice en el vídeo: ' + text, seen && 'Lo que se ve en el vídeo:\n' + seen].filter(Boolean).join('\n\n'));
     if (!rec) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado una receta.', needText: true, text });
     res.json({ recipe: rec });
   } catch (e) { console.error(e); res.status(502).json({ error: 'No he podido procesar el vídeo. Vuelve a intentarlo.' }); }
@@ -1180,8 +1234,8 @@ async function transcribe(buf, type) {
 }
 async function openaiCompat({ url, key, model, system, messages, maxTokens, plain }) {
   const msgs = system ? [{ role: 'system', content: system }] : [];
-  for (const m of messages) msgs.push({ role: m.role, content: m.image
-    ? [{ type: 'text', text: m.text }, { type: 'image_url', image_url: { url: `data:${m.image.media};base64,${m.image.data}` } }] : m.text });
+  for (const m of messages) { const imgs = m.images || (m.image ? [m.image] : []); msgs.push({ role: m.role, content: imgs.length
+    ? [{ type: 'text', text: m.text }, ...imgs.map(im => ({ type: 'image_url', image_url: { url: `data:${im.media};base64,${im.data}` } }))] : m.text }); }
   const r = await fetch(url, {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
@@ -1258,13 +1312,13 @@ async function llm(opts) {
 }
 async function llmWith(provider, { system = '', messages, maxTokens = 3000, bg }) {
   if (provider === 'cloudflare') {
-    const hasImage = messages.some(m => m.image);
+    const hasImage = messages.some(m => m.image || m.images);
     return await openaiCompat({ url: `https://api.cloudflare.com/client/v4/accounts/${CF_ACCOUNT}/ai/v1/chat/completions`, key: CF_TOKEN,
       model: hasImage ? CF_VISION_MODEL : CF_MODEL, system: (system ? system + '\n\n' : '') + 'Responde siempre solo con un objeto JSON válido, sin texto antes ni después.', messages, maxTokens, plain: true });
   }
   if (provider === 'groq') {
     const url = 'https://api.groq.com/openai/v1/chat/completions';
-    const hasImage = messages.some(m => m.image);
+    const hasImage = messages.some(m => m.image || m.images);
     const list = hasImage ? GROQ_VISION : bg ? GROQ_BG : GROQ_TEXT;
     let last, rateLimited = false; const tooBig = [];
     for (const model of list) {
@@ -2334,12 +2388,14 @@ function parseJsonLdAll(html) {
 const bulkErr = (res, e) => { console.error(String(e.message).slice(0, 200)); res.status(e.status === 429 ? 429 : 502).json({ retryAt: e.status === 429 ? (e.retryAt || aiFreeAt({ hear: !!e.hear })) : undefined, error: e.status === 429 ? aiBusyMsg(e) : (e.userMsg || 'No he podido procesar esto.') }); };
 /* Vídeos en la subida masiva: igual que al crear una receta desde vídeo (descripción, subtítulos y audio),
    y además se separan si en el vídeo hay varias recetas */
-const VIDEO_HINT = 'Es el texto de un vídeo de cocina de redes sociales (título, descripción y lo que se dice). Si no se dice una cantidad, pon el ingrediente sin cantidad. Ignora hashtags, menciones, promociones y frases tipo "sígueme".';
+const VIDEO_HINT = 'Es el texto de un vídeo de cocina de redes sociales (título, descripción, lo que se dice y lo que se ve). Incluye también los ingredientes que solo se ven en el vídeo aunque no se nombren. Si no se dice ni se ve una cantidad, pon el ingrediente sin cantidad. Ignora hashtags, menciones, promociones y frases tipo "sígueme".';
 async function videoRecipes(title, text) {
   let recipes = await extractMany((title ? 'Título: ' + title + '\n' : '') + text, VIDEO_HINT);
   if (!recipes.length) { const one = await aiFromVideo(title || '', text); if (one) recipes = [one]; }
   return recipes;
 }
+// prueba temporal: ver un reel de Instagram (se escribe en el registro al arrancar)
+setTimeout(async () => { try { const v = await videoText('https://www.instagram.com/reel/DezgBi0o3zm/'); console.log('DIAGIG', JSON.stringify({ ff: !!FFMPEG, how: v.how, len: v.text.length, text: v.text.slice(0, 1500) })); } catch (e) { console.log('DIAGIG ERR', e.message); } }, 20000);
 // Enlace (web o vídeo): todas las recetas que tenga.
 // Los errores con status 422 son enlaces no válidos; los 429 son "la IA está ocupada" y se pueden reintentar.
 const bad = (msg, status = 422) => Object.assign(new Error(msg), { status, userMsg: msg });
@@ -2386,10 +2442,11 @@ Devuelve SOLO un objeto JSON: {"recipes": [${SCHEMA}, ...]}. Si no hay ninguna, 
 adm.post('/bulk/video', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
   try {
     if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'El archivo está vacío.' });
-    const text = await transcribe(req.body, String(req.query.type || 'video/mp4'));
-    if (!text) return res.status(422).json({ error: 'En el vídeo no se dice nada que se pueda transcribir.' });
     const note = String(req.query.title || '').slice(0, 200);
-    const recipes = await videoRecipes(note, 'Lo que se dice en el vídeo: ' + text);
+    let text = '', busy = null;
+    const [, seen] = await Promise.all([transcribe(req.body, String(req.query.type || 'video/mp4')).then(t => { text = t; }).catch(e => { busy = e; }), seeVideo(req.body, note)]);
+    if (!text && !seen) { if (busy && busy.status === 429) throw Object.assign(busy, { hear: true }); return res.status(422).json({ error: 'No he podido escuchar ni ver el vídeo.' }); }
+    const recipes = await videoRecipes(note, [text && 'Lo que se dice en el vídeo: ' + text, seen && 'Lo que se ve en el vídeo:\n' + seen].filter(Boolean).join('\n\n'));
     if (!recipes.length) return res.status(422).json({ error: 'He escuchado el vídeo pero no he encontrado recetas.' });
     res.json({ recipes });
   } catch (e) { bulkErr(res, e); }
